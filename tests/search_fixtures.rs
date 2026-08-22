@@ -152,7 +152,20 @@ fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
     assert_eq!(listing.condition.as_deref(), Some("Hyvä"));
     assert_eq!(listing.shipping, Some(true));
     assert_eq!(listing.seller.as_deref(), Some("private"));
+    assert_eq!(listing.category_id.as_deref(), Some("3215"));
+    assert_eq!(
+        listing.category_path.as_deref(),
+        Some("Koti ja asuminen > Huonekalut")
+    );
     assert_eq!(result.results[1].price.as_ref().unwrap().amount, 0);
+    assert_eq!(
+        result.results[1].category_id.as_deref(),
+        Some("2.93.3215.46")
+    );
+    assert_eq!(
+        result.results[1].category_path.as_deref(),
+        Some("Koti ja asuminen > Huonekalut > Tuolit")
+    );
     assert_eq!(result.results[1].image_count, None);
     assert_eq!(result.pagination.total, 1_200);
     assert!(result.pagination.has_next);
@@ -481,6 +494,8 @@ fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
             "title",
             "price",
             "location",
+            "category_id",
+            "category_path",
             "url",
             "published_at",
             "image_count",
@@ -683,11 +698,14 @@ fn full_fixture() -> Value {
                 "canonical_url":"https://www.tori.fi/recommerce/forsale/item/42346404",
                 "extras":[], "price":{"amount":37,"currency_code":"EUR","price_unit":"€"},
                 "distance":1200.0, "trade_type":"Myydään", "condition":"Hyvä",
-                "shipping_available":true, "seller_type":"private"
+                "shipping_available":true, "seller_type":"private",
+                "category":{"id":3215,"value":"Huonekalut","parent":{"id":93,"value":"Koti ja asuminen"}}
             },
             {
                 "type":"bap", "id":"42346405", "heading":"Ilmainen tuoli",
-                "price":{"amount":0,"value":"Annetaan"}, "extras":[]
+                "price":{"amount":0,"value":"Annetaan"}, "extras":[],
+                "categoryId":"2.93.3215.46",
+                "categoryPath":["Koti ja asuminen","Huonekalut","Tuolit"]
             }
         ],
         "filters": [

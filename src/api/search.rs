@@ -463,6 +463,24 @@ fn normalize_listing(doc: &Value) -> Result<SearchListing, AppError> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .unwrap_or_else(|| format!("https://www.tori.fi/recommerce/forsale/item/{listing_id}"));
+    let category = object.get("category");
+    let category_id = ["category_id", "categoryId", "product_category"]
+        .into_iter()
+        .find_map(|key| string_value(object.get(key)))
+        .or_else(|| {
+            category.and_then(Value::as_object).and_then(|category| {
+                string_value(
+                    category
+                        .get("id")
+                        .or_else(|| category.get("category_id"))
+                        .or_else(|| category.get("categoryId")),
+                )
+            })
+        });
+    let category_path = ["category_path", "categoryPath"]
+        .into_iter()
+        .find_map(|key| normalize_category_path(object.get(key)))
+        .or_else(|| category.and_then(category_breadcrumb));
 
     Ok(SearchListing {
         listing_id,
@@ -474,6 +492,8 @@ fn normalize_listing(doc: &Value) -> Result<SearchListing, AppError> {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
+        category_id,
+        category_path,
         url,
         published_at,
         image_count,
@@ -486,6 +506,44 @@ fn normalize_listing(doc: &Value) -> Result<SearchListing, AppError> {
         seller,
         match_explanation: None,
     })
+}
+
+fn normalize_category_path(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(path) => nonempty_string(path),
+        Value::Array(segments) => {
+            let segments: Vec<&str> = segments
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|segment| !segment.is_empty())
+                .collect();
+            (!segments.is_empty()).then(|| segments.join(" > "))
+        }
+        _ => None,
+    }
+}
+
+fn category_breadcrumb(value: &Value) -> Option<String> {
+    let mut segments = Vec::new();
+    let mut current = value.as_object();
+    while let Some(category) = current {
+        let segment = ["value", "label", "name", "display_name"]
+            .into_iter()
+            .find_map(|key| category.get(key).and_then(Value::as_str))
+            .and_then(nonempty_string);
+        if let Some(segment) = segment {
+            segments.push(segment);
+        }
+        current = category.get("parent").and_then(Value::as_object);
+    }
+    segments.reverse();
+    (!segments.is_empty()).then(|| segments.join(" > "))
+}
+
+fn nonempty_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 fn normalize_facet(value: &Value) -> SearchFacet {

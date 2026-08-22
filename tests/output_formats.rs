@@ -35,6 +35,8 @@ fn search_success_matches_json_and_toon_snapshots() {
             "listing_id":"42346404", "title":"Baden tuoli",
             "price":{"amount":37,"currency":"EUR"},
             "location":"Helsinki, Uusimaa",
+            "category_id":"2.93.3215.46",
+            "category_path":"Koti ja asuminen > Huonekalut > Tuolit",
             "url":"https://www.tori.fi/recommerce/forsale/item/42346404",
             "published_at":"2026-08-22T10:23:36Z", "image_count":1,
             "distance":1200.0, "condition":"Hyvä", "shipping":true, "seller":"private"

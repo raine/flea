@@ -26,6 +26,10 @@ pub struct SearchListing {
     pub price: Option<SearchPrice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_path: Option<String>,
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published_at: Option<String>,
