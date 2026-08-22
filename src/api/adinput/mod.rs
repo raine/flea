@@ -19,6 +19,9 @@ use crate::{
     },
     diagnostics,
     domain::{
+        commerce::{
+            TradeType, normalize_trade_type, normalized_select_to_machine, select_values_equal,
+        },
         field::{
             Field, FieldStatus, FieldType, Requirement, UpstreamValidationError, ValidationIssue,
             map_validation_errors, stable_field_key,

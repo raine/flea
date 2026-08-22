@@ -43,14 +43,81 @@ impl Price {
 }
 
 pub fn normalize_trade_type(value: Option<&Value>) -> TradeType {
-    let Some(value) = value.and_then(Value::as_str) else {
+    let Some(value) = value else {
         return TradeType::Unknown;
     };
-    match value.trim().to_ascii_lowercase().as_str() {
+    let value = match value {
+        Value::String(value) => value.trim().to_ascii_lowercase(),
+        Value::Number(value) => value.to_string(),
+        _ => return TradeType::Unknown,
+    };
+    match value.as_str() {
         "1" | "sell" | "selling" | "myydään" => TradeType::Sell,
         "2" | "give_away" | "give-away" | "free" | "annetaan" => TradeType::GiveAway,
         "3" | "wanted" | "buy" | "ostetaan" => TradeType::Wanted,
         _ => TradeType::Unknown,
+    }
+}
+
+impl TradeType {
+    pub fn normalized_value(self) -> Option<&'static str> {
+        match self {
+            Self::Sell => Some("sell"),
+            Self::GiveAway => Some("give_away"),
+            Self::Wanted => Some("wanted"),
+            Self::Unknown => None,
+        }
+    }
+
+    pub fn machine_value(self) -> Option<&'static str> {
+        match self {
+            Self::Sell => Some("1"),
+            Self::GiveAway => Some("2"),
+            Self::Wanted => Some("3"),
+            Self::Unknown => None,
+        }
+    }
+}
+
+pub fn normalized_select_to_machine(field: &str, value: &Value) -> Option<Value> {
+    match field {
+        "trade_type" | "trade-type" | "tradeType" => normalize_trade_type(Some(value))
+            .machine_value()
+            .map(|value| Value::String(value.to_owned())),
+        _ => Some(value.clone()),
+    }
+}
+
+pub fn machine_select_to_normalized(field: &str, value: &Value) -> Value {
+    match field {
+        "trade_type" | "trade-type" | "tradeType" => normalize_trade_type(Some(value))
+            .normalized_value()
+            .map_or_else(
+                || Value::String("unknown".to_owned()),
+                |value| Value::String(value.to_owned()),
+            ),
+        _ => value.clone(),
+    }
+}
+
+pub fn select_values_equal(field: &str, left: &Value, right: &Value) -> bool {
+    match (
+        normalized_select_to_machine(field, left),
+        normalized_select_to_machine(field, right),
+    ) {
+        (Some(left), Some(right)) => scalar_values_equal(&left, &right),
+        _ => false,
+    }
+}
+
+fn scalar_values_equal(left: &Value, right: &Value) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left, right) {
+        (Value::String(left), Value::Number(right)) => left == &right.to_string(),
+        (Value::Number(left), Value::String(right)) => &left.to_string() == right,
+        _ => false,
     }
 }
 
@@ -146,10 +213,14 @@ pub fn normalize_values_output(value: &mut Value) {
 }
 
 pub fn normalize_commerce_map(values: &mut Map<String, Value>) {
+    let trade_source = value_at(values, &["trade_type", "tradeType", "adViewTypeLabel"]);
     let (trade_type, price) = normalize_commerce_fields(values);
     values.insert(
         "trade_type".to_owned(),
-        serde_json::to_value(trade_type).expect("trade type serializes"),
+        trade_source.map_or_else(
+            || Value::String("unknown".to_owned()),
+            |value| machine_select_to_normalized("trade_type", value),
+        ),
     );
     values.insert(
         "price".to_owned(),
@@ -200,6 +271,36 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn maps_normalized_select_values_to_machine_values() {
+        for (input, machine, normalized) in [
+            (json!("sell"), json!("1"), json!("sell")),
+            (json!("give_away"), json!("2"), json!("give_away")),
+            (json!("wanted"), json!("3"), json!("wanted")),
+            (json!(1), json!("1"), json!("sell")),
+            (json!(2), json!("2"), json!("give_away")),
+            (json!(3), json!("3"), json!("wanted")),
+        ] {
+            assert_eq!(
+                normalized_select_to_machine("trade_type", &input),
+                Some(machine)
+            );
+            assert_eq!(
+                machine_select_to_normalized("trade_type", &input),
+                normalized
+            );
+        }
+        assert_eq!(
+            normalized_select_to_machine("trade_type", &json!("4")),
+            None
+        );
+        assert_eq!(
+            machine_select_to_normalized("trade_type", &json!("4")),
+            json!("unknown")
+        );
+        assert!(select_values_equal("trade_type", &json!("sell"), &json!(1)));
+    }
 
     #[test]
     fn normalizes_price_semantics_without_parsing_display_text() {

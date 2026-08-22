@@ -893,7 +893,7 @@ fn push_option(
     if result
         .selected
         .iter()
-        .any(|selected| values_semantically_equal(selected, &option.value))
+        .any(|selected| select_values_equal(field, selected, &option.value))
     {
         result.selected_options.push(option.clone());
     }

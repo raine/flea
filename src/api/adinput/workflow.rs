@@ -271,19 +271,30 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         progress: &FieldProgress,
         issues: Vec<ValidationIssue>,
     ) -> WorkflowError {
-        let (active_persisted, active_absent) = classify_fields(draft, mutation);
+        let mut invalid_fields = issues
+            .iter()
+            .map(|issue| issue.field.clone())
+            .collect::<Vec<_>>();
+        invalid_fields.sort();
+        invalid_fields.dedup();
         let mut persisted = progress.persisted.clone();
-        persisted.extend(active_persisted);
+        persisted.retain(|field| !invalid_fields.contains(field));
         let mut absent = progress.absent.clone();
-        absent.extend(active_absent);
-        let stage = mutation.step.replacen("apply_", "validate_", 1);
+        absent.extend(invalid_fields.iter().cloned());
+        absent.sort();
+        absent.dedup();
+        let stage = if invalid_fields == mutation.fields {
+            mutation.step.replacen("apply_", "validate_", 1)
+        } else {
+            "validate_fields".to_owned()
+        };
         let mut api = ApiError::new(
             "draft.validation_failed",
             "Draft fields do not match the source-backed composer schema",
         );
         api.details = Some(Box::new(json!({
             "stage": stage,
-            "fields": mutation.fields,
+            "fields": invalid_fields,
             "field_errors": issues,
         })));
         let mut recovery = field_recovery(
@@ -291,13 +302,13 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             completed,
             FieldBoundary {
                 step: &stage,
-                fields: &mutation.fields,
+                fields: &invalid_fields,
             },
             FieldOutcomes {
                 persisted,
                 absent,
                 indeterminate: Vec::new(),
-                unattempted: pending_fields(mutations, progress, &mutation.fields),
+                unattempted: pending_fields(mutations, progress, &invalid_fields),
             },
             false,
             false,
@@ -322,7 +333,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             recovery: Some(recovery),
             details: Some(json!({
                 "stage": stage,
-                "fields": mutation.fields,
+                "fields": invalid_fields,
                 "field_errors": issues,
             })),
         }
@@ -676,47 +687,30 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         listing_id: Option<&str>,
     ) -> Result<AppliedFieldMutations, WorkflowError> {
         let mut progress = FieldProgress::default();
-        let category_first = mutations
-            .first()
-            .is_some_and(|mutation| mutation.key == "category");
-        let category_issues = if category_first {
-            let categories = self.api.publication_categories().await.map_err(|error| {
-                WorkflowError::for_draft(&draft.draft_id, completed, error, true)
-                    .with_optional_source_listing_id(listing_id)
-            })?;
-            completed.push("fetch_category_taxonomy".to_owned());
-            category_validation_issues(&draft, &mutations[0], &categories)
-        } else {
-            Vec::new()
-        };
-        let initial_validation_end = if category_first { 1 } else { mutations.len() };
-        for mutation in &mutations[..initial_validation_end] {
+        let category_issues =
+            if let Some(mutation) = mutations.iter().find(|mutation| mutation.key == "category") {
+                let categories = self.api.publication_categories().await.map_err(|error| {
+                    WorkflowError::for_draft(&draft.draft_id, completed, error, true)
+                        .with_optional_source_listing_id(listing_id)
+                })?;
+                completed.push("fetch_category_taxonomy".to_owned());
+                category_validation_issues(&draft, mutation, &categories)
+            } else {
+                Vec::new()
+            };
+        let mut local_validation = None;
+        let mut local_issues = Vec::new();
+        for mutation in &mutations {
             let issues = if mutation.key == "category" {
                 category_issues.clone()
             } else {
                 schema_validation_issues(&draft, mutation)
             };
             if !issues.is_empty() {
-                return Err(self
-                    .local_field_validation_error(
-                        &draft, &mutations, mutation, completed, &progress, issues,
-                    )
-                    .with_optional_source_listing_id(listing_id));
-            }
-        }
-
-        for (index, mutation) in mutations.iter().enumerate() {
-            if category_first && index == 1 {
-                for pending in &mutations[index..] {
-                    let issues = schema_validation_issues(&draft, pending);
-                    if !issues.is_empty() {
-                        return Err(self
-                            .local_field_validation_error(
-                                &draft, &mutations, pending, completed, &progress, issues,
-                            )
-                            .with_optional_source_listing_id(listing_id));
-                    }
-                }
+                local_validation.get_or_insert_with(|| mutation.clone());
+                local_issues.extend(issues);
+                progress.absent.extend(mutation.fields.clone());
+                continue;
             }
             let context = diagnostics::WorkflowContext {
                 workflow,
@@ -851,6 +845,18 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         progress.persisted.dedup();
         progress.absent.sort();
         progress.absent.dedup();
+        if let Some(mutation) = local_validation {
+            return Err(self
+                .local_field_validation_error(
+                    &draft,
+                    &mutations,
+                    &mutation,
+                    completed,
+                    &progress,
+                    local_issues,
+                )
+                .with_optional_source_listing_id(listing_id));
+        }
         Ok(AppliedFieldMutations { draft, progress })
     }
 

@@ -55,25 +55,26 @@ fn validate_publication_core(
     validate_publication_text(state, "description", report);
 
     let trade_type = publication_field_value(state, "trade_type");
-    let trade_type = match trade_type.and_then(Value::as_str) {
-        None if trade_type.is_none_or(publication_value_missing) => {
-            report.missing.push(publication_core_issue(
-                state,
-                "trade_type",
-                "a trade type is required for publication",
-            ));
-            None
-        }
-        Some("sell" | "SELL" | "1") => Some("sell"),
-        Some("give_away" | "GIVE_AWAY" | "2") => Some("give_away"),
-        Some("wanted" | "WANTED" | "3") => Some("wanted"),
-        _ => {
-            report.invalid.push(publication_core_issue(
-                state,
-                "trade_type",
-                "the trade type must identify a sale, give-away, or wanted listing",
-            ));
-            None
+    let trade_type = if trade_type.is_none_or(publication_value_missing) {
+        report.missing.push(publication_core_issue(
+            state,
+            "trade_type",
+            "a trade type is required for publication",
+        ));
+        None
+    } else {
+        match normalize_trade_type(trade_type) {
+            TradeType::Sell => Some("sell"),
+            TradeType::GiveAway => Some("give_away"),
+            TradeType::Wanted => Some("wanted"),
+            TradeType::Unknown => {
+                report.invalid.push(publication_core_issue(
+                    state,
+                    "trade_type",
+                    "the trade type must identify a sale, give-away, or wanted listing",
+                ));
+                None
+            }
         }
     };
 
@@ -384,11 +385,11 @@ fn validate_publication_composer(
             Value::Array(values) => values.iter().all(|value| {
                 options
                     .iter()
-                    .any(|option| values_semantically_equal(value, &option.value))
+                    .any(|option| select_values_equal(&field.key, value, &option.value))
             }),
             value => options
                 .iter()
-                .any(|option| values_semantically_equal(value, &option.value)),
+                .any(|option| select_values_equal(&field.key, value, &option.value)),
         };
         if !valid && field.options_truncated {
             report.unverifiable.push(publication_issue(

@@ -46,9 +46,8 @@ pub(super) fn requested_sale_price(values: &Map<String, Value>) -> Result<Option
     validate_price(price)?;
     let trade_type = values
         .get("trade_type")
-        .and_then(Value::as_str)
-        .map(composer_trade_type);
-    if trade_type != Some("1") {
+        .and_then(|value| normalized_select_to_machine("trade_type", value));
+    if trade_type.as_ref() != Some(&Value::String("1".to_owned())) {
         return Err(ApiError::new(
             "draft.price_trade_type_conflict",
             "Sale price requires the sale trade type",
@@ -191,14 +190,7 @@ pub(super) fn field_is_persisted(
     };
     match mutation.key.as_str() {
         "price" => prices_equal(observed, &mutation.value),
-        "trade_type" => {
-            observed
-                .as_str()
-                .zip(mutation.value.as_str())
-                .is_some_and(|(observed, requested)| {
-                    composer_trade_type(observed) == composer_trade_type(requested)
-                })
-        }
+        "trade_type" => select_values_equal("trade_type", observed, &mutation.value),
         "category" => normalize_category(observed.clone()) == mutation.value,
         _ => observed == &mutation.value,
     }
@@ -352,7 +344,7 @@ pub(super) fn schema_validation_issue(
             && supplied.iter().any(|value| {
                 !allowed
                     .iter()
-                    .any(|allowed| values_semantically_equal(value, allowed))
+                    .any(|option| select_values_equal(&field.key, value, option))
             })
         {
             return Some(ValidationIssue {

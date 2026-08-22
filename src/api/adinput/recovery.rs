@@ -376,6 +376,22 @@ impl Recovery {
     }
 
     pub(super) fn refresh_field_summary(&mut self) {
+        let absent = self.absent_fields.iter().collect::<BTreeSet<_>>();
+        self.indeterminate_fields
+            .retain(|field| !absent.contains(field));
+        self.persisted_fields
+            .retain(|field| !absent.contains(field));
+        self.unattempted_fields
+            .retain(|field| !absent.contains(field));
+        let indeterminate = self.indeterminate_fields.iter().collect::<BTreeSet<_>>();
+        self.persisted_fields
+            .retain(|field| !indeterminate.contains(field));
+        self.unattempted_fields
+            .retain(|field| !indeterminate.contains(field));
+        let persisted = self.persisted_fields.iter().collect::<BTreeSet<_>>();
+        self.unattempted_fields
+            .retain(|field| !persisted.contains(field));
+
         let state = self.fresh_state.as_ref();
         let mut summary = Vec::new();
         let groups = [

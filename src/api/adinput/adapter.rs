@@ -1121,21 +1121,15 @@ fn numeric_string(value: &Value) -> Value {
         .map_or_else(|| value.clone(), |value| json!(value))
 }
 
-pub(super) fn composer_trade_type(value: &str) -> &str {
-    match value {
-        "sell" | "SELL" => "1",
-        "give_away" | "GIVE_AWAY" => "2",
-        "wanted" | "WANTED" => "3",
-        value => value,
-    }
-}
-
 fn composer_values(values: &Map<String, Value>) -> Result<Map<String, Value>, ApiError> {
     let mut encoded = values.clone();
-    if let Some(trade_type) = encoded.get_mut("trade_type")
-        && let Some(value) = trade_type.as_str()
-    {
-        *trade_type = Value::String(composer_trade_type(value).to_owned());
+    if let Some(trade_type) = encoded.get_mut("trade_type") {
+        *trade_type = normalized_select_to_machine("trade_type", trade_type).ok_or_else(|| {
+            ApiError::new(
+                "draft.invalid_trade_type",
+                "Trade type must be sell, give_away, or wanted",
+            )
+        })?;
     }
 
     let Some(price) = encoded.remove("price") else {

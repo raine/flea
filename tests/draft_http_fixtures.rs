@@ -349,6 +349,18 @@ fn decimal_field(key: &str) -> Value {
     })
 }
 
+fn select_field(key: &str, value: Value) -> Value {
+    json!({
+        "key": key,
+        "label": key,
+        "type": "select",
+        "requirement": "required",
+        "status": "set",
+        "value": value,
+        "section": "details"
+    })
+}
+
 #[tokio::test]
 async fn creation_normalizes_the_source_observed_json_success() {
     let transport = FixtureTransport::new([response(
@@ -465,17 +477,29 @@ async fn creation_rejects_noncanonical_redirects_without_following_them() {
 }
 
 #[tokio::test]
-async fn source_backed_shape_validation_happens_before_any_field_mutation() {
-    let transport = FixtureTransport::new([response(
-        200,
-        draft(
-            "one",
-            json!({
-                "values": { "title": 10 },
-                "fields": [decimal_field("title")]
-            }),
+async fn source_backed_shape_validation_preserves_unrelated_field_mutations() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "one",
+                json!({
+                    "values": { "title": 10 },
+                    "fields": [decimal_field("title")]
+                }),
+            ),
         ),
-    )]);
+        response(
+            200,
+            draft(
+                "two",
+                json!({
+                    "values": { "title": 10, "postal_code": "00100" },
+                    "fields": [decimal_field("title")]
+                }),
+            ),
+        ),
+    ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
     let error = workflow
@@ -498,9 +522,135 @@ async fn source_backed_shape_validation_happens_before_any_field_mutation() {
     );
     let recovery = error.recovery.unwrap();
     assert_eq!(recovery.absent_fields, ["title"]);
-    assert_eq!(recovery.unattempted_fields, ["postal_code"]);
-    assert_eq!(transport.requests().len(), 1);
+    assert_eq!(recovery.persisted_fields, ["postal_code"]);
+    assert!(recovery.unattempted_fields.is_empty());
+    assert_eq!(transport.requests().len(), 2);
     assert_eq!(transport.requests()[0].method, Method::Get);
+    assert_eq!(transport.requests()[1].method, Method::Put);
+}
+
+#[tokio::test]
+async fn normalized_trade_type_validates_against_string_and_numeric_machine_options() {
+    for machine_value in [json!("1"), json!(1)] {
+        let model = json!({
+            "values": { "trade_type": machine_value.clone() },
+            "fields": [select_field("trade_type", machine_value.clone())],
+            "options": [
+                { "field": "trade_type", "value": machine_value.clone(), "label": "Sell" }
+            ]
+        });
+        let transport = FixtureTransport::new([
+            response(200, draft("one", model.clone())),
+            response(200, draft("two", model)),
+        ]);
+        let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+        let result = workflow
+            .update(
+                "draft-1",
+                &Map::from_iter([("trade_type".to_owned(), json!("sell"))]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.persisted_fields, ["trade_type"]);
+        let requests = transport.requests();
+        assert_eq!(requests.len(), 2);
+        let RequestBody::Json(body) = &requests[1].body else {
+            panic!("expected composer update body")
+        };
+        assert_eq!(body["trade_type"], "1");
+    }
+}
+
+#[tokio::test]
+async fn unavailable_and_unknown_trade_types_have_coherent_recovery() {
+    for requested in [json!("give_away"), json!("4")] {
+        let transport = FixtureTransport::new([response(
+            200,
+            draft(
+                "one",
+                json!({
+                    "values": { "trade_type": requested.clone() },
+                    "fields": [select_field("trade_type", requested.clone())],
+                    "options": [
+                        { "field": "trade_type", "value": "1", "label": "Sell" }
+                    ]
+                }),
+            ),
+        )]);
+        let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+        let error = workflow
+            .update(
+                "draft-1",
+                &Map::from_iter([("trade_type".to_owned(), requested)]),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "draft.validation_failed");
+        let recovery = error.recovery.unwrap();
+        assert!(recovery.persisted_fields.is_empty());
+        assert_eq!(recovery.absent_fields, ["trade_type"]);
+        assert_eq!(recovery.field_summary.len(), 1);
+        assert_eq!(recovery.field_summary[0].field, "trade_type");
+        assert_eq!(recovery.field_summary[0].status, RecoveryStatus::Absent);
+        assert_eq!(transport.requests().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn mixed_update_persists_prior_atomic_fields_before_invalid_select() {
+    let initial_model = json!({
+        "values": { "title": "Old", "trade_type": "1" },
+        "fields": [select_field("trade_type", json!("1"))],
+        "options": [
+            { "field": "trade_type", "value": "1", "label": "Sell" },
+            { "field": "trade_type", "value": "2", "label": "Give away" }
+        ]
+    });
+    let updated_model = json!({
+        "values": { "title": "Chair", "trade_type": "1" },
+        "fields": [select_field("trade_type", json!("1"))],
+        "options": [
+            { "field": "trade_type", "value": "1", "label": "Sell" },
+            { "field": "trade_type", "value": "2", "label": "Give away" }
+        ]
+    });
+    let final_model = json!({
+        "values": { "title": "Chair", "trade_type": "1", "postal_code": "00100" },
+        "fields": [select_field("trade_type", json!("1"))],
+        "options": [
+            { "field": "trade_type", "value": "1", "label": "Sell" },
+            { "field": "trade_type", "value": "2", "label": "Give away" }
+        ]
+    });
+    let transport = FixtureTransport::new([
+        response(200, draft("one", initial_model)),
+        response(200, draft("two", updated_model)),
+        response(200, draft("three", final_model)),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([
+                ("postal_code".to_owned(), json!("00100")),
+                ("title".to_owned(), json!("Chair")),
+                ("trade_type".to_owned(), json!("wanted")),
+            ]),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "draft.validation_failed");
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.persisted_fields, ["postal_code", "title"]);
+    assert_eq!(recovery.absent_fields, ["trade_type"]);
+    assert!(recovery.unattempted_fields.is_empty());
+    assert_eq!(transport.requests().len(), 3);
 }
 
 #[tokio::test]
