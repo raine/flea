@@ -1,6 +1,6 @@
 use clap::Parser;
 use tori::{
-    cli::{Cli, Command, draft::DraftCommand, listing::ListingCommand},
+    cli::{Cli, Command, draft::DraftCommand, listing::ListingCommand, search::SearchSort},
     output::OutputFormat,
 };
 
@@ -34,6 +34,8 @@ fn every_command_leaf_parses() {
         vec!["tori", "listing", "update", "listing-1", "--price", "45"],
         vec!["tori", "listing", "dispose", "listing-1"],
         vec!["tori", "listing", "delete", "listing-1"],
+        vec!["tori", "search", "chair"],
+        vec!["tori", "location", "search", "Helsinki"],
     ];
 
     for arguments in cases {
@@ -86,6 +88,47 @@ fn listing_update_rejects_conflicting_description_inputs() {
         "description.txt",
     ]);
 
+    assert!(result.is_err());
+}
+
+#[test]
+fn parses_public_search_coordinates_facets_and_pagination() {
+    let cli = Cli::parse_from([
+        "tori",
+        "search",
+        "chair",
+        "--latitude",
+        "60.1699",
+        "--longitude",
+        "24.9384",
+        "--radius-km",
+        "20",
+        "--facet",
+        "brand=42",
+        "--facet",
+        "brand=84",
+        "--sort",
+        "price-asc",
+        "--page",
+        "2",
+        "--limit",
+        "75",
+    ]);
+    let Command::Search(search) = cli.command else {
+        panic!("expected search command");
+    };
+    assert_eq!(search.query.as_deref(), Some("chair"));
+    assert_eq!(search.latitude, Some(60.1699));
+    assert_eq!(search.radius_km, Some(20.0));
+    assert_eq!(search.facets, ["brand=42", "brand=84"]);
+    assert!(matches!(search.sort, Some(SearchSort::PriceAsc)));
+    assert_eq!(search.page, Some(2));
+    assert_eq!(search.limit, Some(75));
+}
+
+#[test]
+fn clap_rejects_duplicate_scalar_search_flags() {
+    let result = Cli::try_parse_from(["tori", "search", "chair", "--page", "1", "--page", "2"]);
     assert!(result.is_err());
 }
 

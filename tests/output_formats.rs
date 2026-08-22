@@ -27,6 +27,36 @@ fn success_envelope_matches_json_and_toon_snapshots() {
 }
 
 #[test]
+fn search_success_matches_json_and_toon_snapshots() {
+    let mut envelope = Envelope::success(json!({
+        "query":"tuoli",
+        "results":[{
+            "listing_id":"42346404", "title":"Baden tuoli",
+            "price":{"amount":37,"currency":"EUR","display":"37 €"},
+            "location":"Helsinki, Uusimaa", "distance":1200.0,
+            "url":"https://www.tori.fi/recommerce/forsale/item/42346404",
+            "image_urls":["https://img.tori.net/item/one"],
+            "published_at_ms":1787394216000_i64, "labels":[], "flags":["private"], "extras":[]
+        }],
+        "pagination":{"page":1,"limit":20,"returned":1,"total":1200,"total_pages":60,"accessible_pages":50,"upstream_page_limit":50,"capped":true,"has_previous":false,"has_next":true,"next_page":2},
+        "applied_filters":[], "facets":[],
+        "resolved_location":{"id":"1.100018.110091","name":"Helsinki","parent":"Uusimaa","depth":1}
+    }));
+    envelope.next_actions.push(NextAction {
+        command: "tori search 'tuoli' --page 2 --limit 20".to_owned(),
+    });
+
+    assert_snapshot(
+        render(&envelope, OutputFormat::Json).unwrap(),
+        include_str!("snapshots/search-success.json"),
+    );
+    assert_snapshot(
+        render(&envelope, OutputFormat::Toon).unwrap(),
+        include_str!("snapshots/search-success.toon"),
+    );
+}
+
+#[test]
 fn failure_envelope_matches_json_and_toon_snapshots() {
     let mut error = AppError::new(
         "draft.validation_failed",

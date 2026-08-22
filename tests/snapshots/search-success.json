@@ -1,0 +1,56 @@
+{
+  "ok": true,
+  "data": {
+    "query": "tuoli",
+    "results": [
+      {
+        "listing_id": "42346404",
+        "title": "Baden tuoli",
+        "price": {
+          "amount": 37,
+          "currency": "EUR",
+          "display": "37 €"
+        },
+        "location": "Helsinki, Uusimaa",
+        "distance": 1200.0,
+        "url": "https://www.tori.fi/recommerce/forsale/item/42346404",
+        "image_urls": [
+          "https://img.tori.net/item/one"
+        ],
+        "published_at_ms": 1787394216000,
+        "labels": [],
+        "flags": [
+          "private"
+        ],
+        "extras": []
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 20,
+      "returned": 1,
+      "total": 1200,
+      "total_pages": 60,
+      "accessible_pages": 50,
+      "upstream_page_limit": 50,
+      "capped": true,
+      "has_previous": false,
+      "has_next": true,
+      "next_page": 2
+    },
+    "applied_filters": [],
+    "facets": [],
+    "resolved_location": {
+      "id": "1.100018.110091",
+      "name": "Helsinki",
+      "parent": "Uusimaa",
+      "depth": 1
+    }
+  },
+  "warnings": [],
+  "next_actions": [
+    {
+      "command": "tori search 'tuoli' --page 2 --limit 20"
+    }
+  ]
+}

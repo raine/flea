@@ -112,6 +112,46 @@ async fn fixture_observes_exact_signed_target_and_compatibility_headers() {
 }
 
 #[tokio::test]
+async fn public_search_uses_android_service_without_identity_or_bearer_headers() {
+    let transport = FixtureTransport::new([fixture_response(StatusCode::OK)]);
+    let config = ClientConfig {
+        include_device_identity: false,
+        retry_base_delay: Duration::ZERO,
+        ..ClientConfig::default()
+    };
+    let client = HttpClient::with_transport(
+        config,
+        DeviceIdentity {
+            installation_id: String::new(),
+            ab_test_device_id: String::new(),
+        },
+        None,
+        transport.clone(),
+    );
+    let target = "/search/SEARCH_ID_BAP_COMMON?client=android&location=1.100018.110091&page=2&price_from=10&price_to=100&product_category=2.93.3215.46&q=k%C3%A4velymatto+%26+tuoli&rows=20&shipping_exists=true";
+
+    client
+        .send(RequestSpec::new(
+            Method::GET,
+            target,
+            compatibility::SERVICE_SEARCH,
+        ))
+        .await
+        .unwrap();
+
+    let request = &transport.requests()[0];
+    assert_eq!(request.path_and_query, target);
+    assert_eq!(request.headers["finn-gw-service"], "SEARCH-QUEST");
+    assert_eq!(
+        request.headers["finn-gw-key"],
+        "BenSRb92e+OeS4F5KliUWD76rJhmcpnZY/UOSXBhc9wl5b+aDv7eGbhCXCFaDrK01BR3vvt6XyIbMx0rmrdAuA=="
+    );
+    assert!(!request.headers.contains_key(AUTHORIZATION));
+    assert!(!request.headers.contains_key("finn-app-installation-id"));
+    assert!(!request.headers.contains_key("ab-test-device-id"));
+}
+
+#[tokio::test]
 async fn carries_if_match_and_extracts_etag() {
     let mut headers = HeaderMap::new();
     headers.insert(ETAG, HeaderValue::from_static("\"revision-2\""));

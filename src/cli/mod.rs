@@ -3,7 +3,9 @@ mod auth_callback;
 pub mod category;
 pub mod draft;
 pub mod listing;
+pub mod location;
 pub mod runtime;
+pub mod search;
 
 use clap::{Parser, Subcommand};
 use serde_json::Value;
@@ -48,6 +50,10 @@ pub enum Command {
         long_about = "List, inspect, update, mark sold, or permanently delete published listings."
     )]
     Listing(listing::ListingArgs),
+    /// Search public marketplace listings.
+    Search(Box<search::SearchArgs>),
+    /// Discover public marketplace location identifiers.
+    Location(location::LocationArgs),
 }
 
 pub trait CommandRuntime {

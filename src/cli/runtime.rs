@@ -8,6 +8,7 @@ use crate::{
         auth::SchibstedToriAuthenticationApi,
         client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
         listings::HttpListingsApi,
+        search::HttpPublicSearchApi,
     },
     cli::{
         Command, CommandRuntime,
@@ -39,6 +40,14 @@ impl CommandRuntime for ProductionRuntime {
                 let client = authenticated_client()?;
                 let api = HttpListingsApi::new(Arc::new(client));
                 listing::dispatch_with_api(args, &api)
+            }
+            Command::Search(args) => {
+                let api = HttpPublicSearchApi::new(Arc::new(public_client()));
+                super::search::dispatch_with_api(*args, &api)
+            }
+            Command::Location(args) => {
+                let api = HttpPublicSearchApi::new(Arc::new(public_client()));
+                super::location::dispatch_with_api(args, &api)
             }
         }
     }
@@ -102,6 +111,20 @@ fn auth_value<'a>(value: &'a Value, key: &str) -> Result<&'a str, AppError> {
         .ok_or_else(|| {
             AppError::unexpected(format!("authentication start returned an invalid {key}"))
         })
+}
+
+fn public_client() -> HttpClient<ReqwestTransport> {
+    HttpClient::new(
+        ClientConfig {
+            include_device_identity: false,
+            ..ClientConfig::default()
+        },
+        DeviceIdentity {
+            installation_id: String::new(),
+            ab_test_device_id: String::new(),
+        },
+        None,
+    )
 }
 
 fn authenticated_client() -> Result<HttpClient<ReqwestTransport>, AppError> {

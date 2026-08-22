@@ -676,10 +676,12 @@ pub fn command_name(args: &[OsString]) -> String {
         .skip(1)
         .filter_map(|argument| argument.to_str())
         .collect();
-    let Some(root_index) = arguments
-        .iter()
-        .position(|argument| matches!(*argument, "auth" | "category" | "draft" | "listing"))
-    else {
+    let Some(root_index) = arguments.iter().position(|argument| {
+        matches!(
+            *argument,
+            "auth" | "category" | "draft" | "listing" | "search" | "location"
+        )
+    }) else {
         return "unknown".to_owned();
     };
     let root = arguments[root_index];
@@ -688,6 +690,8 @@ pub fn command_name(args: &[OsString]) -> String {
         "category" => &["search", "list"],
         "draft" => &["create", "show", "update", "publish", "delete", "image"],
         "listing" => &["list", "show", "update", "dispose", "delete"],
+        "location" => &["search"],
+        "search" => &[],
         _ => unreachable!("the root command is matched above"),
     };
     let leaf = arguments[root_index + 1..]
@@ -876,6 +880,18 @@ mod tests {
             OsString::from("tori://oauth/callback?code=secret"),
         ];
         assert_eq!(command_name(&args), "auth complete");
+    }
+
+    #[test]
+    fn search_command_name_excludes_query_and_coordinates() {
+        let args = [
+            OsString::from("tori"),
+            OsString::from("search"),
+            OsString::from("private query"),
+            OsString::from("--latitude"),
+            OsString::from("60.1699"),
+        ];
+        assert_eq!(command_name(&args), "search");
     }
 
     #[test]

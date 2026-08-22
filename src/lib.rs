@@ -150,7 +150,7 @@ fn finish(
     auth_presentation: AuthPresentation,
 ) -> RunResult {
     let (envelope, exit_code) = match result {
-        Ok(data) => {
+        Ok(mut data) => {
             let plain_document = match auth_presentation {
                 AuthPresentation::Structured => None,
                 AuthPresentation::Start => Some(output::render_auth_start(&data)),
@@ -171,7 +171,13 @@ fn finish(
                     ),
                 };
             }
+            let next_actions = data
+                .as_object_mut()
+                .and_then(|object| object.remove("_next_actions"))
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default();
             let mut envelope = Envelope::success(data);
+            envelope.next_actions = next_actions;
             if let Some(warnings) = envelope
                 .data
                 .as_ref()

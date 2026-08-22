@@ -39,6 +39,7 @@ pub mod compatibility {
     pub const SERVICE_BILLING_TRACKING: &str = "BILLING-TRACKING-SERVICE";
     pub const SERVICE_ORDER_PAYMENT: &str = "ORDER-PAYMENT-SERVER";
     pub const SERVICE_LOGIN: &str = "LOGIN-SERVER-AUTH";
+    pub const SERVICE_SEARCH: &str = "SEARCH-QUEST";
 
     pub const UPLOAD_DRAFT_INTEROP_VERSION: &str = "6";
 }
@@ -62,6 +63,7 @@ pub struct ClientConfig {
     pub max_get_retries: usize,
     pub retry_base_delay: Duration,
     pub retry_max_delay: Duration,
+    pub include_device_identity: bool,
 }
 
 impl Default for ClientConfig {
@@ -74,6 +76,7 @@ impl Default for ClientConfig {
             max_get_retries: DEFAULT_GET_RETRIES,
             retry_base_delay: DEFAULT_RETRY_BASE_DELAY,
             retry_max_delay: DEFAULT_RETRY_MAX_DELAY,
+            include_device_identity: true,
         }
     }
 }
@@ -542,7 +545,11 @@ impl<T: Transport> HttpClient<T> {
             service: &request.service,
             body: request.body.signing_bytes(),
         });
-        let mut headers = compatibility_headers(&self.identity)?;
+        let mut headers = compatibility_headers(
+            self.config
+                .include_device_identity
+                .then_some(&self.identity),
+        )?;
         headers.extend(request.headers.clone());
         if let Some(bearer) = &self.bearer {
             let value = HeaderValue::from_str(&format!("Bearer {bearer}"))
@@ -592,7 +599,7 @@ fn header_names(headers: &HeaderMap) -> Vec<&str> {
     headers.keys().map(HeaderName::as_str).collect()
 }
 
-fn compatibility_headers(identity: &DeviceIdentity) -> Result<HeaderMap, HttpError> {
+fn compatibility_headers(identity: Option<&DeviceIdentity>) -> Result<HeaderMap, HttpError> {
     let mut headers = HeaderMap::new();
     headers.insert(
         USER_AGENT,
@@ -604,16 +611,18 @@ fn compatibility_headers(identity: &DeviceIdentity) -> Result<HeaderMap, HttpErr
     );
     headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.9"));
     insert_header(&mut headers, "finn-device-info", compatibility::DEVICE_INFO)?;
-    insert_header(
-        &mut headers,
-        "finn-app-installation-id",
-        &identity.installation_id,
-    )?;
-    insert_header(
-        &mut headers,
-        "ab-test-device-id",
-        &identity.ab_test_device_id,
-    )?;
+    if let Some(identity) = identity {
+        insert_header(
+            &mut headers,
+            "finn-app-installation-id",
+            &identity.installation_id,
+        )?;
+        insert_header(
+            &mut headers,
+            "ab-test-device-id",
+            &identity.ab_test_device_id,
+        )?;
+    }
     insert_header(&mut headers, "x-nmp-os-name", compatibility::OS_NAME)?;
     insert_header(&mut headers, "x-nmp-os-version", compatibility::OS_VERSION)?;
     insert_header(

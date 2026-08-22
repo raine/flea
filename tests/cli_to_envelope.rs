@@ -17,11 +17,12 @@ use tori::{
         },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
         listings::HttpListingsApi,
+        search::HttpPublicSearchApi,
     },
     cli::{
         Command, CommandRuntime,
         auth::{AuthCommandHandler, AuthStore},
-        category, draft, listing,
+        category, draft, listing, location, search,
     },
     error::AppError,
     run_with_runtime,
@@ -81,6 +82,14 @@ impl CommandRuntime for TestRuntime {
             Command::Listing(args) => {
                 let api = HttpListingsApi::new(Arc::new(self.client.clone()));
                 listing::dispatch_with_api(args, &api)
+            }
+            Command::Search(args) => {
+                let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
+                search::dispatch_with_api(*args, &api)
+            }
+            Command::Location(args) => {
+                let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
+                location::dispatch_with_api(args, &api)
             }
         }
     }
@@ -318,6 +327,46 @@ fn publish_flows_through_every_http_step() {
 
     assert_eq!(value["data"]["listing_id"], "listing-1");
     assert_eq!(client.requests.lock().unwrap().len(), 10);
+}
+
+#[test]
+fn public_search_flows_without_authentication_through_one_envelope() {
+    let client = MockClient::with_responses([response(
+        StatusCode::OK,
+        json!({
+            "docs": [{
+                "id": "42346404",
+                "heading": "Baden tuoli",
+                "location": "Helsinki, Uusimaa",
+                "canonical_url": "https://www.tori.fi/recommerce/forsale/item/42346404",
+                "price": {"amount": 37, "currency_code": "EUR", "price_unit": "€"}
+            }],
+            "metadata": {
+                "params": {"q": ["tuoli"]},
+                "result_size": {"match_count": 100},
+                "paging": {"current": 1, "last": 5},
+                "is_end_of_paging": false
+            }
+        }),
+    )]);
+    let value = invoke(
+        &TestRuntime {
+            client: client.clone(),
+        },
+        ["tori", "--format", "json", "search", "tuoli"],
+    );
+
+    assert_eq!(value["data"]["results"][0]["listing_id"], "42346404");
+    assert_eq!(value["data"]["pagination"]["limit"], 20);
+    assert_eq!(
+        value["next_actions"][0]["command"],
+        "tori search 'tuoli' --page 2 --limit 20"
+    );
+    assert!(value["data"].get("_next_actions").is_none());
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests[0].service, "SEARCH-QUEST");
+    assert!(requests[0].path_and_query.contains("client=android"));
+    assert!(!requests[0].path_and_query.contains("include_filters"));
 }
 
 #[test]
