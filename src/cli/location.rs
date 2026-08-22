@@ -14,7 +14,10 @@ pub struct LocationArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum LocationCommand {
-    /// Discover Tori location identifiers by a case-insensitive name fragment.
+    #[command(
+        about = "Discover Tori location identifiers by name",
+        long_about = "Discover Tori location identifiers by a case-insensitive name fragment and return bounded normalized matches."
+    )]
     Search {
         /// Name fragment, such as Helsinki. Omit to list the first bounded page.
         query: Option<String>,

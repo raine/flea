@@ -50,9 +50,15 @@ pub enum Command {
         long_about = "List, inspect, update, mark sold, or permanently delete published listings."
     )]
     Listing(listing::ListingArgs),
-    /// Search public marketplace listings.
+    #[command(
+        about = "Search public marketplace listings",
+        long_about = "Search public Tori marketplace listings with normalized filters, facets, locations, sorting, and bounded pagination."
+    )]
     Search(Box<search::SearchArgs>),
-    /// Discover public marketplace location identifiers.
+    #[command(
+        about = "Discover public marketplace location identifiers",
+        long_about = "Discover deterministic Tori location identifiers for subsequent public marketplace searches."
+    )]
     Location(location::LocationArgs),
 }
 
