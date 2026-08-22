@@ -17,6 +17,33 @@ fn require_authoritative_revision(state: &DraftState) -> Result<&str, ApiError> 
         })
 }
 
+fn sanitize_listing_copy_values(values: &mut Map<String, Value>) -> Vec<String> {
+    const OMITTED_FIELDS: &[&str] = &[
+        "contact_email",
+        "contact_phone",
+        "email",
+        "image",
+        "images",
+        "listing_id",
+        "multi_image",
+        "owner_id",
+        "phone",
+        "publication_state",
+        "revision",
+        "seller",
+        "seller_id",
+        "seller_name",
+        "state",
+    ];
+    let mut omitted = Vec::new();
+    for field in OMITTED_FIELDS {
+        if values.remove(*field).is_some() {
+            omitted.push((*field).to_owned());
+        }
+    }
+    omitted
+}
+
 pub struct DraftWorkflow<A> {
     api: A,
     config: WorkflowConfig,
@@ -1003,6 +1030,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             draft,
             completed_steps: completed,
             image_processing,
+            listing_copy: None,
         })
     }
 
@@ -1010,12 +1038,14 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         &self,
         listing_id: &str,
     ) -> Result<CreateResult, WorkflowError> {
-        let seed = self
+        let mut seed = self
             .api
             .source_listing(listing_id)
             .await
             .map_err(WorkflowError::before_creation)?;
+        let omitted_fields = sanitize_listing_copy_values(&mut seed.values);
         requested_sale_price(&seed.values).map_err(WorkflowError::input)?;
+        let copied_fields = seed.values.keys().cloned().collect();
         let source_image_count = seed.images.len();
         let draft = self
             .api
@@ -1081,6 +1111,14 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             draft,
             completed_steps: completed,
             image_processing,
+            listing_copy: Some(ListingCopyReport {
+                source_listing_id: listing_id.to_owned(),
+                source_scope: "authenticated_seller_listings".to_owned(),
+                copied_fields,
+                omitted_fields,
+                source_image_count,
+                image_handling: "fresh_upload_from_source_bytes".to_owned(),
+            }),
         })
     }
 

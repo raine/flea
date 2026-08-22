@@ -114,7 +114,9 @@ fn unrecognized_read(mut error: ApiError, source: &str, status: u16) -> ApiError
 }
 
 pub(super) fn observation_source(path: &str) -> &'static str {
-    if path.starts_with("/adinput/ad/withModel/") {
+    if path.starts_with("/listings/") && path.ends_with("/draft-source") {
+        "listing_copy_eligibility"
+    } else if path.starts_with("/adinput/ad/withModel/") {
         "draft_detail"
     } else if path.starts_with("/ui/addelivery") || path.contains("/delivery") {
         "delivery_composer"
@@ -594,12 +596,31 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
 
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
         validate_resource_id(listing_id, "listing")?;
+        let Some(_) = self.find_listing_summary(listing_id).await? else {
+            return Err(listing_not_copyable(
+                listing_id,
+                "not_in_authenticated_seller_collection",
+                None,
+            ));
+        };
         let response = self
             .json(HttpRequest::read(format!(
                 "/listings/{listing_id}/draft-source"
             )))
-            .await?;
-        serde_json::from_value(response.body).map_err(|_| malformed_read_response("source_listing"))
+            .await
+            .map_err(|error| {
+                if error.status == Some(404) {
+                    listing_not_copyable(listing_id, "copy_source_unavailable", Some(404))
+                } else {
+                    copy_source_error(error, listing_id)
+                }
+            })?;
+        let seed: ListingDraftSeed = serde_json::from_value(response.body)
+            .map_err(|_| malformed_copy_source(listing_id, response.status))?;
+        if seed.listing_id != listing_id {
+            return Err(malformed_copy_source(listing_id, response.status));
+        }
+        Ok(seed)
     }
 
     async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError> {
@@ -961,6 +982,62 @@ fn normalize_observed_summary(summary: &Value, listing_id: &str) -> Value {
 
 fn public_listing_url(listing_id: &str) -> String {
     format!("https://www.tori.fi/recommerce/forsale/item/{listing_id}")
+}
+
+fn listing_not_copyable(listing_id: &str, reason: &str, status: Option<u16>) -> ApiError {
+    let eligibility = Observation::confirmed_absent("listing_copy_eligibility", status);
+    let listing_presence = status
+        .map(|_| Observation::confirmed_present("authenticated_listing_collection", Some(200)));
+    let mut error = ApiError::new(
+        "listing.not_copyable",
+        "Only listings in the authenticated seller's listing collection can be copied",
+    )
+    .with_observation(eligibility.clone(), ObservationOperation::Read);
+    error.status = status;
+    error.details = Some(Box::new(json!({
+        "listing_id": listing_id,
+        "source_scope": "authenticated_seller_listings",
+        "reason": reason,
+        "listing_presence": listing_presence,
+        "copy_eligibility": eligibility,
+        "remote_draft_allocated": false,
+    })));
+    error
+}
+
+fn copy_source_error(mut error: ApiError, listing_id: &str) -> ApiError {
+    let copy_eligibility = error.observation.clone();
+    let upstream = error.details.take().map(|details| *details);
+    error.details = Some(Box::new(json!({
+        "listing_id": listing_id,
+        "source_scope": "authenticated_seller_listings",
+        "listing_presence": Observation::confirmed_present(
+            "authenticated_listing_collection",
+            Some(200),
+        ),
+        "copy_eligibility": copy_eligibility,
+        "remote_draft_allocated": false,
+        "upstream_error": upstream,
+    })));
+    error
+}
+
+fn malformed_copy_source(listing_id: &str, status: u16) -> ApiError {
+    let eligibility = Observation::unrecognized_response("listing_copy_eligibility", Some(status));
+    let mut error = malformed_read_response("source_listing")
+        .with_observation(eligibility.clone(), ObservationOperation::Read);
+    error.status = Some(status);
+    error.details = Some(Box::new(json!({
+        "listing_id": listing_id,
+        "source_scope": "authenticated_seller_listings",
+        "listing_presence": Observation::confirmed_present(
+            "authenticated_listing_collection",
+            Some(200),
+        ),
+        "copy_eligibility": eligibility,
+        "remote_draft_allocated": false,
+    })));
+    error
 }
 
 fn listing_observation_model_error(status: u16, model: &str) -> ApiError {

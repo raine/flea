@@ -137,7 +137,8 @@ fn help_tables_include_agent_oriented_summaries() {
 
     let create = stdout(&invoke(&["draft", "create", "--help"]));
     assert!(create.contains("--from-listing <FROM_LISTING>"));
-    assert!(create.contains("Listing ID to copy into a fresh draft for inspection"));
+    assert!(create.contains("Authenticated seller listing ID to copy into a fresh draft"));
+    assert!(create.contains("Public listings owned by another seller are not copyable"));
     assert!(create.contains("--input <PATH>"));
     assert!(create.contains("Read listing fields from a JSON object"));
 

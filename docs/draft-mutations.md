@@ -1,5 +1,31 @@
 # Draft field mutations and recovery
 
+## Copying an owned listing
+
+`flea draft create --from-listing LISTING_ID` accepts listings in the
+authenticated seller's listing collection, including inactive listings retained
+there. A public listing owned by another seller and a deleted listing are outside
+this source scope. Flea checks collection membership before requesting copy data
+or allocating a draft. An unsupported source returns `listing.not_copyable` with
+a `listing_copy_eligibility` observation. This eligibility fact does not assert
+that the public listing is absent. Use `flea item show LISTING_ID` for an
+independent public-presence observation.
+
+For an eligible source, the copy endpoint supplies draft-safe values. Flea copies
+title, description, trade type, price, category machine values, category
+attributes, location, postal code, and delivery when each field is available.
+The result's `listing_copy.copied_fields` lists the values supplied to the fresh
+draft. Seller identity, contact details, listing identity, publication state,
+revision, and embedded image fields are omitted. Any such fields received from
+the source appear in `listing_copy.omitted_fields`.
+
+Source images use a separate byte payload. Flea preprocesses every image and
+uploads it as a fresh draft attachment. Published image URLs and remote image
+identifiers are never attached directly. `listing_copy.image_handling` reports
+`fresh_upload_from_source_bytes`, and `source_image_count` states how many source
+images entered that process. Location and delivery are ordinary copied draft
+values, so the normal composer validation and mutation rules below apply.
+
 Flea applies requested draft fields through deterministic atomic mutation
 groups. Composer groups contain one top-level field and use one upstream
 request. Price uses the dedicated item update endpoint. Delivery uses the

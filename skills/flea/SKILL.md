@@ -72,6 +72,7 @@ flea auth logout
 flea draft preview [fields]                 # Offline and zero-mutation by default
 flea draft preview --input PATH --verify-category
 flea draft create [fields]
+flea draft create --from-listing LISTING_ID # Copy an authenticated seller listing
 flea draft show DRAFT_ID                    # Compact decision state
 flea draft show DRAFT_ID --include-fields
 flea draft show DRAFT_ID --include-options [FIELD]
@@ -89,7 +90,7 @@ flea listing dispose LISTING_ID
 flea listing delete LISTING_ID
 ```
 
-Local draft preview works without authentication. Category-enriched preview and account draft or published listing work require authentication. Preview reports local assumptions and unverifiable requirements, while `draft validate DRAFT_ID` authoritatively checks an existing remote draft without changing it. Start draft inspection with compact `draft show`. Request `--include-fields` only when the field schema is needed, and request `--include-options FIELD` only for a relevant option set. Bare `--include-options` returns every available option set. Build a draft incrementally and upload images. Before publication, carry the exact validated revision into the mutation:
+Local draft preview works without authentication. Category-enriched preview and account draft or published listing work require authentication. `draft create --from-listing` accepts only listings in the authenticated seller's listing collection, including inactive listings retained there. Third-party public and deleted listings return `listing.not_copyable` before draft allocation. Treat its `listing_copy_eligibility` observation separately from public presence reported by `item show`. Copying preserves source-backed category attributes, location, and delivery when available, omits seller identity and contact fields, and preprocesses and uploads source image bytes as fresh attachments instead of reusing published image references. Preview reports local assumptions and unverifiable requirements, while `draft validate DRAFT_ID` authoritatively checks an existing remote draft without changing it. Start draft inspection with compact `draft show`. Request `--include-fields` only when the field schema is needed, and request `--include-options FIELD` only for a relevant option set. Bare `--include-options` returns every available option set. Build a draft incrementally and upload images. Before publication, carry the exact validated revision into the mutation:
 
 ```sh
 validation="$(flea --format json draft validate DRAFT_ID)"

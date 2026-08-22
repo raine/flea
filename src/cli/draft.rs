@@ -95,10 +95,10 @@ pub struct ListingInputArgs {
 pub enum DraftCommand {
     #[command(
         about = "Create a remote draft",
-        long_about = "Create a remote draft from explicit listing input or copy an existing listing into a fresh draft."
+        long_about = "Create a remote draft from explicit listing input or copy a listing from the authenticated seller's listing collection into a fresh draft. Public listings owned by another seller are not copyable."
     )]
     Create {
-        /// Listing ID to copy into a fresh draft for inspection.
+        /// Authenticated seller listing ID to copy into a fresh draft.
         #[arg(long, conflicts_with_all = ["category", "title", "description", "description_file", "price", "trade_type", "postal_code", "delivery", "image", "input"])]
         from_listing: Option<String>,
         #[command(flatten)]
@@ -885,6 +885,7 @@ fn workflow_error(error: WorkflowError) -> AppError {
         "draft.conflict" | "draft.revision_conflict" => ExitClass::Conflict,
         "draft.validation_failed" if has_remote_mutation => ExitClass::Partial,
         "draft.validation_failed"
+        | "listing.not_copyable"
         | "draft.invalid_delivery"
         | "draft.delivery_options_unavailable"
         | "draft.invalid_image"

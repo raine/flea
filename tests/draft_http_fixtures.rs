@@ -1616,6 +1616,197 @@ async fn recovery_output_bounds_dynamic_fields_images_steps_and_local_paths() {
 }
 
 #[tokio::test]
+async fn owned_active_listing_creates_a_fresh_inspectable_draft() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            json!({ "listing_id": "listing-7", "values": {}, "images": [] }),
+        ),
+        response(201, draft("one", json!({}))),
+    ])
+    .with_search_responses([listing_collection("listing-7", "ACTIVE")]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let result = workflow.create_from_listing("listing-7").await.unwrap();
+
+    assert_eq!(result.draft.draft_id, "draft-1");
+    assert_eq!(
+        result.completed_steps,
+        ["load_source_listing", "create_draft"]
+    );
+    let copy = result.listing_copy.unwrap();
+    assert_eq!(copy.source_scope, "authenticated_seller_listings");
+    assert!(copy.copied_fields.is_empty());
+    assert_eq!(copy.image_handling, "fresh_upload_from_source_bytes");
+    assert_eq!(
+        transport
+            .requests()
+            .iter()
+            .map(|request| (request.method.clone(), request.path.as_str()))
+            .collect::<Vec<_>>(),
+        [
+            (Method::Get, "/search?limit=50&offset=0"),
+            (Method::Get, "/listings/listing-7/draft-source"),
+            (Method::Post, "/adinput/ad/withModel/recommerce"),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn owned_expired_listing_remains_in_the_supported_source_scope() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            json!({ "listing_id": "listing-7", "values": {}, "images": [] }),
+        ),
+        response(201, draft("one", json!({}))),
+    ])
+    .with_search_responses([listing_collection("listing-7", "EXPIRED")]);
+
+    let result = DraftWorkflow::new(HttpAdInputApi::new(transport), config())
+        .create_from_listing("listing-7")
+        .await
+        .unwrap();
+
+    assert_eq!(result.draft.draft_id, "draft-1");
+}
+
+#[tokio::test]
+async fn third_party_public_listing_is_rejected_before_draft_allocation() {
+    let transport = FixtureTransport::new([]);
+
+    let error = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config())
+        .create_from_listing("listing-7")
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "listing.not_copyable");
+    let source = error.source.unwrap();
+    assert_eq!(
+        source.observation.unwrap().source,
+        "listing_copy_eligibility"
+    );
+    assert_eq!(
+        source.details.unwrap()["remote_draft_allocated"],
+        json!(false)
+    );
+    assert!(
+        transport
+            .requests()
+            .iter()
+            .all(|request| request.method == Method::Get)
+    );
+}
+
+#[tokio::test]
+async fn deleted_listing_is_rejected_before_draft_allocation() {
+    let transport = FixtureTransport::new([])
+        .with_search_responses([response(200, json!({ "summaries": [], "total": 0 }))]);
+
+    let error = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config())
+        .create_from_listing("deleted-7")
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "listing.not_copyable");
+    assert_eq!(transport.requests().len(), 1);
+    assert_eq!(transport.requests()[0].path, "/search?limit=50&offset=0");
+}
+
+#[tokio::test]
+async fn unavailable_copy_source_preserves_known_listing_presence_without_allocating_a_draft() {
+    for (status, expected_code) in [
+        (404, "listing.not_copyable"),
+        (503, "upstream.request_failed"),
+    ] {
+        let transport =
+            FixtureTransport::new([response(status, json!({ "message": "source unavailable" }))])
+                .with_search_responses([listing_collection("listing-7", "ACTIVE")]);
+
+        let error = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config())
+            .create_from_listing("listing-7")
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, expected_code);
+        let source = error.source.unwrap();
+        assert_eq!(
+            source.observation.as_ref().unwrap().source,
+            "listing_copy_eligibility"
+        );
+        let details = source.details.unwrap();
+        assert_eq!(details["listing_presence"]["state"], "confirmed_present");
+        assert_eq!(details["remote_draft_allocated"], false);
+        assert!(
+            transport
+                .requests()
+                .iter()
+                .all(|request| request.method == Method::Get)
+        );
+    }
+}
+
+#[tokio::test]
+async fn copied_images_are_preprocessed_and_uploaded_as_fresh_attachments() {
+    let directory = tempfile::tempdir().unwrap();
+    let source_path = directory.path().join("source.png");
+    image::DynamicImage::new_rgb8(7, 11)
+        .save(&source_path)
+        .unwrap();
+    let source_bytes = std::fs::read(source_path).unwrap();
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            json!({
+                "listing_id": "listing-7",
+                "values": {
+                    "seller_id": "private-seller",
+                    "multi_image": ["https://img.example/published.jpg"]
+                },
+                "images": [{ "file_name": "published.png", "bytes": source_bytes }]
+            }),
+        ),
+        response(201, draft("one", json!({}))),
+        response_with_location(201, "https://img.tori.net/dynamic/default/fresh-image.jpg"),
+        response(
+            200,
+            draft(
+                "two",
+                json!({ "images": [image("fresh-image", 0, "processing", 7, 11)] }),
+            ),
+        ),
+    ])
+    .with_search_responses([listing_collection("listing-7", "ACTIVE")]);
+
+    let result = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config())
+        .create_from_listing("listing-7")
+        .await
+        .unwrap();
+
+    let copy = result.listing_copy.unwrap();
+    assert_eq!(copy.source_image_count, 1);
+    assert_eq!(copy.omitted_fields, ["multi_image", "seller_id"]);
+    assert!(copy.copied_fields.is_empty());
+    let requests = transport.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|request| { request.method == Method::Post && request.path.ends_with("/upload") })
+    );
+    let attachment = requests
+        .iter()
+        .find(|request| request.method == Method::Put)
+        .unwrap();
+    let RequestBody::Json(body) = &attachment.body else {
+        panic!("image attachment must use JSON")
+    };
+    let encoded = serde_json::to_string(body).unwrap();
+    assert!(encoded.contains("fresh-image.jpg"));
+    assert!(!encoded.contains("published.jpg"));
+    assert!(!encoded.contains("private-seller"));
+}
+
+#[tokio::test]
 async fn copy_failure_identifies_both_source_listing_and_created_draft() {
     let transport = FixtureTransport::new([
         response(
@@ -1625,7 +1816,8 @@ async fn copy_failure_identifies_both_source_listing_and_created_draft() {
         response(201, draft("one", json!({}))),
         response(503, json!({ "message": "copy failed" })),
         response(200, draft("one", json!({}))),
-    ]);
+    ])
+    .with_search_responses([listing_collection("listing-7", "ACTIVE")]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
 
     let error = workflow.create_from_listing("listing-7").await.unwrap_err();

@@ -769,11 +769,23 @@ impl fmt::Display for WorkflowError {
 impl std::error::Error for WorkflowError {}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ListingCopyReport {
+    pub source_listing_id: String,
+    pub source_scope: String,
+    pub copied_fields: Vec<String>,
+    pub omitted_fields: Vec<String>,
+    pub source_image_count: usize,
+    pub image_handling: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CreateResult {
     pub draft: DraftState,
     pub completed_steps: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub image_processing: Vec<ImageProcessingReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing_copy: Option<ListingCopyReport>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
