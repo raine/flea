@@ -54,6 +54,27 @@ multiple fields is therefore ordered but is not an all-or-nothing transaction.
 Flea stops at the first failed group. It does not repeat, bisect, or replay an
 uncertain mutation to diagnose the field.
 
+## Draft creation contract
+
+Creation has a pre-allocation boundary. Flea prepares images, validates stable
+field shapes, and checks cross-field invariants before requesting a remote draft.
+Validation that depends on category, select, or composer evidence joins this
+boundary whenever that evidence is available. A preflight error reports
+`allocation: unattempted`, has no draft ID, and is safe from duplicate drafts.
+
+A returned draft ID proves that allocation succeeded. Any later failure uses
+`draft.create_incomplete` and a `partial.create` contract with
+`allocation: persisted`, `retry_create: false`, and
+`duplicate_draft_risk: true`. The original failure code remains in
+`error.details.cause_code`. Repeating the create command can allocate a duplicate
+and is never a continuation action.
+
+The partial result classifies every requested field and image. Continue against
+the existing draft ID with the reported `draft update` and `draft image add`
+actions for absent or unattempted work. Inspect indeterminate work before any
+further mutation. Draft deletion remains an explicitly reported destructive
+action and is never automatic.
+
 ## Failure output
 
 A field failure identifies its boundary in `error.details` and `partial`:

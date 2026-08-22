@@ -56,6 +56,32 @@ pub(super) fn requested_sale_price(values: &Map<String, Value>) -> Result<Option
     Ok(Some(price.clone()))
 }
 
+pub(super) fn create_preflight_issues(values: &Map<String, Value>) -> Vec<ValidationIssue> {
+    values
+        .iter()
+        .filter_map(|(field, value)| {
+            let valid = match field.as_str() {
+                "category" => {
+                    value.as_str().is_some_and(|value| !value.trim().is_empty())
+                        || value.as_u64().is_some()
+                }
+                "title" | "description" | "trade_type" | "postal_code" => value.is_string(),
+                "attributes" => value.is_object(),
+                "delivery" => delivery_values(value).is_some(),
+                "price" => validate_price(value).is_ok(),
+                _ => true,
+            };
+            (!valid).then(|| ValidationIssue {
+                field: field.clone(),
+                code: "invalid_type".to_owned(),
+                message: "the value has an invalid shape for draft creation".to_owned(),
+                source: Some("create_preflight".to_owned()),
+                raw: None,
+            })
+        })
+        .collect()
+}
+
 fn prices_equal(left: &Value, right: &Value) -> bool {
     match (left.as_f64(), right.as_f64()) {
         (Some(left), Some(right)) => left == right,

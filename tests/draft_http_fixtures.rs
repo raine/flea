@@ -457,6 +457,7 @@ async fn creation_observation_failure_preserves_authoritative_identity() {
         .await
         .unwrap_err();
 
+    assert_eq!(error.code, "draft.create_incomplete");
     let recovery = error.recovery.unwrap();
     assert_eq!(recovery.draft_id, "98231");
     assert_eq!(
@@ -464,6 +465,30 @@ async fn creation_observation_failure_preserves_authoritative_identity() {
         ["create_draft", "establish_identity"]
     );
     assert_eq!(recovery.next_safe_actions, ["flea draft show 98231"]);
+    assert_eq!(
+        recovery.create.unwrap().allocation,
+        RecoveryStatus::Persisted
+    );
+}
+
+#[tokio::test]
+async fn create_preflight_rejects_invalid_field_shapes_before_allocation() {
+    let transport = FixtureTransport::new([]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .create(
+            Map::from_iter([("title".to_owned(), json!({ "nested": true }))]),
+            &[] as &[&str],
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "draft.validation_failed");
+    assert_eq!(error.details.as_ref().unwrap()["stage"], "create_preflight");
+    assert_eq!(error.details.as_ref().unwrap()["allocation"], "unattempted");
+    assert!(error.recovery.is_none());
+    assert!(transport.requests().is_empty());
 }
 
 #[tokio::test]
@@ -1722,6 +1747,11 @@ async fn post_creation_failure_keeps_recovery_context() {
         .await
         .unwrap_err();
 
+    assert_eq!(error.code, "draft.create_incomplete");
+    assert_eq!(
+        error.details.as_ref().unwrap()["cause_code"],
+        "mutation.uncertain"
+    );
     let recovery = error.recovery.unwrap();
     assert_eq!(recovery.draft_id, "draft-1");
     assert_eq!(
@@ -1732,12 +1762,122 @@ async fn post_creation_failure_keeps_recovery_context() {
     assert!(!recovery.safe_to_retry);
     assert_eq!(recovery.active_step.as_deref(), Some("apply_category"));
     assert_eq!(recovery.absent_fields, ["category"]);
+    let create = recovery.create.unwrap();
+    assert_eq!(create.allocation, RecoveryStatus::Persisted);
+    assert!(!create.retry_create);
+    assert!(create.duplicate_draft_risk);
     assert_eq!(
         recovery.next_safe_actions,
         [
             "flea draft show draft-1",
             "flea draft update draft-1 --category VALUE"
         ]
+    );
+}
+
+#[tokio::test]
+async fn incomplete_creation_continues_with_update_and_image_actions() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("continuation.png");
+    image::DynamicImage::new_rgb8(4, 6).save(&path).unwrap();
+    let transport = FixtureTransport::new([
+        response(201, draft("one", json!({}))),
+        response(
+            422,
+            json!({
+                "errors": [{
+                    "field": "title",
+                    "code": "invalid",
+                    "message": "title was rejected"
+                }]
+            }),
+        ),
+        response(200, draft("one", json!({}))),
+        response(200, draft("two", json!({ "values": { "title": "Chair" } }))),
+        response(
+            200,
+            draft(
+                "three",
+                json!({ "values": { "title": "Chair", "postal_code": "00100" } }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "three",
+                json!({ "values": { "title": "Chair", "postal_code": "00100" } }),
+            ),
+        ),
+        response_with_location(201, "https://img.tori.net/dynamic/default/continued.png"),
+        response(
+            200,
+            draft(
+                "four",
+                json!({
+                    "values": { "title": "Chair", "postal_code": "00100" },
+                    "images": [image("continued", 0, "ready", 4, 6)]
+                }),
+            ),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+    let requested = Map::from_iter([
+        ("title".to_owned(), json!("Chair")),
+        ("postal_code".to_owned(), json!("00100")),
+    ]);
+
+    let error = workflow
+        .create(requested.clone(), &[&path])
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "draft.create_incomplete");
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.absent_fields, ["title"]);
+    assert_eq!(recovery.unattempted_fields, ["postal_code"]);
+    assert!(recovery.next_safe_actions.iter().any(|action| action
+        == "flea draft update draft-1 --input PATH_WITH_ABSENT_AND_UNATTEMPTED_FIELDS"));
+    assert!(
+        recovery
+            .next_safe_actions
+            .iter()
+            .any(|action| action == "flea draft image add draft-1 --image PATH...")
+    );
+
+    let updated = workflow.update("draft-1", &requested).await.unwrap();
+    assert_eq!(updated.persisted_fields, ["postal_code", "title"]);
+    let continued = workflow.add_images("draft-1", &[&path]).await.unwrap();
+    assert_eq!(continued.images.len(), 1);
+}
+
+#[tokio::test]
+async fn image_failure_keeps_allocated_draft_and_unattempted_image_plan() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = directory.path().join("first.png");
+    let second = directory.path().join("second.png");
+    image::DynamicImage::new_rgb8(4, 6).save(&first).unwrap();
+    image::DynamicImage::new_rgb8(4, 6).save(&second).unwrap();
+    let transport = FixtureTransport::new([
+        response(201, draft("one", json!({}))),
+        response(503, json!({ "message": "upload unavailable" })),
+        response(200, draft("one", json!({}))),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow
+        .create(Map::new(), &[&first, &second])
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "draft.create_incomplete");
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.draft_id, "draft-1");
+    assert_eq!(recovery.images[0].status, RecoveryStatus::Rejected);
+    assert_eq!(recovery.images[1].status, RecoveryStatus::Unattempted);
+    assert!(
+        recovery
+            .next_safe_actions
+            .iter()
+            .any(|action| action == "flea draft image add draft-1 --image PATH...")
     );
 }
 

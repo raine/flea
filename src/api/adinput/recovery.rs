@@ -168,9 +168,19 @@ pub struct ImageRecovery {
     pub image_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CreateRecoveryContract {
+    pub allocation: RecoveryStatus,
+    pub retry_create: bool,
+    pub duplicate_draft_risk: bool,
+    pub continuation: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Recovery {
     pub draft_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub create: Option<CreateRecoveryContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_listing_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -327,6 +337,7 @@ impl Recovery {
         let (completed_steps, completed_steps_omitted) = bounded_recovery_steps(completed_steps);
         Self {
             draft_id: draft_id.to_owned(),
+            create: None,
             source_listing_id: None,
             listing_id: None,
             observed_etag: None,

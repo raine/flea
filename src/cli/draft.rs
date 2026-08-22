@@ -98,7 +98,7 @@ pub struct ListingInputArgs {
 pub enum DraftCommand {
     #[command(
         about = "Create a remote draft",
-        long_about = "Create a remote draft from explicit listing input or copy a listing from the authenticated seller's listing collection into a fresh draft. Public listings owned by another seller are not copyable."
+        long_about = "Validate explicit listing input before allocation, then create a remote draft or copy a listing from the authenticated seller's listing collection into a fresh draft. Public listings owned by another seller are not copyable. If allocation succeeds but later work fails, continue with the returned draft ID instead of repeating creation."
     )]
     Create {
         /// Authenticated seller listing ID to copy into a fresh draft.

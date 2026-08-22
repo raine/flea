@@ -778,8 +778,19 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
     assert_eq!(result.exit_code, 50);
     assert_eq!(result.presentation, Presentation::Structured);
     assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["code"], "draft.create_incomplete");
     assert_eq!(value["error"]["safe_to_retry"], false);
+    assert_eq!(value["error"]["details"]["duplicate_draft_risk"], true);
+    assert!(
+        value["error"]["retry_guidance"]
+            .as_str()
+            .unwrap()
+            .contains("Repeating draft create risks a duplicate")
+    );
     assert_eq!(value["partial"]["draft_id"], "draft-1");
+    assert_eq!(value["partial"]["create"]["allocation"], "persisted");
+    assert_eq!(value["partial"]["create"]["retry_create"], false);
+    assert_eq!(value["partial"]["create"]["duplicate_draft_risk"], true);
     assert_eq!(value["partial"]["active_step"], "apply_category");
     assert_eq!(value["partial"]["failed_stage"], "apply_category");
     assert_eq!(value["partial"]["observed_etag"], "one");

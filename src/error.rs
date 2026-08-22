@@ -252,6 +252,12 @@ fn retry_guidance(error: &AppError) -> Option<String> {
     if error.code == "draft.validation_failed" {
         return validation_retry_guidance(error);
     }
+    if error.code == "draft.create_incomplete" {
+        return Some(
+            "Draft allocation succeeded. Repeating draft create risks a duplicate; continue with the returned draft ID."
+                .to_owned(),
+        );
+    }
     match (error.upstream_transient, error.safe_to_retry) {
         (true, true) => Some(
             "The upstream failure appears temporary, and repeating this operation is safe."

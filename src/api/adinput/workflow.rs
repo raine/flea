@@ -269,6 +269,106 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         }
     }
 
+    fn create_preflight_error(issues: Vec<ValidationIssue>) -> WorkflowError {
+        let fields = issues
+            .iter()
+            .map(|issue| issue.field.clone())
+            .collect::<Vec<_>>();
+        WorkflowError {
+            code: "draft.validation_failed".to_owned(),
+            message: "Draft input failed pre-allocation validation".to_owned(),
+            source: None,
+            recovery: None,
+            details: Some(json!({
+                "stage": "create_preflight",
+                "fields": fields,
+                "field_errors": issues,
+                "allocation": "unattempted",
+            })),
+        }
+    }
+
+    fn create_incomplete(
+        mut error: WorkflowError,
+        draft_id: &str,
+        completed: &[String],
+        mutations: &[FieldMutation],
+        persisted_fields: &[String],
+    ) -> WorkflowError {
+        let cause_code = error.code.clone();
+        let recovery = error
+            .recovery
+            .get_or_insert_with(|| Recovery::base(draft_id, completed, Some(&cause_code)));
+        recovery.create = Some(CreateRecoveryContract {
+            allocation: RecoveryStatus::Persisted,
+            retry_create: false,
+            duplicate_draft_risk: true,
+            continuation: "update_existing_draft".to_owned(),
+        });
+        recovery.safe_to_retry = false;
+
+        let classified = recovery
+            .persisted_fields
+            .iter()
+            .chain(&recovery.absent_fields)
+            .chain(&recovery.indeterminate_fields)
+            .chain(&recovery.unattempted_fields)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        for field in mutations
+            .iter()
+            .flat_map(|mutation| mutation.fields.iter())
+            .filter(|field| !classified.contains(*field))
+        {
+            if persisted_fields.contains(field) {
+                recovery.persisted_fields.push(field.clone());
+            } else {
+                recovery.unattempted_fields.push(field.clone());
+            }
+        }
+        recovery.refresh_field_summary();
+
+        let show = format!("flea draft show {draft_id}");
+        let mut actions = vec![show];
+        let mut resumable_fields = recovery.absent_fields.clone();
+        resumable_fields.extend(recovery.unattempted_fields.clone());
+        resumable_fields.sort();
+        resumable_fields.dedup();
+        if !resumable_fields.is_empty() {
+            let action = if resumable_fields.len() == 1 {
+                retry_field_action(draft_id, &resumable_fields)
+            } else {
+                format!(
+                    "flea draft update {draft_id} --input PATH_WITH_ABSENT_AND_UNATTEMPTED_FIELDS"
+                )
+            };
+            actions.push(action);
+        }
+        if recovery.images.iter().any(|image| {
+            image.operation == ImageRecoveryOperation::Add
+                && image.status == RecoveryStatus::Unattempted
+        }) {
+            actions.push(format!("flea draft image add {draft_id} --image PATH..."));
+        }
+        actions.dedup();
+        recovery.next_safe_actions = actions;
+
+        let details = error.details.get_or_insert_with(|| json!({}));
+        if let Some(details) = details.as_object_mut() {
+            details.insert("cause_code".to_owned(), Value::String(cause_code));
+            details.insert(
+                "allocation".to_owned(),
+                Value::String("persisted".to_owned()),
+            );
+            details.insert("duplicate_draft_risk".to_owned(), Value::Bool(true));
+        }
+        error.code = "draft.create_incomplete".to_owned();
+        error.message =
+            "The draft was allocated, but requested work remains; continue with the returned draft ID"
+                .to_owned();
+        error
+    }
+
     fn enrich_validation_recovery(
         mut error: WorkflowError,
         state: &DraftState,
@@ -1053,16 +1153,44 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         images: Vec<PreparedImage>,
     ) -> Result<CreateResult, WorkflowError> {
         requested_sale_price(&values).map_err(WorkflowError::input)?;
-        let draft = self
-            .api
-            .create_draft()
-            .await
-            .map_err(WorkflowError::before_creation)?;
+        let issues = create_preflight_issues(&values);
+        if !issues.is_empty() {
+            return Err(Self::create_preflight_error(issues));
+        }
+        let mutations = ordered_field_mutations(values);
+        let image_count = images.len();
+        let draft = match self.api.create_draft().await {
+            Ok(draft) => draft,
+            Err(error) => {
+                let mut workflow = WorkflowError::before_creation(error);
+                let Some(draft_id) = workflow
+                    .recovery
+                    .as_ref()
+                    .map(|recovery| recovery.draft_id.clone())
+                else {
+                    return Err(workflow);
+                };
+                let completed = workflow
+                    .recovery
+                    .as_ref()
+                    .map(|recovery| recovery.completed_steps.clone())
+                    .unwrap_or_default();
+                Self::add_unattempted_images(&mut workflow, 0, image_count);
+                return Err(Self::create_incomplete(
+                    workflow,
+                    &draft_id,
+                    &completed,
+                    &mutations,
+                    &[],
+                ));
+            }
+        };
+        let draft_id = draft.draft_id.clone();
         let mut completed = vec!["create_draft".to_owned()];
         let applied = match self
             .apply_field_mutations(
                 draft,
-                ordered_field_mutations(values),
+                mutations.clone(),
                 &mut completed,
                 "draft_create",
                 None,
@@ -1071,18 +1199,38 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         {
             Ok(applied) => applied,
             Err(mut error) => {
-                Self::add_unattempted_images(&mut error, 0, images.len());
-                return Err(error);
+                Self::add_unattempted_images(&mut error, 0, image_count);
+                return Err(Self::create_incomplete(
+                    error,
+                    &draft_id,
+                    &completed,
+                    &mutations,
+                    &[],
+                ));
             }
         };
+        let persisted_fields = applied.progress.persisted.clone();
         let mut draft = applied.draft;
         let mut image_processing = Vec::new();
         if !images.is_empty() {
-            let result = self
+            match self
                 .add_prepared_images(&draft, images, &mut completed)
-                .await?;
-            draft = result.draft;
-            image_processing = result.image_processing;
+                .await
+            {
+                Ok(result) => {
+                    draft = result.draft;
+                    image_processing = result.image_processing;
+                }
+                Err(error) => {
+                    return Err(Self::create_incomplete(
+                        error,
+                        &draft_id,
+                        &completed,
+                        &mutations,
+                        &persisted_fields,
+                    ));
+                }
+            }
         }
         Ok(CreateResult {
             draft,
@@ -1103,18 +1251,43 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .map_err(WorkflowError::before_creation)?;
         let omitted_fields = sanitize_listing_copy_values(&mut seed.values);
         requested_sale_price(&seed.values).map_err(WorkflowError::input)?;
+        let issues = create_preflight_issues(&seed.values);
+        if !issues.is_empty() {
+            return Err(Self::create_preflight_error(issues));
+        }
         let copied_fields = seed.values.keys().cloned().collect();
         let source_image_count = seed.images.len();
-        let draft = self
-            .api
-            .create_draft()
-            .await
-            .map_err(WorkflowError::before_creation)?;
+        let mut source_images = Vec::with_capacity(source_image_count);
+        for source in seed.images {
+            source_images
+                .push(prepare_image_bytes(source.bytes).map_err(WorkflowError::before_creation)?);
+        }
+        let mutations = ordered_field_mutations(seed.values);
+        let draft = match self.api.create_draft().await {
+            Ok(draft) => draft,
+            Err(error) => {
+                let mut workflow = WorkflowError::before_creation(error);
+                let Some(recovery) = workflow.recovery.as_ref() else {
+                    return Err(workflow);
+                };
+                let draft_id = recovery.draft_id.clone();
+                let completed = recovery.completed_steps.clone();
+                Self::add_unattempted_images(&mut workflow, 0, source_image_count);
+                return Err(Self::create_incomplete(
+                    workflow.with_source_listing_id(listing_id),
+                    &draft_id,
+                    &completed,
+                    &mutations,
+                    &[],
+                ));
+            }
+        };
+        let draft_id = draft.draft_id.clone();
         let mut completed = vec!["load_source_listing".to_owned(), "create_draft".to_owned()];
         let applied = match self
             .apply_field_mutations(
                 draft,
-                ordered_field_mutations(seed.values),
+                mutations.clone(),
                 &mut completed,
                 "draft_create_from_listing",
                 Some(listing_id),
@@ -1124,46 +1297,37 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             Ok(applied) => applied,
             Err(mut error) => {
                 Self::add_unattempted_images(&mut error, 0, source_image_count);
-                return Err(error);
+                return Err(Self::create_incomplete(
+                    error,
+                    &draft_id,
+                    &completed,
+                    &mutations,
+                    &[],
+                ));
             }
         };
+        let persisted_fields = applied.progress.persisted.clone();
         let mut draft = applied.draft;
-
-        let mut ordered = Vec::new();
         let mut image_processing = Vec::new();
-        for source in seed.images {
-            let image = prepare_image_bytes(source.bytes).map_err(|error| {
-                WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                    .with_source_listing_id(listing_id)
-            })?;
-            image_processing.push(image.processing_report().clone());
-            let uploaded = self
-                .api
-                .upload_image(
-                    &draft.draft_id,
-                    image.file_name,
-                    image.bytes,
-                    image.width,
-                    image.height,
-                )
+        if !source_images.is_empty() {
+            match self
+                .add_prepared_images(&draft, source_images, &mut completed)
                 .await
-                .map_err(|error| {
-                    WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                        .with_source_listing_id(listing_id)
-                })?;
-            ordered.push(uploaded);
-            completed.push(format!("upload_image:{}", ordered.len() - 1));
-        }
-        if !ordered.is_empty() {
-            draft = self
-                .api
-                .set_images(&draft.draft_id, &draft.etag, &draft.values, &ordered)
-                .await
-                .map_err(|error| {
-                    WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                        .with_source_listing_id(listing_id)
-                })?;
-            completed.push("attach_images".to_owned());
+            {
+                Ok(result) => {
+                    draft = result.draft;
+                    image_processing = result.image_processing;
+                }
+                Err(error) => {
+                    return Err(Self::create_incomplete(
+                        error.with_source_listing_id(listing_id),
+                        &draft_id,
+                        &completed,
+                        &mutations,
+                        &persisted_fields,
+                    ));
+                }
+            }
         }
         Ok(CreateResult {
             draft,
