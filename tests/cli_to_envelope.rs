@@ -491,7 +491,10 @@ fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
         ],
     );
 
-    assert_eq!(value["data"]["draft"]["values"]["price"], 5);
+    assert_eq!(value["data"]["draft"]["values"]["trade_type"], "sell");
+    assert_eq!(value["data"]["draft"]["values"]["price"]["kind"], "fixed");
+    assert_eq!(value["data"]["draft"]["values"]["price"]["amount"], 5);
+    assert_eq!(value["data"]["draft"]["values"]["price"]["currency"], "EUR");
     let requests = client.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[1].method, reqwest::Method::PATCH);
@@ -967,7 +970,11 @@ fn publish_flows_through_every_http_step() {
         response(StatusCode::OK, json!({ "transactionId": 11 })),
         response(
             StatusCode::OK,
-            json!({ "listing_id": "draft-1", "state": "pending" }),
+            json!({
+                "listing_id": "draft-1",
+                "state": "pending",
+                "fields": {"trade_type": "1", "price": "5.25"}
+            }),
         ),
     ]);
     let value = invoke(
@@ -987,6 +994,17 @@ fn publish_flows_through_every_http_step() {
     );
 
     assert_eq!(value["data"]["listing_id"], "draft-1");
+    assert_eq!(value["data"]["observed_listing"]["trade_type"], "sell");
+    assert_eq!(value["data"]["observed_listing"]["price"]["amount"], 5.25);
+    assert_eq!(
+        value["data"]["observed_listing"]["price"]["currency"],
+        "EUR"
+    );
+    assert!(
+        value["data"]["observed_listing"]["fields"]
+            .get("price")
+            .is_none()
+    );
     let requests = client.requests.lock().unwrap();
     assert_eq!(requests.len(), 15);
     assert_eq!(requests[0].path_and_query, "/search?limit=50&offset=0");
@@ -1274,10 +1292,29 @@ fn listing_list_uses_the_published_listing_search_endpoint_and_paginates() {
         serde_json::from_str(include_str!("fixtures/listings/page-1.json")).unwrap();
     let second_page: Value =
         serde_json::from_str(include_str!("fixtures/listings/page-2.json")).unwrap();
-    let client = MockClient::with_responses([
-        response(StatusCode::OK, first_page),
-        response(StatusCode::OK, second_page),
-    ]);
+    let mut responses = vec![response(StatusCode::OK, first_page)];
+    for index in 0..50 {
+        responses.push(response(
+            StatusCode::OK,
+            json!({
+                "id": format!("10{index:02}"),
+                "etag": format!("listing-{index}"),
+                "fields": {"trade_type": "sell", "price": index + 10}
+            }),
+        ));
+    }
+    responses.push(response(StatusCode::OK, second_page));
+    for index in 50..52 {
+        responses.push(response(
+            StatusCode::OK,
+            json!({
+                "id": format!("10{index:02}"),
+                "etag": format!("listing-{index}"),
+                "fields": {"trade_type": "sell", "price": index + 10}
+            }),
+        ));
+    }
+    let client = MockClient::with_responses(responses);
 
     let output = invoke(
         &TestRuntime {
@@ -1290,12 +1327,15 @@ fn listing_list_uses_the_published_listing_search_endpoint_and_paginates() {
     assert_eq!(output["data"]["listings"].as_array().unwrap().len(), 52);
     assert_eq!(output["data"]["listings"][0]["listing_id"], "1000");
     assert_eq!(output["data"]["listings"][0]["statistics"]["views"], 100);
+    assert_eq!(output["data"]["listings"][0]["trade_type"], "sell");
+    assert_eq!(output["data"]["listings"][0]["price"]["amount"], 10);
+    assert_eq!(output["data"]["listings"][0]["price"]["currency"], "EUR");
 
     let requests = client.requests.lock().unwrap();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 54);
     assert_eq!(requests[0].service, "AD-SUMMARIES");
     assert_eq!(requests[0].path_and_query, "/search?limit=50&offset=0");
-    assert_eq!(requests[1].path_and_query, "/search?limit=50&offset=50");
+    assert_eq!(requests[51].path_and_query, "/search?limit=50&offset=50");
 }
 
 fn invoke<const N: usize>(runtime: &TestRuntime, args: [&str; N]) -> Value {

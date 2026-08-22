@@ -70,9 +70,20 @@ impl ListingsApi for MockListingsApi {
             .ok_or_else(|| ListingsApiError::UnexpectedResponse("missing mock page".to_owned()))
     }
 
-    fn listing(&self, _listing_id: &str) -> Result<UpstreamListing, ListingsApiError> {
+    fn listing(&self, listing_id: &str) -> Result<UpstreamListing, ListingsApiError> {
         if let Some(error) = self.listing_errors.lock().unwrap().pop_front() {
             return Err(error);
+        }
+        if let Some(index) = listing_id
+            .strip_prefix("10")
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            return Ok(serde_json::from_value(json!({
+                "id": listing_id,
+                "etag": format!("listing-{listing_id}"),
+                "fields": {"trade_type": "sell", "price": index + 10}
+            }))
+            .unwrap());
         }
         self.listings
             .lock()
@@ -422,6 +433,15 @@ fn transparently_paginates_the_fifty_item_cap_and_normalizes_results() {
     assert_eq!(collection.listings[0].listing_id, "1000");
     assert_eq!(collection.listings[0].statistics.views, Some(100));
     assert_eq!(
+        collection.listings[0].trade_type,
+        flea::domain::commerce::TradeType::Sell
+    );
+    assert_eq!(collection.listings[0].price.amount, Some(json!(10)));
+    assert_eq!(
+        collection.listings[0].price.currency.as_deref(),
+        Some("EUR")
+    );
+    assert_eq!(
         collection.listings[0].actions[0].name,
         ListingActionName::Edit
     );
@@ -438,6 +458,10 @@ fn show_normalizes_complete_fields_statistics_and_actions() {
 
     assert_eq!(detail.state, ListingState::Active);
     assert_eq!(detail.fields["material"], "10");
+    assert_eq!(detail.trade_type, flea::domain::commerce::TradeType::Sell);
+    assert_eq!(detail.price.amount, Some(json!(45)));
+    assert!(!detail.fields.contains_key("price"));
+    assert!(!detail.fields.contains_key("trade_type"));
     assert_eq!(detail.statistics.views, Some(1234));
     assert_eq!(detail.statistics.favorites, Some(17));
     assert_eq!(detail.actions[1].name, ListingActionName::Delete);
@@ -462,7 +486,15 @@ fn show_merges_normalized_summary_values_into_partial_detail_models() {
     let detail = Listings::new(&api).show("46031010").unwrap();
 
     assert_eq!(detail.fields["title"], "Bicycle lock cable");
-    assert_eq!(detail.fields["price"], "Tori myydään 5 €");
+    assert_eq!(
+        detail.trade_type,
+        flea::domain::commerce::TradeType::Unknown
+    );
+    assert_eq!(
+        detail.price.kind,
+        flea::domain::commerce::PriceKind::Unavailable
+    );
+    assert_eq!(detail.price.display.as_deref(), Some("Tori myydään 5 €"));
     assert_eq!(detail.fields["image"], "https://img.example/lock.jpg");
     assert_eq!(
         detail.fields["public_url"],
@@ -494,7 +526,15 @@ fn show_reconciles_detail_not_found_with_the_matching_active_collection_item() {
     assert_eq!(detail.listing_id, "46031010");
     assert_eq!(detail.state, ListingState::Active);
     assert_eq!(detail.fields["title"], "Bicycle lock cable");
-    assert_eq!(detail.fields["price"], "5 €");
+    assert_eq!(
+        detail.trade_type,
+        flea::domain::commerce::TradeType::Unknown
+    );
+    assert_eq!(
+        detail.price.kind,
+        flea::domain::commerce::PriceKind::Unavailable
+    );
+    assert_eq!(detail.price.display.as_deref(), Some("5 €"));
     assert_eq!(detail.fields["location"], "Helsinki");
     assert_eq!(detail.fields["image"], "https://img.example/lock.jpg");
     assert_eq!(
@@ -600,7 +640,7 @@ fn update_preserves_unmentioned_fields_and_uses_the_fetched_etag() {
         )
         .unwrap();
 
-    assert_eq!(detail.fields["price"], 50);
+    assert_eq!(detail.price.amount, Some(json!(50)));
     let calls = api.update_calls.lock().unwrap();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].0, "36443414");
@@ -632,7 +672,7 @@ fn etag_conflict_returns_fresh_state_without_retrying_the_mutation() {
     assert!(!error.upstream_transient);
     assert!(error.safe_to_retry);
     assert_eq!(error.next_actions[0].command, "flea listing show 36443414");
-    assert_eq!(error.details.unwrap()["current"]["fields"]["price"], 50);
+    assert_eq!(error.details.unwrap()["current"]["price"]["amount"], 50);
     assert_eq!(api.update_calls.lock().unwrap().len(), 1);
 }
 

@@ -43,7 +43,10 @@ fn normalizes_complete_public_listing_detail() {
     assert_eq!(item.listing_id, "42346404");
     assert_eq!(item.title, "Potkulauta");
     assert!(item.description.contains("Micro Mini"));
-    assert_eq!(item.price.as_ref().unwrap().amount, json!(25));
+    assert_eq!(item.trade_type, flea::domain::commerce::TradeType::Sell);
+    assert_eq!(item.price.kind, flea::domain::commerce::PriceKind::Fixed);
+    assert_eq!(item.price.amount, Some(json!(25)));
+    assert_eq!(item.price.currency.as_deref(), Some("EUR"));
     assert_eq!(
         item.location.as_ref().unwrap().name.as_deref(),
         Some("Helsinki, Uusimaa")
@@ -148,7 +151,9 @@ fn sparse_upstream_details_keep_required_normalized_sections_explicit() {
     assert!(value.get("seller").unwrap().is_object());
     assert!(value.get("shipping").unwrap().is_object());
     assert!(value.get("images").unwrap().is_array());
-    assert!(value.get("price").unwrap().is_null());
+    assert_eq!(value["trade_type"], "unknown");
+    assert_eq!(value["price"]["kind"], "unavailable");
+    assert!(value["price"].get("amount").is_none());
     assert!(value.get("published_at").unwrap().is_null());
     assert!(value.get("canonical_url").unwrap().is_null());
 }

@@ -5,9 +5,11 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
-    domain::item::{
-        ItemAttribute, ItemImage, ItemLocation, ItemPrice, ItemSeller, ItemShipping,
-        PublicItemDetail,
+    domain::{
+        commerce::{normalize_price, normalize_trade_type},
+        item::{
+            ItemAttribute, ItemImage, ItemLocation, ItemSeller, ItemShipping, PublicItemDetail,
+        },
     },
     error::{AppError, ExitClass},
     retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},
@@ -171,11 +173,26 @@ fn normalize_item(raw: &Value, expected_id: &str) -> Result<PublicItemDetail, Ap
                 .and_then(|value| string_path(value, &["url"]))
         });
 
+    let trade_source = ad
+        .get("trade_type")
+        .or_else(|| ad.get("tradeType"))
+        .or_else(|| ad.get("adViewTypeLabel"));
+    let trade_type = normalize_trade_type(trade_source);
+    let price_value = ad.get("price");
+    let display = price_value
+        .and_then(Value::as_object)
+        .and_then(|price| string_path(price, &["display", "formatted", "text"]))
+        .or_else(|| string_path(ad, &["priceText", "price_text"]));
+    let currency = ad
+        .get("currency")
+        .or_else(|| ad.get("currencyCode"))
+        .or_else(|| ad.get("currency_code"));
+
     Ok(PublicItemDetail {
         listing_id: expected_id.to_owned(),
         title: string_path(ad, &["title", "heading"]).unwrap_or_default(),
         description: string_path(ad, &["description", "body"]).unwrap_or_default(),
-        price: normalize_price(ad),
+        price: normalize_price(price_value, currency, display, trade_type),
         location: normalize_location(ad.get("location")),
         condition,
         seller: normalize_seller(root, ad),
@@ -184,34 +201,10 @@ fn normalize_item(raw: &Value, expected_id: &str) -> Result<PublicItemDetail, Ap
         published_at,
         published_at_ms,
         canonical_url,
-        trade_type: string_path(ad, &["adViewTypeLabel", "trade_type", "tradeType"]),
+        trade_type,
         category: normalize_category(ad.get("category")),
         attributes,
     })
-}
-
-fn normalize_price(ad: &Map<String, Value>) -> Option<ItemPrice> {
-    let price = ad.get("price")?;
-    if let Some(object) = price.as_object() {
-        let amount = object
-            .get("amount")
-            .or_else(|| object.get("value"))?
-            .clone();
-        return Some(ItemPrice {
-            amount,
-            currency: string_path(object, &["currency", "currencyCode", "currency_code"]),
-            display: string_path(object, &["display", "formatted", "text"]),
-        });
-    }
-    if price.is_number() || price.is_string() {
-        Some(ItemPrice {
-            amount: price.clone(),
-            currency: string_path(ad, &["currency", "currencyCode", "currency_code"]),
-            display: string_path(ad, &["priceText", "price_text"]),
-        })
-    } else {
-        None
-    }
 }
 
 fn normalize_location(value: Option<&Value>) -> Option<ItemLocation> {

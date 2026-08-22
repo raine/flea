@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::commerce::{Price, TradeType};
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PublicItemDetail {
     pub listing_id: String,
     pub title: String,
     pub description: String,
-    pub price: Option<ItemPrice>,
+    pub price: Price,
     pub location: Option<ItemLocation>,
     pub condition: Option<ItemAttribute>,
     pub seller: ItemSeller,
@@ -15,16 +17,9 @@ pub struct PublicItemDetail {
     pub published_at: Option<String>,
     pub published_at_ms: Option<i64>,
     pub canonical_url: Option<String>,
-    pub trade_type: Option<String>,
+    pub trade_type: TradeType,
     pub category: Vec<ItemAttribute>,
     pub attributes: Vec<ItemAttribute>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ItemPrice {
-    pub amount: Value,
-    pub currency: Option<String>,
-    pub display: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -12,6 +12,7 @@ Use `flea` as an independent interface to Tori.fi. Keep the default TOON output 
 - Run `flea <command> --help` for exact arguments.
 - Follow `next_actions` when present. Empty optional sections are omitted.
 - Treat returned IDs and option values as machine values. Discover them with `category`, `location`, or the relevant `show` command instead of guessing.
+- Read commerce data from `trade_type`, `price.kind`, `price.amount`, and `price.currency`. `price.amount` is a JSON number when `price.kind` is `fixed`. Never parse `price.display`.
 - Inspect remote state after mutations. Draft and listing responses are authoritative.
 - Use `draft preview` before creation when a complete local input needs checking. Preview is not publication readiness.
 - Read `upstream_transient` and `safe_to_retry` independently. A temporary upstream failure can leave a mutation unsafe to repeat.
@@ -28,7 +29,14 @@ Use `flea` as an independent interface to Tori.fi. Keep the default TOON output 
 2. Start with the requested product name and appropriate filters. If recall may be poor, run a small set of meaningful aliases, spelling or hyphenation variants, and word-order variants. Broaden category, price, or geography only when useful, and say what changed.
 3. Merge searches by numeric `listing_id`, keeping one entry per listing. Search rank is evidence of relevance, not product identity, and relevance ranks from different queries are not directly comparable.
 4. Separate exact matches from plausible matches. Require the title or public details to confirm the requested model or identifying attributes before calling a match exact. For a generic title or a result matched through hidden text, run `flea item show LISTING_ID` and use its description and attributes when available. Keep uncertain candidates plausible and discard clear noise.
-5. Return concise linked entries, typically title, price, location, and canonical URL. State the ordering, such as relevance within one query, distance, recency, or price. For merged queries, choose a useful deterministic ordering rather than implying one global relevance rank.
+5. Return concise linked entries, typically title, normalized price, location, and canonical URL. Compare or filter fixed prices with `price.amount`, and report free or negotiable results from `price.kind`. State the ordering, such as relevance within one query, distance, recency, or price. For merged queries, choose a useful deterministic ordering rather than implying one global relevance rank.
+
+For JSON automation, select the normalized fields directly:
+
+```sh
+flea --format json listing list \
+  | jq '.data.listings[] | {listing_id, trade_type, price: {kind: .price.kind, amount: .price.amount, currency: .price.currency}}'
+```
 
 ## Category discovery
 

@@ -479,7 +479,10 @@ pub fn execute_preview(
     else {
         return Err(AppError::unexpected("expected a draft preview command"));
     };
-    draft_input::preview(collect_input(values)?, verify_category, taxonomy)
+    draft_input::preview(collect_input(values)?, verify_category, taxonomy).map(|mut value| {
+        crate::domain::commerce::normalize_values_output(&mut value);
+        value
+    })
 }
 
 pub async fn execute<A: AdInputApi>(
@@ -491,7 +494,7 @@ pub async fn execute<A: AdInputApi>(
         return execute_preview(command, None);
     }
     let workflow = DraftWorkflow::new(api, config);
-    match command {
+    let result = match command {
         DraftCommand::Create {
             from_listing: Some(listing_id),
             ..
@@ -577,6 +580,52 @@ pub async fn execute<A: AdInputApi>(
         DraftCommand::Delete { draft_id } => {
             workflow.delete(&draft_id).await.map_err(workflow_error)?;
             Ok(json!({ "draft_id": draft_id, "deleted": true }))
+        }
+    };
+    result.map(|mut value| {
+        crate::domain::commerce::normalize_values_output(&mut value);
+        normalize_observed_listing_output(&mut value);
+        value
+    })
+}
+
+fn normalize_observed_listing_output(value: &mut Value) {
+    let Some(observed) = value
+        .as_object_mut()
+        .and_then(|object| object.get_mut("observed_listing"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    let fields = observed
+        .get("fields")
+        .or_else(|| observed.get("values"))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_else(|| observed.clone());
+    let (trade_type, price) = crate::domain::commerce::normalize_commerce_fields(&fields);
+    observed.insert(
+        "trade_type".to_owned(),
+        serde_json::to_value(trade_type).expect("trade type serializes"),
+    );
+    observed.insert(
+        "price".to_owned(),
+        serde_json::to_value(price).expect("price serializes"),
+    );
+    if let Some(Value::Object(fields)) = observed.get_mut("fields") {
+        for key in [
+            "price",
+            "price_amount",
+            "priceAmount",
+            "currency",
+            "currencyCode",
+            "currency_code",
+            "trade_type",
+            "tradeType",
+            "adViewTypeLabel",
+            "subtitle",
+        ] {
+            fields.remove(key);
         }
     }
 }

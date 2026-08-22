@@ -4,6 +4,7 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Number, Value};
 
+pub use super::commerce::TradeType;
 use super::field::{Field, FieldOption, FieldStatus, FieldType, ValidationIssue, options_by_field};
 
 macro_rules! string_enum_with_unknown {
@@ -56,14 +57,6 @@ string_enum_with_unknown!(ImageState {
     Ready => "ready",
     Failed => "failed",
 });
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TradeType {
-    Sell,
-    GiveAway,
-    Wanted,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

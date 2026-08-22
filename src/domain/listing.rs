@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::commerce::{Price, TradeType};
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Category {
     pub category_id: String,
@@ -77,12 +79,12 @@ pub struct ListingStatistics {
     pub favorites: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ListingSummary {
     pub listing_id: String,
     pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub price: Option<String>,
+    pub trade_type: TradeType,
+    pub price: Price,
     pub state: ListingState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
@@ -108,7 +110,7 @@ pub struct ListingFacet {
     pub total: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ListingCollection {
     pub listings: Vec<ListingSummary>,
     pub total: u64,
@@ -119,6 +121,8 @@ pub struct ListingCollection {
 pub struct ListingDetail {
     pub listing_id: String,
     pub state: ListingState,
+    pub trade_type: TradeType,
+    pub price: Price,
     pub fields: BTreeMap<String, Value>,
     pub statistics: ListingStatistics,
     pub actions: Vec<ListingAction>,
@@ -128,6 +132,7 @@ pub struct ListingDetail {
 pub struct ListingSnapshot {
     pub detail: ListingDetail,
     pub etag: String,
+    pub source_fields: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

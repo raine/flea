@@ -11,11 +11,14 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::{
     api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
-    domain::listing::{
-        Category, CategoryList, CategorySearchContext, CategorySearchResult, ListingAction,
-        ListingActionName, ListingCollection, ListingCopySource, ListingDetail, ListingFacet,
-        ListingMutation, ListingRef, ListingSnapshot, ListingState, ListingStatistics,
-        ListingSummary,
+    domain::{
+        commerce::{Price, TradeType, normalize_commerce_fields},
+        listing::{
+            Category, CategoryList, CategorySearchContext, CategorySearchResult, ListingAction,
+            ListingActionName, ListingCollection, ListingCopySource, ListingDetail, ListingFacet,
+            ListingMutation, ListingRef, ListingSnapshot, ListingState, ListingStatistics,
+            ListingSummary,
+        },
     },
     error::{AppError, ExitClass},
     retry::{FailureKind, OperationMethod, RetryContext, classify},
@@ -550,7 +553,19 @@ impl<'a> Listings<'a> {
             }
             let page_len = page.summaries.len();
             for summary in page.summaries {
-                let normalized = normalize_summary(summary)?;
+                let listing_id = value_id(&summary.id)?;
+                let detail = self.api.listing(&listing_id).map_err(|error| {
+                    listing_error(
+                        error,
+                        Some(&listing_id),
+                        RetryContext::read(OperationMethod::Get),
+                    )
+                })?;
+                if value_id(&detail.id)? != listing_id {
+                    return Err(unexpected("listing detail returned a different ID"));
+                }
+                let (trade_type, price) = commerce_from_fields(&detail.fields);
+                let normalized = normalize_summary(summary, trade_type, price)?;
                 if !seen.insert(normalized.listing_id.clone()) {
                     return Err(unexpected("listing pagination returned a duplicate item"));
                 }
@@ -641,7 +656,13 @@ impl<'a> Listings<'a> {
             for summary in page.summaries {
                 let id = summary_id(&summary.id)?;
                 if id == listing_id {
-                    return normalize_summary(summary).map(Some).map_err(|_| {
+                    return normalize_summary(
+                        summary,
+                        TradeType::Unknown,
+                        Price::unavailable(None),
+                    )
+                    .map(Some)
+                    .map_err(|_| {
                         ListingsApiError::UnexpectedResponse(
                             "matching listing summary was malformed".to_owned(),
                         )
@@ -691,7 +712,7 @@ impl<'a> Listings<'a> {
         validate_changes(&changes)?;
 
         let snapshot = self.snapshot(listing_id)?;
-        let mut complete_fields = snapshot.detail.fields;
+        let mut complete_fields = snapshot.source_fields;
         complete_fields.extend(changes);
         match self
             .api
@@ -754,7 +775,7 @@ impl<'a> Listings<'a> {
 
     pub fn copy_source(&self, listing_id: &str) -> Result<ListingCopySource, AppError> {
         let snapshot = self.snapshot(listing_id)?;
-        let mut fields = snapshot.detail.fields;
+        let mut fields = snapshot.source_fields;
         let mut image_urls = Vec::new();
         for key in ["image", "images", "multi_image"] {
             if let Some(value) = fields.remove(key) {
@@ -1042,13 +1063,21 @@ fn flatten_categories(roots: &[UpstreamCategory]) -> Result<Vec<Category>, Strin
     Ok(output)
 }
 
-fn normalize_summary(raw: UpstreamListingSummary) -> Result<ListingSummary, AppError> {
+fn normalize_summary(
+    raw: UpstreamListingSummary,
+    trade_type: TradeType,
+    mut price: Price,
+) -> Result<ListingSummary, AppError> {
     let listing_id = value_id(&raw.id)?;
+    if price.display.is_none() {
+        price.display = nonempty(raw.data.subtitle.clone());
+    }
     Ok(ListingSummary {
         public_url: public_listing_url(&listing_id, &raw.data.public_url),
         listing_id,
         title: raw.data.title,
-        price: nonempty(raw.data.subtitle),
+        trade_type,
+        price,
         state: normalize_state(&raw.state),
         location: nonempty(raw.data.location),
         image_url: nonempty(raw.data.image),
@@ -1070,10 +1099,14 @@ fn normalize_listing_detail_for_id(
         return Err(unexpected("listing detail returned a different ID"));
     }
     merge_summary_fields(&mut raw.fields, &raw.data, &listing_id);
+    let (trade_type, price) = commerce_from_fields(&raw.fields);
+    let fields = display_fields(&raw.fields);
     Ok(ListingDetail {
         listing_id,
         state: normalize_state(&raw.state),
-        fields: raw.fields,
+        trade_type,
+        price,
+        fields,
         statistics: normalize_statistics(&raw.external_data),
         actions: raw.actions.into_iter().map(normalize_action).collect(),
     })
@@ -1082,9 +1115,6 @@ fn normalize_listing_detail_for_id(
 fn summary_detail(summary: ListingSummary) -> ListingDetail {
     let mut fields = BTreeMap::new();
     fields.insert("title".to_owned(), Value::String(summary.title));
-    if let Some(price) = summary.price {
-        fields.insert("price".to_owned(), Value::String(price));
-    }
     if let Some(location) = summary.location {
         fields.insert("location".to_owned(), Value::String(location));
     }
@@ -1095,6 +1125,8 @@ fn summary_detail(summary: ListingSummary) -> ListingDetail {
     ListingDetail {
         listing_id: summary.listing_id,
         state: summary.state,
+        trade_type: summary.trade_type,
+        price: summary.price,
         fields,
         statistics: summary.statistics,
         actions: summary.actions,
@@ -1108,7 +1140,7 @@ fn merge_summary_fields(
 ) {
     for (key, value) in [
         ("title", data.title.as_str()),
-        ("price", data.subtitle.as_str()),
+        ("price_display", data.subtitle.as_str()),
         ("location", data.location.as_str()),
         ("image", data.image.as_str()),
     ] {
@@ -1165,16 +1197,54 @@ fn normalize_listing(raw: UpstreamListing) -> Result<ListingSnapshot, AppError> 
     if raw.etag.trim().is_empty() {
         return Err(unexpected("listing detail omitted its ETag"));
     }
+    let source_fields = raw.fields;
+    let (trade_type, price) = commerce_from_fields(&source_fields);
     Ok(ListingSnapshot {
         detail: ListingDetail {
             listing_id: value_id(&raw.id)?,
             state: normalize_state(&raw.state),
-            fields: raw.fields,
+            trade_type,
+            price,
+            fields: display_fields(&source_fields),
             statistics: normalize_statistics(&raw.external_data),
             actions: raw.actions.into_iter().map(normalize_action).collect(),
         },
         etag: raw.etag,
+        source_fields,
     })
+}
+
+fn commerce_from_fields(fields: &BTreeMap<String, Value>) -> (TradeType, Price) {
+    let object = fields
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    normalize_commerce_fields(&object)
+}
+
+fn display_fields(fields: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
+    fields
+        .iter()
+        .filter(|(key, _)| {
+            !matches!(
+                key.as_str(),
+                "price"
+                    | "price_amount"
+                    | "priceAmount"
+                    | "currency"
+                    | "currencyCode"
+                    | "currency_code"
+                    | "trade_type"
+                    | "tradeType"
+                    | "adViewTypeLabel"
+                    | "price_display"
+                    | "priceText"
+                    | "price_text"
+                    | "subtitle"
+            )
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 fn normalize_facet(raw: UpstreamFacet) -> ListingFacet {
