@@ -1,8 +1,16 @@
 use std::{fs, io::Read, path::Path};
 
-use crate::{error::AppError, storage::StatePaths};
+use serde_json::{Value, json};
+use url::Url;
+
+use crate::{
+    domain::envelope::NextAction,
+    error::AppError,
+    storage::{StatePaths, atomic_file::write_atomic},
+};
 
 const MAX_CAPTURED_CALLBACK_BYTES: u64 = 8 * 1024;
+const SCHEME: &str = "fi.tori.www.6079834b9b0b741812e7e91f";
 
 pub fn prepare(paths: &StatePaths) -> Result<(), AppError> {
     paths.ensure().map_err(callback_receiver_error)?;
@@ -43,13 +51,28 @@ pub fn open_and_wait(
             .map_err(callback_receiver_error)?
             .as_secs();
         if now >= expires_at_unix {
-            return Err(AppError::authentication(
+            return Err(retry_login_error(
                 "auth.flow_expired",
-                "browser sign-in did not finish before the authentication flow expired",
+                "browser sign-in did not finish before the authentication flow expired; retry flea auth login",
             ));
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
+}
+
+pub fn capture(paths: &StatePaths, callback_url: &str) -> Result<Value, AppError> {
+    let valid_scheme = callback_url.len() <= MAX_CAPTURED_CALLBACK_BYTES as usize
+        && Url::parse(callback_url).is_ok_and(|url| url.scheme() == SCHEME);
+    if !valid_scheme {
+        return Err(callback_capture_error());
+    }
+    paths.ensure().map_err(callback_receiver_error)?;
+    write_atomic(
+        paths.oauth_callback_file().as_path(),
+        callback_url.as_bytes(),
+    )
+    .map_err(|error| callback_capture_error().with_source(error))?;
+    Ok(json!({ "captured": true }))
 }
 
 pub fn read(paths: &StatePaths) -> Result<String, AppError> {
@@ -83,50 +106,148 @@ pub fn read(paths: &StatePaths) -> Result<String, AppError> {
 fn callback_capture_error() -> AppError {
     retry_login_error(
         "auth.callback_not_captured",
-        "finish browser sign-in and allow the browser to open Flea Auth, then run `flea auth login` again",
+        "the browser callback could not be captured; allow the browser to open Flea Auth, then run `flea auth login` again",
     )
-}
-
-fn retry_login_error(code: &'static str, message: &'static str) -> AppError {
-    let mut error = AppError::authentication(code, message);
-    error
-        .next_actions
-        .push(crate::domain::envelope::NextAction {
-            command: "flea auth login".to_owned(),
-        });
-    error
 }
 
 fn callback_receiver_error(error: impl std::error::Error + Send + Sync + 'static) -> AppError {
-    AppError::authentication(
+    retry_login_error(
         "auth.callback_receiver_failed",
-        "the Flea browser callback receiver could not be prepared",
+        "the browser callback receiver could not be prepared; check state directory permissions and install the operating system's desktop URL handler tools, then retry flea auth login",
     )
+    .with_details(json!({
+        "platform": std::env::consts::OS,
+        "required_capability": "custom URL scheme handler"
+    }))
     .with_source(error)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn prepare_platform_receiver(_paths: &StatePaths) -> Result<(), AppError> {
-    Ok(())
+fn browser_launch_error(
+    launcher: &str,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> AppError {
+    retry_login_error(
+        "auth.browser_launch_failed",
+        format!("the default browser could not be opened with {launcher}; verify the launcher is installed and a default browser is configured, then retry flea auth login"),
+    )
+    .with_details(json!({ "launcher": launcher }))
+    .with_source(error)
 }
 
-#[cfg(not(target_os = "macos"))]
+fn retry_login_error(code: &str, message: impl Into<String>) -> AppError {
+    let mut error = AppError::authentication(code, message);
+    error.next_actions.push(NextAction {
+        command: "flea auth login".to_owned(),
+    });
+    error
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_platform_receiver(paths: &StatePaths) -> Result<(), AppError> {
+    const DESKTOP_FILE: &str = "flea-auth-callback.desktop";
+
+    let executable = std::env::current_exe().map_err(callback_receiver_error)?;
+    let data_home = dirs::data_dir().ok_or_else(|| {
+        callback_receiver_error(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "XDG data directory is unavailable",
+        ))
+    })?;
+    install_linux_receiver(paths, &executable, &data_home, DESKTOP_FILE)?;
+
+    let status = std::process::Command::new("xdg-mime")
+        .args([
+            "default",
+            DESKTOP_FILE,
+            &format!("x-scheme-handler/{SCHEME}"),
+        ])
+        .status()
+        .map_err(callback_receiver_error)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(callback_receiver_error(std::io::Error::other(format!(
+            "xdg-mime exited with status {status}"
+        ))))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_linux_receiver(
+    paths: &StatePaths,
+    executable: &Path,
+    data_home: &Path,
+    desktop_file: &str,
+) -> Result<(), AppError> {
+    let desktop_path = |path: &Path| {
+        path.to_str()
+            .filter(|path| {
+                !path.is_empty() && !path.chars().any(|character| character.is_control())
+            })
+            .map(desktop_exec_quote)
+            .ok_or_else(|| {
+                callback_receiver_error(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "a callback receiver path is not valid desktop entry text",
+                ))
+            })
+    };
+    let executable = desktop_path(executable)?;
+    let state_root = desktop_path(&paths.root())?;
+    let contents = format!(
+        "[Desktop Entry]\nType=Application\nName=Flea Auth\nNoDisplay=true\nTerminal=false\nExec={executable} auth callback --state-root {state_root} %u\nMimeType=x-scheme-handler/{SCHEME};\n"
+    );
+    let path = data_home.join("applications").join(desktop_file);
+    write_atomic(&path, contents.as_bytes()).map_err(callback_receiver_error)
+}
+
+#[cfg(target_os = "linux")]
+fn desktop_exec_quote(value: &str) -> String {
+    let escaped = value
+        .chars()
+        .flat_map(|character| match character {
+            '\\' | '"' | '`' | '$' => vec!['\\', character],
+            _ => vec![character],
+        })
+        .collect::<String>();
+    format!("\"{escaped}\"")
+}
+
+#[cfg(target_os = "linux")]
+fn open_browser(login_url: &str) -> Result<(), AppError> {
+    let status = std::process::Command::new("xdg-open")
+        .arg(login_url)
+        .status()
+        .map_err(|error| browser_launch_error("xdg-open", error))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(browser_launch_error(
+            "xdg-open",
+            std::io::Error::other(format!("xdg-open exited with status {status}")),
+        ))
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn prepare_platform_receiver(_paths: &StatePaths) -> Result<(), AppError> {
+    Err(callback_receiver_error(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "this operating system has no callback receiver",
+    )))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn open_browser(_login_url: &str) -> Result<(), AppError> {
     Err(interactive_login_unsupported())
 }
 
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(not(any(target_os = "linux", target_os = "macos")), test))]
 fn interactive_login_unsupported() -> AppError {
-    let mut error = AppError::authentication(
+    retry_login_error(
         "auth.interactive_login_unsupported",
-        "interactive browser login requires macOS; run `flea auth login` on macOS",
-    );
-    error
-        .next_actions
-        .push(crate::domain::envelope::NextAction {
-            command: "flea auth login".to_owned(),
-        });
-    error
+        "interactive browser login requires Linux or macOS; run `flea auth login` on a supported platform",
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -134,13 +255,14 @@ fn open_browser(login_url: &str) -> Result<(), AppError> {
     let status = std::process::Command::new("/usr/bin/open")
         .arg(login_url)
         .status()
-        .map_err(callback_receiver_error)?;
+        .map_err(|error| browser_launch_error("/usr/bin/open", error))?;
     if status.success() {
         Ok(())
     } else {
-        Err(callback_receiver_error(std::io::Error::other(
-            "the default browser could not be opened",
-        )))
+        Err(browser_launch_error(
+            "/usr/bin/open",
+            std::io::Error::other(format!("open exited with status {status}")),
+        ))
     }
 }
 
@@ -148,7 +270,6 @@ fn open_browser(login_url: &str) -> Result<(), AppError> {
 fn prepare_platform_receiver(paths: &StatePaths) -> Result<(), AppError> {
     use std::process::Command;
 
-    const SCHEME: &str = "fi.tori.www.6079834b9b0b741812e7e91f";
     const BUNDLE_ID: &str = "fi.raine.flea.auth-callback";
 
     let app = paths.auth_callback_app();
@@ -308,11 +429,13 @@ fn set_default_url_handler(scheme: &str, bundle_id: &str) -> Result<(), AppError
 
 #[cfg(test)]
 mod tests {
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
     fn callback_capture_recommends_public_login() {
-        let temporary = tempfile::tempdir().unwrap();
+        let temporary = tempdir().unwrap();
         let paths = StatePaths::from_root(temporary.path().join("state"));
         let error = read(&paths).unwrap_err();
 
@@ -325,8 +448,75 @@ mod tests {
     fn unsupported_platform_error_identifies_public_login() {
         let error = interactive_login_unsupported();
 
-        assert!(error.message.contains("`flea auth login` on macOS"));
+        assert!(error.message.contains("`flea auth login`"));
         assert_eq!(error.next_actions[0].command, "flea auth login");
+    }
+
+    #[test]
+    fn captures_callback_in_a_private_bounded_file() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let callback = format!("{SCHEME}://login?code=code&state=state");
+
+        assert_eq!(
+            capture(&paths, &callback).unwrap(),
+            json!({ "captured": true })
+        );
+        assert_eq!(read(&paths).unwrap(), callback);
+    }
+
+    #[test]
+    fn rejects_callbacks_for_other_schemes() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+
+        let error = capture(&paths, "https://example.com/callback").unwrap_err();
+
+        assert_eq!(error.code, "auth.callback_not_captured");
+        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert!(!paths.oauth_callback_file().exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_receiver_registers_the_custom_scheme_with_the_current_binary() {
+        let temporary = tempdir().unwrap();
+        let executable = Path::new("/opt/Flea $Tools/flea");
+
+        let paths = StatePaths::from_root("/home/example/.local/state/flea");
+        install_linux_receiver(
+            &paths,
+            executable,
+            temporary.path(),
+            "flea-auth-callback.desktop",
+        )
+        .unwrap();
+
+        let desktop = fs::read_to_string(
+            temporary
+                .path()
+                .join("applications/flea-auth-callback.desktop"),
+        )
+        .unwrap();
+        assert!(desktop.contains("Type=Application"));
+        assert!(desktop.contains(&format!("MimeType=x-scheme-handler/{SCHEME};")));
+        assert!(desktop.contains(
+            "Exec=\"/opt/Flea \\$Tools/flea\" auth callback --state-root \"/home/example/.local/state/flea\" %u"
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_browser_failures_are_structured_and_actionable() {
+        let error = browser_launch_error(
+            "xdg-open",
+            std::io::Error::new(std::io::ErrorKind::NotFound, "missing"),
+        );
+
+        assert_eq!(error.code, "auth.browser_launch_failed");
+        assert_eq!(error.details.unwrap()["launcher"], "xdg-open");
+        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert!(error.message.contains("default browser"));
     }
 
     #[cfg(target_os = "macos")]
@@ -336,5 +526,18 @@ mod tests {
         assert!(script.contains("quoted form of theURL"));
         assert!(script.contains("quoted form of \"/tmp/path with spaces/callback\""));
         assert!(script.contains("chmod 600"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_browser_failures_are_structured_and_actionable() {
+        let error = browser_launch_error(
+            "/usr/bin/open",
+            std::io::Error::new(std::io::ErrorKind::Other, "failed"),
+        );
+
+        assert_eq!(error.code, "auth.browser_launch_failed");
+        assert_eq!(error.details.unwrap()["launcher"], "/usr/bin/open");
+        assert_eq!(error.next_actions[0].command, "flea auth login");
     }
 }

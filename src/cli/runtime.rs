@@ -80,8 +80,15 @@ impl CommandRuntime for ProductionRuntime {
 }
 
 fn execute_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
+    let command = match args.command {
+        super::auth::AuthCommand::Callback {
+            state_root,
+            callback_url,
+        } => return auth_callback::capture(&StatePaths::from_root(state_root), &callback_url),
+        command => command,
+    };
     let paths = state_paths()?;
-    match args.command {
+    match command {
         super::auth::AuthCommand::Login => execute_interactive_login(paths),
         super::auth::AuthCommand::Status => auth_status(
             paths,
@@ -98,19 +105,26 @@ fn execute_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
 
 fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError> {
     auth_callback::prepare(&paths)?;
-    let store = FileAuthStore::new(paths.clone());
-    let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
-    let started = handler.start(unix_time_now()?)?;
-    let flow_id = auth_value(&started, "flow_id")?.to_owned();
-    let login_url = auth_value(&started, "login_url")?;
-    let expires_at_unix = started
-        .get("expires_at_unix")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| AppError::unexpected("authentication start returned an invalid expiry"))?;
-    let callback = auth_callback::open_and_wait(&paths, login_url, expires_at_unix)?;
-    let result = block_on(handler.complete(&flow_id, &callback, unix_time_now()?));
-    let _ = auth_callback::clear(&paths);
-    result
+    let result = (|| {
+        let store = FileAuthStore::new(paths.clone());
+        let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
+        let started = handler.start(unix_time_now()?)?;
+        let flow_id = auth_value(&started, "flow_id")?.to_owned();
+        let login_url = auth_value(&started, "login_url")?;
+        let expires_at_unix = started
+            .get("expires_at_unix")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                AppError::unexpected("authentication start returned an invalid expiry")
+            })?;
+        let callback = auth_callback::open_and_wait(&paths, login_url, expires_at_unix)?;
+        block_on(handler.complete(&flow_id, &callback, unix_time_now()?))
+    })();
+    let cleared = auth_callback::clear(&paths);
+    match result {
+        Ok(value) => cleared.map(|()| value),
+        Err(error) => Err(error),
+    }
 }
 
 fn auth_value<'a>(value: &'a Value, key: &str) -> Result<&'a str, AppError> {
