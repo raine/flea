@@ -1,0 +1,100 @@
+{
+  "summaries": [
+    {
+      "id": "1050",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 50",
+        "subtitle": "60 €",
+        "image": "https://img.example/50.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "150"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1051",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 51",
+        "subtitle": "61 €",
+        "image": "https://img.example/51.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "151"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    }
+  ],
+  "total": 52,
+  "facets": [
+    {
+      "label": "Kaikki",
+      "name": "ALL",
+      "total": 52
+    },
+    {
+      "label": "Aktiiviset",
+      "name": "ACTIVE",
+      "total": 51
+    },
+    {
+      "label": "Myydyt",
+      "name": "DISPOSED",
+      "total": 1
+    }
+  ]
+}

@@ -2,7 +2,10 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::error::AppError;
+use crate::{
+    api::listings::{Listings, ListingsApi},
+    error::AppError,
+};
 
 #[derive(Debug, Args)]
 pub struct CategoryArgs {
@@ -26,4 +29,13 @@ pub fn dispatch(command: CategoryArgs) -> Result<Value, AppError> {
     let details = serde_json::to_value(command.command)
         .map_err(|error| AppError::output(error.to_string()))?;
     Err(AppError::protocol_unavailable("category", details))
+}
+
+pub fn dispatch_with_api(command: CategoryArgs, api: &dyn ListingsApi) -> Result<Value, AppError> {
+    let listings = Listings::new(api);
+    let result = match command.command {
+        CategoryCommand::Search { query } => listings.search_categories(&query)?,
+        CategoryCommand::List { parent } => listings.categories(parent.as_deref())?,
+    };
+    serde_json::to_value(result).map_err(|error| AppError::output(error.to_string()))
 }

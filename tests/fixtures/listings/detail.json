@@ -1,0 +1,28 @@
+{
+  "id": "36443414",
+  "etag": "listing-v7",
+  "state": { "label": "Aktiivinen", "type": "ACTIVE", "display": "active" },
+  "fields": {
+    "category": "111",
+    "title": "Vintage chair",
+    "description": "Solid birch",
+    "trade_type": "sell",
+    "price": 45,
+    "postal_code": "00100",
+    "condition": "3",
+    "material": "10",
+    "delivery": ["pickup"],
+    "images": [
+      { "url": "https://img.example/full-1.jpg", "id": "image-1" },
+      "https://img.example/full-2.jpg"
+    ]
+  },
+  "actions": [
+    { "label": "Muokkaa", "method": "put", "name": "EDIT" },
+    { "label": "Poista", "method": "delete", "name": "DELETE" }
+  ],
+  "externalData": {
+    "clicks": { "label": "Näytöt", "value": "1 234" },
+    "favorites": { "label": "Suosikit", "value": "17" }
+  }
+}

@@ -1,8 +1,19 @@
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::{self, Read},
+    path::Path,
+};
+
 use clap::{Args, Subcommand};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use crate::{cli::draft::ListingInputArgs, error::AppError};
+use crate::{
+    api::listings::{Listings, ListingsApi},
+    cli::draft::{ListingInputArgs, TradeType},
+    error::AppError,
+};
 
 #[derive(Debug, Args)]
 pub struct ListingArgs {
@@ -10,6 +21,7 @@ pub struct ListingArgs {
     pub command: ListingCommand,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Serialize, Subcommand)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum ListingCommand {
@@ -34,4 +46,143 @@ pub fn dispatch(command: ListingArgs) -> Result<Value, AppError> {
     let details = serde_json::to_value(command.command)
         .map_err(|error| AppError::output(error.to_string()))?;
     Err(AppError::protocol_unavailable("listing", details))
+}
+
+pub fn dispatch_with_api(command: ListingArgs, api: &dyn ListingsApi) -> Result<Value, AppError> {
+    let listings = Listings::new(api);
+    let value = match command.command {
+        ListingCommand::List => serde_json::to_value(listings.list()?),
+        ListingCommand::Show { listing_id } => serde_json::to_value(listings.show(&listing_id)?),
+        ListingCommand::Update { listing_id, values } => {
+            let changes = listing_changes(values)?;
+            serde_json::to_value(listings.update(&listing_id, changes)?)
+        }
+        ListingCommand::Dispose { listing_id } => {
+            serde_json::to_value(listings.dispose(&listing_id)?)
+        }
+        ListingCommand::Delete { listing_id } => {
+            let deleted = listings.delete(&listing_id)?;
+            Ok(json!({ "listing_id": deleted.listing_id, "deleted": true }))
+        }
+    };
+    value.map_err(|error| AppError::output(error.to_string()))
+}
+
+pub fn listing_changes(values: ListingInputArgs) -> Result<BTreeMap<String, Value>, AppError> {
+    let mut changes = match values.input.as_deref() {
+        Some(path) => read_input(path)?,
+        None => BTreeMap::new(),
+    };
+
+    insert_flag(&mut changes, "category", values.category.map(Value::String))?;
+    insert_flag(&mut changes, "title", values.title.map(Value::String))?;
+
+    let description = match (values.description, values.description_file) {
+        (Some(description), None) => Some(description),
+        (None, Some(path)) => Some(fs::read_to_string(&path).map_err(|error| {
+            AppError::usage(format!(
+                "failed to read description file {}: {error}",
+                path.display()
+            ))
+        })?),
+        (None, None) => None,
+        (Some(_), Some(_)) => {
+            return Err(AppError::usage(
+                "--description and --description-file cannot be combined",
+            ));
+        }
+    };
+    insert_flag(&mut changes, "description", description.map(Value::String))?;
+
+    let price = values.price.map(|price| parse_price(&price)).transpose()?;
+    insert_flag(&mut changes, "price", price)?;
+    let trade_type = values.trade_type.map(|trade_type| {
+        Value::String(
+            match trade_type {
+                TradeType::Sell => "sell",
+                TradeType::GiveAway => "give_away",
+                TradeType::Wanted => "wanted",
+            }
+            .to_owned(),
+        )
+    });
+    insert_flag(&mut changes, "trade_type", trade_type)?;
+    insert_flag(
+        &mut changes,
+        "postal_code",
+        values.postal_code.map(Value::String),
+    )?;
+    insert_flag(
+        &mut changes,
+        "delivery",
+        (!values.delivery.is_empty())
+            .then(|| Value::Array(values.delivery.into_iter().map(Value::String).collect())),
+    )?;
+    insert_flag(
+        &mut changes,
+        "image",
+        (!values.image.is_empty()).then(|| {
+            Value::Array(
+                values
+                    .image
+                    .into_iter()
+                    .map(|path| Value::String(path.to_string_lossy().into_owned()))
+                    .collect(),
+            )
+        }),
+    )?;
+
+    Ok(changes)
+}
+
+fn read_input(path: &Path) -> Result<BTreeMap<String, Value>, AppError> {
+    let mut document = String::new();
+    if path == Path::new("-") {
+        io::stdin()
+            .read_to_string(&mut document)
+            .map_err(|error| AppError::usage(format!("failed to read JSON from stdin: {error}")))?;
+    } else {
+        document = fs::read_to_string(path).map_err(|error| {
+            AppError::usage(format!(
+                "failed to read input file {}: {error}",
+                path.display()
+            ))
+        })?;
+    }
+
+    let value: Value = serde_json::from_str(&document)
+        .map_err(|error| AppError::usage(format!("input must contain valid JSON: {error}")))?;
+    let Value::Object(object) = value else {
+        return Err(AppError::usage("input JSON must be an object"));
+    };
+    Ok(object.into_iter().collect())
+}
+
+fn insert_flag(
+    changes: &mut BTreeMap<String, Value>,
+    key: &str,
+    value: Option<Value>,
+) -> Result<(), AppError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if changes.contains_key(key) {
+        return Err(AppError::usage(format!(
+            "field `{key}` appears in both flags and JSON input"
+        )));
+    }
+    changes.insert(key.to_owned(), value);
+    Ok(())
+}
+
+fn parse_price(input: &str) -> Result<Value, AppError> {
+    let value: Value = serde_json::from_str(input)
+        .map_err(|_| AppError::usage("--price must be a non-negative number"))?;
+    if value
+        .as_f64()
+        .is_none_or(|price| !price.is_finite() || price < 0.0)
+    {
+        return Err(AppError::usage("--price must be a non-negative number"));
+    }
+    Ok(value)
 }

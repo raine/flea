@@ -1,0 +1,1972 @@
+{
+  "summaries": [
+    {
+      "id": "1000",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 0",
+        "subtitle": "10 €",
+        "image": "https://img.example/0.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "100"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1001",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 1",
+        "subtitle": "11 €",
+        "image": "https://img.example/1.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "101"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1002",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 2",
+        "subtitle": "12 €",
+        "image": "https://img.example/2.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "102"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1003",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 3",
+        "subtitle": "13 €",
+        "image": "https://img.example/3.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "103"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1004",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 4",
+        "subtitle": "14 €",
+        "image": "https://img.example/4.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "104"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    },
+    {
+      "id": "1005",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 5",
+        "subtitle": "15 €",
+        "image": "https://img.example/5.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "105"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1006",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 6",
+        "subtitle": "16 €",
+        "image": "https://img.example/6.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "106"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1007",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 7",
+        "subtitle": "17 €",
+        "image": "https://img.example/7.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "107"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1008",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 8",
+        "subtitle": "18 €",
+        "image": "https://img.example/8.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "108"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1009",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 9",
+        "subtitle": "19 €",
+        "image": "https://img.example/9.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "109"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    },
+    {
+      "id": "1010",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 10",
+        "subtitle": "20 €",
+        "image": "https://img.example/10.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "110"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1011",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 11",
+        "subtitle": "21 €",
+        "image": "https://img.example/11.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "111"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1012",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 12",
+        "subtitle": "22 €",
+        "image": "https://img.example/12.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "112"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1013",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 13",
+        "subtitle": "23 €",
+        "image": "https://img.example/13.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "113"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1014",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 14",
+        "subtitle": "24 €",
+        "image": "https://img.example/14.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "114"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    },
+    {
+      "id": "1015",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 15",
+        "subtitle": "25 €",
+        "image": "https://img.example/15.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "115"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1016",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 16",
+        "subtitle": "26 €",
+        "image": "https://img.example/16.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "116"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1017",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 17",
+        "subtitle": "27 €",
+        "image": "https://img.example/17.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "117"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1018",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 18",
+        "subtitle": "28 €",
+        "image": "https://img.example/18.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "118"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1019",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 19",
+        "subtitle": "29 €",
+        "image": "https://img.example/19.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "119"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    },
+    {
+      "id": "1020",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 20",
+        "subtitle": "30 €",
+        "image": "https://img.example/20.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "120"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1021",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 21",
+        "subtitle": "31 €",
+        "image": "https://img.example/21.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "121"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1022",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 22",
+        "subtitle": "32 €",
+        "image": "https://img.example/22.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "122"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1023",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 23",
+        "subtitle": "33 €",
+        "image": "https://img.example/23.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "123"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1024",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 24",
+        "subtitle": "34 €",
+        "image": "https://img.example/24.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "124"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    },
+    {
+      "id": "1025",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 25",
+        "subtitle": "35 €",
+        "image": "https://img.example/25.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "125"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1026",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 26",
+        "subtitle": "36 €",
+        "image": "https://img.example/26.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "126"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1027",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 27",
+        "subtitle": "37 €",
+        "image": "https://img.example/27.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "127"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1028",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 28",
+        "subtitle": "38 €",
+        "image": "https://img.example/28.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "128"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1029",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 29",
+        "subtitle": "39 €",
+        "image": "https://img.example/29.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "129"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    },
+    {
+      "id": "1030",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 30",
+        "subtitle": "40 €",
+        "image": "https://img.example/30.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "130"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1031",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 31",
+        "subtitle": "41 €",
+        "image": "https://img.example/31.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "131"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1032",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 32",
+        "subtitle": "42 €",
+        "image": "https://img.example/32.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "132"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1033",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 33",
+        "subtitle": "43 €",
+        "image": "https://img.example/33.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "133"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1034",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 34",
+        "subtitle": "44 €",
+        "image": "https://img.example/34.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "134"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    },
+    {
+      "id": "1035",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 35",
+        "subtitle": "45 €",
+        "image": "https://img.example/35.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "135"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1036",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 36",
+        "subtitle": "46 €",
+        "image": "https://img.example/36.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "136"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1037",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 37",
+        "subtitle": "47 €",
+        "image": "https://img.example/37.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "137"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1038",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 38",
+        "subtitle": "48 €",
+        "image": "https://img.example/38.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "138"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1039",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 39",
+        "subtitle": "49 €",
+        "image": "https://img.example/39.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "139"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    },
+    {
+      "id": "1040",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 40",
+        "subtitle": "50 €",
+        "image": "https://img.example/40.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "140"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1041",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 41",
+        "subtitle": "51 €",
+        "image": "https://img.example/41.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "141"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1042",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 42",
+        "subtitle": "52 €",
+        "image": "https://img.example/42.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "142"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1043",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 43",
+        "subtitle": "53 €",
+        "image": "https://img.example/43.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "143"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1044",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 44",
+        "subtitle": "54 €",
+        "image": "https://img.example/44.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "144"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    },
+    {
+      "id": "1045",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 45",
+        "subtitle": "55 €",
+        "image": "https://img.example/45.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "145"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "0"
+        }
+      }
+    },
+    {
+      "id": "1046",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 46",
+        "subtitle": "56 €",
+        "image": "https://img.example/46.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "146"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "1"
+        }
+      }
+    },
+    {
+      "id": "1047",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 47",
+        "subtitle": "57 €",
+        "image": "https://img.example/47.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "147"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "2"
+        }
+      }
+    },
+    {
+      "id": "1048",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 48",
+        "subtitle": "58 €",
+        "image": "https://img.example/48.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "148"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "3"
+        }
+      }
+    },
+    {
+      "id": "1049",
+      "created": "2026-08-01T10:00:00Z",
+      "updated": "2026-08-20T10:00:00Z",
+      "expires": "2026-09-20T10:00:00Z",
+      "daysUntilExpires": 29,
+      "state": {
+        "label": "Aktiivinen",
+        "type": "ACTIVE",
+        "display": "active"
+      },
+      "actions": [
+        {
+          "label": "Muokkaa",
+          "method": "put",
+          "name": "EDIT"
+        },
+        {
+          "label": "Merkitse myydyksi",
+          "method": "put",
+          "name": "DISPOSE"
+        }
+      ],
+      "data": {
+        "title": "Chair 49",
+        "subtitle": "59 €",
+        "image": "https://img.example/49.jpg"
+      },
+      "externalData": {
+        "clicks": {
+          "label": "Näytöt",
+          "value": "149"
+        },
+        "favorites": {
+          "label": "Suosikit",
+          "value": "4"
+        }
+      }
+    }
+  ],
+  "total": 52,
+  "facets": [
+    {
+      "label": "Kaikki",
+      "name": "ALL",
+      "total": 52
+    },
+    {
+      "label": "Aktiiviset",
+      "name": "ACTIVE",
+      "total": 51
+    },
+    {
+      "label": "Myydyt",
+      "name": "DISPOSED",
+      "total": 1
+    }
+  ]
+}

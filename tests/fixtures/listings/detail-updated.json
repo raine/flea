@@ -1,0 +1,19 @@
+{
+  "id": "36443414",
+  "etag": "listing-v8",
+  "state": { "type": "ACTIVE" },
+  "fields": {
+    "category": "111",
+    "title": "Vintage chair",
+    "description": "Solid birch",
+    "trade_type": "sell",
+    "price": 50,
+    "postal_code": "00100",
+    "condition": "3",
+    "material": "10",
+    "delivery": ["pickup"],
+    "images": ["https://img.example/full-1.jpg"]
+  },
+  "actions": [],
+  "externalData": {}
+}

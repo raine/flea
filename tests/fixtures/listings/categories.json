@@ -1,0 +1,18 @@
+[
+  {
+    "id": "100",
+    "label": "Koti ja sisustus",
+    "selectable": false,
+    "children": [
+      {
+        "id": "110",
+        "label": "Huonekalut",
+        "selectable": false,
+        "children": [
+          { "id": "111", "label": "Työtuolit", "selectable": true }
+        ]
+      }
+    ]
+  },
+  { "id": "200", "label": "Elektroniikka", "selectable": true }
+]
