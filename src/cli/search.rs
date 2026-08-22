@@ -84,7 +84,7 @@ impl Seller {
 
 #[derive(Debug, Args)]
 #[command(
-    after_long_help = "Helsinki-area example:\n  tori search 'tuoli' --area Helsinki,Espoo,Vantaa"
+    after_long_help = "Helsinki-area example:\n  flea search 'tuoli' --area Helsinki,Espoo,Vantaa"
 )]
 pub struct SearchArgs {
     /// Free-text marketplace query. May be omitted to browse filtered listings.
@@ -502,7 +502,7 @@ fn next_page_command(
     resolved_area: Option<&crate::domain::search::SearchAreaContext>,
     explain: Option<usize>,
 ) -> String {
-    let mut parts = vec!["tori search".to_owned()];
+    let mut parts = vec!["flea search".to_owned()];
     if !request.query.is_empty() {
         parts.push(shell_quote(&request.query));
     }

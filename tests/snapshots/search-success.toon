@@ -27,4 +27,4 @@ data:
     has_next: true
     next_page: 2
 next_actions[1]{command}:
-  "tori search 'tuoli' --page 2 --limit 20"
+  "flea search 'tuoli' --page 2 --limit 20"

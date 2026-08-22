@@ -6,6 +6,9 @@ use std::{env, ffi::OsString, io, path::PathBuf};
 
 use atomic_file::secure_directory;
 
+const STATE_DIR: &str = "flea";
+const LEGACY_STATE_DIR: &str = "tori-cli";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatePaths {
     root: PathBuf,
@@ -17,8 +20,13 @@ impl StatePaths {
     }
 
     pub fn from_state_home(state_home: impl Into<PathBuf>) -> Self {
-        Self {
-            root: state_home.into().join("tori-cli"),
+        let state_home = state_home.into();
+        let root = state_home.join(STATE_DIR);
+        let legacy_root = state_home.join(LEGACY_STATE_DIR);
+        if path_exists(&root) || !is_directory(&legacy_root) {
+            Self { root }
+        } else {
+            Self { root: legacy_root }
         }
     }
 
@@ -58,7 +66,7 @@ impl StatePaths {
     }
 
     pub fn auth_callback_app(&self) -> PathBuf {
-        self.auth_dir().join("Tori CLI Auth.app")
+        self.auth_dir().join("Flea Auth.app")
     }
 
     pub fn logs_dir(&self) -> PathBuf {
@@ -86,6 +94,14 @@ impl StatePaths {
     }
 }
 
+fn path_exists(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok()
+}
+
+fn is_directory(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -104,10 +120,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            paths.root(),
-            std::path::Path::new("/var/lib/example/tori-cli")
-        );
+        assert_eq!(paths.root(), std::path::Path::new("/var/lib/example/flea"));
     }
 
     #[test]
@@ -120,14 +133,37 @@ mod tests {
 
         assert_eq!(
             paths.root(),
-            std::path::Path::new("/home/example/.local/state/tori-cli")
+            std::path::Path::new("/home/example/.local/state/flea")
         );
+    }
+
+    #[test]
+    fn uses_existing_legacy_state_when_flea_state_is_absent() {
+        let temporary = tempdir().unwrap();
+        let legacy = temporary.path().join("tori-cli");
+        std::fs::create_dir(&legacy).unwrap();
+
+        let paths = StatePaths::from_state_home(temporary.path());
+
+        assert_eq!(paths.root(), legacy);
+    }
+
+    #[test]
+    fn prefers_flea_state_when_both_state_directories_exist() {
+        let temporary = tempdir().unwrap();
+        let flea = temporary.path().join("flea");
+        std::fs::create_dir(&flea).unwrap();
+        std::fs::create_dir(temporary.path().join("tori-cli")).unwrap();
+
+        let paths = StatePaths::from_state_home(temporary.path());
+
+        assert_eq!(paths.root(), flea);
     }
 
     #[test]
     fn creates_the_state_tree_with_private_permissions() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("tori-cli"));
+        let paths = StatePaths::from_root(temporary.path().join("flea"));
 
         paths.ensure().unwrap();
 

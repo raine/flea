@@ -19,8 +19,8 @@ use crate::{
     storage::StatePaths,
 };
 
-const LOG_FILE: &str = "tori-cli.jsonl";
-const LOG_PREFIX: &str = "tori-cli";
+const LOG_FILE: &str = "flea.jsonl";
+const LOG_PREFIX: &str = "flea";
 const LOG_SUFFIX: &str = ".jsonl";
 const REDACTED: &str = "[REDACTED]";
 pub const UPSTREAM_BODY_LIMIT: usize = 4 * 1024;
@@ -168,7 +168,7 @@ fn initialize_with_context(
         let file = open_private_log(&context.log_path)?;
         let writer = RedactingMakeWriter::new(file);
         let filter =
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("tori=info"));
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("flea=info"));
         let subscriber = tracing_subscriber::registry().with(
             tracing_subscriber::fmt::layer()
                 .json()
@@ -335,7 +335,7 @@ fn is_log_file_name(name: &str) -> bool {
         return true;
     }
     let Some(stem) = name
-        .strip_prefix("tori-cli.")
+        .strip_prefix("flea.")
         .and_then(|name| name.strip_suffix(LOG_SUFFIX))
     else {
         return false;
@@ -733,11 +733,11 @@ mod tests {
             "cookie": "secret-cookie-value",
             "hmac_signature": "secret-signature-value",
             "oauth_code": "secret-code-value",
-            "callback_url": "tori://secret-callback-value",
+            "callback_url": "flea://secret-callback-value",
             "login_url": "https://login.vend.fi/oauth/authorize?state=secret-login-state",
             "code_verifier": "secret-verifier-value",
             "raw_image": "secret-image-value",
-            "message": "Bearer secret-text-auth access_token=secret-text-token tori://oauth/callback?code=secret-callback-code data:image/png;base64,secret-image-data"
+            "message": "Bearer secret-text-auth access_token=secret-text-token flea://oauth/callback?code=secret-callback-code data:image/png;base64,secret-image-data"
         });
         redact_value(&mut value);
         let encoded = value.to_string();
@@ -825,8 +825,8 @@ mod tests {
         fs::create_dir_all(&logs_dir).expect("logs directory");
         fs::write(auth_dir.join("credentials.json"), "keep").expect("credential fixture");
         fs::write(logs_dir.join("unrelated.txt"), "keep").expect("unrelated fixture");
-        fs::write(logs_dir.join("tori-cli.1.old.jsonl"), "keep").expect("lookalike fixture");
-        let archive = logs_dir.join("tori-cli.1.00000000-0000-4000-8000-000000000000.jsonl");
+        fs::write(logs_dir.join("flea.1.old.jsonl"), "keep").expect("lookalike fixture");
+        let archive = logs_dir.join("flea.1.00000000-0000-4000-8000-000000000000.jsonl");
         fs::write(&archive, vec![0; 32]).expect("log fixture");
 
         let policy = RetentionPolicy {
@@ -839,7 +839,7 @@ mod tests {
 
         assert!(auth_dir.join("credentials.json").exists());
         assert!(logs_dir.join("unrelated.txt").exists());
-        assert!(logs_dir.join("tori-cli.1.old.jsonl").exists());
+        assert!(logs_dir.join("flea.1.old.jsonl").exists());
         assert!(!archive.exists());
     }
 
@@ -874,16 +874,16 @@ mod tests {
     #[test]
     fn command_name_excludes_values_and_callback_urls() {
         let args = [
-            OsString::from("tori"),
+            OsString::from("flea"),
             OsString::from("auth"),
             OsString::from("complete"),
             OsString::from("flow-secret"),
-            OsString::from("tori://oauth/callback?code=secret"),
+            OsString::from("flea://oauth/callback?code=secret"),
         ];
         assert_eq!(command_name(&args), "auth complete");
 
         let item = [
-            OsString::from("tori"),
+            OsString::from("flea"),
             OsString::from("item"),
             OsString::from("show"),
             OsString::from("42346404"),
@@ -894,7 +894,7 @@ mod tests {
     #[test]
     fn search_command_name_excludes_query_and_coordinates() {
         let args = [
-            OsString::from("tori"),
+            OsString::from("flea"),
             OsString::from("search"),
             OsString::from("private query"),
             OsString::from("--latitude"),

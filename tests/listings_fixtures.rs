@@ -4,9 +4,7 @@ use std::{
 };
 
 use clap::Parser;
-use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
-use tori::{
+use flea::{
     api::listings::{
         LISTING_PAGE_SIZE, Listings, ListingsApi, ListingsApiError, UpstreamCategory,
         UpstreamListing, UpstreamListingPage,
@@ -17,6 +15,8 @@ use tori::{
     },
     domain::listing::{ListingActionName, ListingState},
 };
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 
 type UpdateCall = (String, String, BTreeMap<String, Value>);
 
@@ -128,7 +128,7 @@ fn discovers_category_roots_children_and_search_paths() {
 
 #[test]
 fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
-    let taxonomy: tori::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
+    let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
         include_str!("fixtures/listings/category-taxonomy-live.json"),
     )
     .unwrap();
@@ -293,7 +293,7 @@ fn json_and_flag_duplicates_are_a_structured_usage_error() {
     let input = directory.path().join("listing.json");
     std::fs::write(&input, r#"{"title":"JSON title","condition":"3"}"#).unwrap();
     let cli = Cli::parse_from([
-        "tori",
+        "flea",
         "listing",
         "update",
         "36443414",
@@ -331,7 +331,7 @@ fn ambiguous_mutation_failures_include_listing_recovery_context() {
     assert_eq!(error.exit_class.code(), 50);
     assert_eq!(error.partial.as_ref().unwrap()["listing_id"], "36443414");
     assert_eq!(error.partial.as_ref().unwrap()["operation"], "update");
-    assert_eq!(error.next_actions[0].command, "tori listing show 36443414");
+    assert_eq!(error.next_actions[0].command, "flea listing show 36443414");
     assert!(!error.message.contains("upstream-secret"));
 }
 

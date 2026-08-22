@@ -5,9 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use reqwest::{StatusCode, header::HeaderMap};
-use serde_json::{Value, json};
-use tori::{
+use flea::{
     Presentation,
     api::{
         adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
@@ -28,6 +26,8 @@ use tori::{
     error::AppError,
     run_with_runtime,
 };
+use reqwest::{StatusCode, header::HeaderMap};
+use serde_json::{Value, json};
 
 #[derive(Clone, Default)]
 struct MockClient {
@@ -68,7 +68,7 @@ impl CommandRuntime for TestRuntime {
     fn execute(&self, command: Command) -> Result<Value, AppError> {
         match command {
             Command::Auth(args) => match args.command {
-                tori::cli::auth::AuthCommand::Login => {
+                flea::cli::auth::AuthCommand::Login => {
                     Ok(json!({ "authenticated": true, "user_id": "user-1" }))
                 }
                 command => block_on(
@@ -101,7 +101,7 @@ impl CommandRuntime for TestRuntime {
                 let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
                 location::dispatch_with_api(args, &api)
             }
-            Command::Skill(args) => tori::cli::skill::dispatch(args),
+            Command::Skill(args) => flea::cli::skill::dispatch(args),
         }
     }
 }
@@ -195,7 +195,7 @@ fn auth_login_flows_from_parser_to_one_envelope() {
         &TestRuntime {
             client: MockClient::default(),
         },
-        ["tori", "--format", "json", "auth", "login"],
+        ["flea", "--format", "json", "auth", "login"],
     );
 
     assert_eq!(value["ok"], true);
@@ -211,7 +211,7 @@ fn draft_create_flows_through_the_http_adapter() {
         &TestRuntime {
             client: client.clone(),
         },
-        ["tori", "--format", "json", "draft", "create"],
+        ["flea", "--format", "json", "draft", "create"],
     );
 
     assert_eq!(value["data"]["draft"]["draft_id"], "draft-1");
@@ -222,11 +222,11 @@ fn draft_create_flows_through_the_http_adapter() {
         "/adinput/ad/withModel/recommerce"
     );
     assert_eq!(requests[0].service, "APPS-ADINPUT");
-    assert_eq!(requests[0].host, tori::api::client::ApiHost::Adinput);
+    assert_eq!(requests[0].host, flea::api::client::ApiHost::Adinput);
     assert!(requests[0].content_length_zero);
     assert!(matches!(
         &requests[0].body,
-        tori::api::client::RequestBody::Bytes(bytes) if bytes.is_empty()
+        flea::api::client::RequestBody::Bytes(bytes) if bytes.is_empty()
     ));
 }
 
@@ -241,7 +241,7 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
     ]);
     let result = run_with_runtime(
         [
-            "tori",
+            "flea",
             "--format",
             "json",
             "draft",
@@ -259,7 +259,7 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
     assert_eq!(value["partial"]["draft_id"], "draft-1");
     assert_eq!(
         value["next_actions"][0]["command"],
-        "tori draft show draft-1"
+        "flea draft show draft-1"
     );
 }
 
@@ -274,7 +274,7 @@ fn uncertain_creation_is_a_non_retryable_partial_error_with_safe_metadata() {
     }]);
 
     let result = run_with_runtime(
-        ["tori", "--format", "json", "draft", "create"],
+        ["flea", "--format", "json", "draft", "create"],
         &TestRuntime { client },
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
@@ -309,7 +309,7 @@ fn image_add_flows_through_upload_and_ordering() {
             client: client.clone(),
         },
         vec![
-            "tori".to_owned(),
+            "flea".to_owned(),
             "--format".to_owned(),
             "json".to_owned(),
             "draft".to_owned(),
@@ -363,7 +363,7 @@ fn publish_flows_through_every_http_step() {
         &TestRuntime {
             client: client.clone(),
         },
-        ["tori", "--format", "json", "draft", "publish", "draft-1"],
+        ["flea", "--format", "json", "draft", "publish", "draft-1"],
     );
 
     assert_eq!(value["data"]["listing_id"], "listing-1");
@@ -394,14 +394,14 @@ fn public_search_flows_without_authentication_through_one_envelope() {
         &TestRuntime {
             client: client.clone(),
         },
-        ["tori", "--format", "json", "search", "tuoli"],
+        ["flea", "--format", "json", "search", "tuoli"],
     );
 
     assert_eq!(value["data"]["results"][0]["listing_id"], "42346404");
     assert_eq!(value["data"]["pagination"]["limit"], 20);
     assert_eq!(
         value["next_actions"][0]["command"],
-        "tori search 'tuoli' --page 2 --limit 20"
+        "flea search 'tuoli' --page 2 --limit 20"
     );
     assert!(value["data"].get("_next_actions").is_none());
     let requests = client.requests.lock().unwrap();
@@ -447,13 +447,13 @@ fn public_search_result_flows_into_unauthenticated_item_detail() {
     };
     let search = invoke(
         &runtime,
-        ["tori", "--format", "json", "search", "Micro Mini"],
+        ["flea", "--format", "json", "search", "Micro Mini"],
     );
     let listing_id = search["data"]["results"][0]["listing_id"].as_str().unwrap();
     let value = invoke_vec(
         &runtime,
         vec![
-            "tori".to_owned(),
+            "flea".to_owned(),
             "--format".to_owned(),
             "json".to_owned(),
             "item".to_owned(),
@@ -491,7 +491,7 @@ fn category_and_listing_commands_flow_through_http_normalization() {
         &TestRuntime {
             client: categories.clone(),
         },
-        ["tori", "--format", "json", "category", "list"],
+        ["flea", "--format", "json", "category", "list"],
     );
     assert_eq!(category["data"]["categories"][0]["category_id"], "100");
     let requests = categories.requests.lock().unwrap();
@@ -511,7 +511,7 @@ fn category_and_listing_commands_flow_through_http_normalization() {
         &TestRuntime {
             client: listings.clone(),
         },
-        ["tori", "--format", "json", "listing", "show", "listing-1"],
+        ["flea", "--format", "json", "listing", "show", "listing-1"],
     );
     assert_eq!(listing["data"]["listing_id"], "listing-1");
     assert_eq!(listing["data"]["fields"]["title"], "Chair");
@@ -523,7 +523,7 @@ fn category_http_failures_have_specific_structured_errors() {
         &TestRuntime {
             client: MockClient::with_responses([response(StatusCode::NOT_FOUND, Value::Null)]),
         },
-        ["tori", "--format", "json", "category", "list"],
+        ["flea", "--format", "json", "category", "list"],
     );
     assert_eq!(endpoint["error"]["code"], "category.endpoint_unavailable");
 
@@ -531,7 +531,7 @@ fn category_http_failures_have_specific_structured_errors() {
         &TestRuntime {
             client: MockClient::with_responses([response(StatusCode::UNAUTHORIZED, Value::Null)]),
         },
-        ["tori", "--format", "json", "category", "list"],
+        ["flea", "--format", "json", "category", "list"],
     );
     assert_eq!(
         authentication["error"]["code"],
@@ -545,7 +545,7 @@ fn category_http_failures_have_specific_structured_errors() {
                 json!({ "categories": [{ "id": "bad" }] }),
             )]),
         },
-        ["tori", "--format", "json", "category", "list"],
+        ["flea", "--format", "json", "category", "list"],
     );
     assert_eq!(malformed["error"]["code"], "category.protocol_drift");
 }
@@ -565,7 +565,7 @@ fn listing_list_uses_the_published_listing_search_endpoint_and_paginates() {
         &TestRuntime {
             client: client.clone(),
         },
-        ["tori", "--format", "json", "listing", "list"],
+        ["flea", "--format", "json", "listing", "list"],
     );
 
     assert_eq!(output["data"]["total"], 52);

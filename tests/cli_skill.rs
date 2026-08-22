@@ -4,15 +4,15 @@ use std::{
     process::{Command, Output},
 };
 
-const CANONICAL_SKILL: &str = include_str!("../skills/tori-cli/SKILL.md");
+const CANONICAL_SKILL: &str = include_str!("../skills/flea/SKILL.md");
 
 fn invoke(home: &Path, cwd: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_tori"))
+    Command::new(env!("CARGO_BIN_EXE_flea"))
         .env("HOME", home)
         .current_dir(cwd)
         .args(args)
         .output()
-        .expect("tori skill should run")
+        .expect("flea skill should run")
 }
 
 fn stdout(output: &Output) -> String {
@@ -42,13 +42,13 @@ fn skill_install_targets_an_explicit_agent() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "installed tori-cli skill for Claude Code at ~/.claude/skills/tori-cli/SKILL.md\n"
+        "installed flea skill for Claude Code at ~/.claude/skills/flea/SKILL.md\n"
     );
     assert_eq!(
-        fs::read_to_string(home.join(".claude/skills/tori-cli/SKILL.md")).unwrap(),
+        fs::read_to_string(home.join(".claude/skills/flea/SKILL.md")).unwrap(),
         CANONICAL_SKILL
     );
-    assert!(!home.join(".codex/skills/tori-cli/SKILL.md").exists());
+    assert!(!home.join(".codex/skills/flea/SKILL.md").exists());
 }
 
 #[test]
@@ -64,13 +64,13 @@ fn skill_install_defaults_to_detected_user_and_workspace_agents() {
     let printed = stdout(&output);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(printed.contains("installed tori-cli skill for Claude Code"));
-    assert!(printed.contains("installed tori-cli skill for OpenCode"));
-    assert!(printed.contains("installed tori-cli skill for Codex"));
+    assert!(printed.contains("installed flea skill for Claude Code"));
+    assert!(printed.contains("installed flea skill for OpenCode"));
+    assert!(printed.contains("installed flea skill for Codex"));
     for path in [
-        home.join(".claude/skills/tori-cli/SKILL.md"),
-        home.join(".config/opencode/skills/tori-cli/SKILL.md"),
-        home.join(".codex/skills/tori-cli/SKILL.md"),
+        home.join(".claude/skills/flea/SKILL.md"),
+        home.join(".config/opencode/skills/flea/SKILL.md"),
+        home.join(".codex/skills/flea/SKILL.md"),
     ] {
         assert_eq!(fs::read_to_string(path).unwrap(), CANONICAL_SKILL);
     }

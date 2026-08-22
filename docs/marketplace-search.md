@@ -1,15 +1,16 @@
 # Public marketplace search
 
-Public marketplace search is available without Tori account authentication. Output uses the
+Flea is an independent, unofficial tool and is not affiliated with or endorsed by Tori.fi.
+Public marketplace search is available without Tori.fi account authentication. Output uses the
 standard single envelope, with TOON by default and JSON through `--format json`.
 
 ## Basic search
 
 ```sh
-tori search "ruokapöytä"
-tori search "iphone" --price-from 100 --price-to 500 --limit 50
-tori search --trade-type give-away --condition 3 --seller private
-tori search "takki" --shipping --sort newest --page 2 --limit 20
+flea search "ruokapöytä"
+flea search "iphone" --price-from 100 --price-to 500 --limit 50
+flea search --trade-type give-away --condition 3 --seller private
+flea search "takki" --shipping --sort newest --page 2 --limit 20
 ```
 
 The positional query is optional when filters identify the desired listings.
@@ -21,7 +22,7 @@ protocol documents do not provide per-result match fields or snippets. Use `--ex
 hydrate at most `LIMIT` opaque results from the public item service, in search result order:
 
 ```sh
-tori search "micro mini potkulauta" --explain 5 --format json
+flea search "micro mini potkulauta" --explain 5 --format json
 ```
 
 `LIMIT` must be from 1 through 20. The default search makes no item detail requests. Results whose
@@ -39,11 +40,11 @@ classification. Other search results and successful explanations remain in the r
 For the full public detail, pass the numeric `listing_id` from a search result to the item command:
 
 ```sh
-tori item show 45917182
-tori item show 45917182 --format json
+flea item show 45917182
+flea item show 45917182 --format json
 ```
 
-`tori item show` uses the public listing-detail service and does not read account credentials or
+`flea item show` uses the public listing-detail service and does not read account credentials or
 attach an authorization header. Normalized output includes the title, full description, structured
 price and textual location, condition, seller and shipping metadata, images, publication time, and
 canonical URL when Tori supplies each value. Seller and shipping objects remain present with null
@@ -53,7 +54,7 @@ owner identifiers are omitted.
 Use `--raw` to inspect the bounded upstream protocol document:
 
 ```sh
-tori item show 42346404 --raw --format json
+flea item show 42346404 --raw --format json
 ```
 
 The command rejects malformed IDs locally. Removed or missing listings return `item.not_found`, and
@@ -71,8 +72,8 @@ requested ID and an action that returns to public search.
 Dynamic options returned by Tori can be supplied repeatedly as `--facet NAME=VALUE`:
 
 ```sh
-tori search "tuoli" --category 1.93.3215 --facet brand=42 --facet brand=84
-tori search "tuoli" --include-facets --format json
+flea search "tuoli" --category 1.93.3215 --facet brand=42 --facet brand=84
+flea search "tuoli" --include-facets --format json
 ```
 
 `--include-facets` requests available filter metadata. Each normalized facet includes its machine
@@ -94,8 +95,8 @@ Discover Tori location identifiers with a bounded, deterministic name search. Th
 `returned`, `total`, and `truncated` counts for the 100-location output bound:
 
 ```sh
-tori location search Helsinki
-tori location search Uusimaa --format json
+flea location search Helsinki
+flea location search Uusimaa --format json
 ```
 
 `--location` selects one exact location. It accepts either the exact identifier or an unambiguous,
@@ -107,7 +108,7 @@ an undocumented interpretation.
 A runnable exact Helsinki search is:
 
 ```sh
-tori search "tuoli" --location Helsinki --limit 20
+flea search "tuoli" --location Helsinki --limit 20
 ```
 
 `--area` explicitly searches a set of 2 through 20 Tori locations. Supply a comma-separated list
@@ -116,7 +117,7 @@ filters. The CLI does not infer what a phrase such as "Helsinki area" includes. 
 example explicitly includes three neighboring capital-region municipalities:
 
 ```sh
-tori search "tuoli" --area Helsinki,Espoo,Vantaa --limit 20
+flea search "tuoli" --area Helsinki,Espoo,Vantaa --limit 20
 ```
 
 Normalized output exposes every selected location under `resolved_area.locations`, including its
@@ -127,7 +128,7 @@ Coordinate radius searches require all three arguments. Radius is expressed in k
 encoded as Tori's integer meter value:
 
 ```sh
-tori search "tuoli" \
+flea search "tuoli" \
   --latitude 60.1699 \
   --longitude 24.9384 \
   --radius-km 20 \
@@ -183,7 +184,7 @@ cat >search.json <<'JSON'
 }
 JSON
 
-tori search --input search.json --format json
+flea search --input search.json --format json
 ```
 
 A field present in both JSON and a command argument is rejected. Repeated scalar flags are rejected

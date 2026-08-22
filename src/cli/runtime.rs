@@ -338,9 +338,9 @@ fn unavailable_status(
         expires_in_seconds: None,
         next_actions: vec![NextAction {
             command: if login_required {
-                "tori auth login"
+                "flea auth login"
             } else {
-                "tori auth status"
+                "flea auth status"
             }
             .to_owned(),
         }],
@@ -358,7 +358,7 @@ fn resolution_storage(
                 "stored authentication credentials are malformed",
             );
             malformed.next_actions.push(NextAction {
-                command: "tori auth login".to_owned(),
+                command: "flea auth login".to_owned(),
             });
             malformed
         }
@@ -389,7 +389,7 @@ fn auth_storage(
     result
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "tori auth status".to_owned(),
+            command: "flea auth status".to_owned(),
         });
     result
 }
@@ -399,7 +399,7 @@ fn auth_required() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "tori auth start".to_owned(),
+            command: "flea auth start".to_owned(),
         });
     error
 }
@@ -553,7 +553,7 @@ mod tests {
 
         assert_eq!(status["authenticated"], false);
         assert_eq!(status["health"], "missing");
-        assert_eq!(status["_next_actions"][0]["command"], "tori auth login");
+        assert_eq!(status["_next_actions"][0]["command"], "flea auth login");
         assert!(status.get("user_id").is_none());
     }
 
@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(status["authenticated"], false);
         assert_eq!(status["health"], "refresh_rejected");
         assert_eq!(status["stored_bearer_state"], "expired");
-        assert_eq!(status["_next_actions"][0]["command"], "tori auth login");
+        assert_eq!(status["_next_actions"][0]["command"], "flea auth login");
         for secret in ["user", "refresh-old", "bearer-old", "response-secret"] {
             assert!(!rendered.contains(secret));
         }
@@ -655,7 +655,7 @@ mod tests {
         assert_eq!(refresh_status["stored_bearer_state"], "expired");
         assert_eq!(
             refresh_status["_next_actions"][0]["command"],
-            "tori auth login"
+            "flea auth login"
         );
 
         let malformed_temporary = tempdir().unwrap();
@@ -691,7 +691,7 @@ mod tests {
         assert_eq!(status["health"], "temporarily_unavailable");
         assert_eq!(status["validation"], "unverified");
         assert_eq!(status["stored_bearer_state"], "expired");
-        assert_eq!(status["_next_actions"][0]["command"], "tori auth status");
+        assert_eq!(status["_next_actions"][0]["command"], "flea auth status");
     }
 
     #[test]
@@ -700,6 +700,6 @@ mod tests {
 
         assert_eq!(error.code, "auth.storage_failed");
         assert_eq!(error.details.unwrap()["operation"], "write");
-        assert_eq!(error.next_actions[0].command, "tori auth status");
+        assert_eq!(error.next_actions[0].command, "flea auth status");
     }
 }

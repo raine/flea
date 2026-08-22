@@ -16,9 +16,9 @@ use crate::{error::AppError, output::OutputFormat};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "tori",
-    about = "Manage Tori.fi listing workflows",
-    long_about = "Manage Tori.fi authentication, categories, drafts, and published listings through deterministic agent workflows."
+    name = "flea",
+    about = "Manage Tori.fi listing workflows with Flea",
+    long_about = "Flea manages Tori.fi authentication, categories, drafts, and published listings through deterministic agent workflows."
 )]
 #[command(version, propagate_version = true)]
 pub struct Cli {
@@ -69,7 +69,7 @@ pub enum Command {
     Location(location::LocationArgs),
     #[command(
         about = "Print or install the coding-agent skill",
-        long_about = "Print the bundled tori-cli coding-agent skill or install it for supported coding agents."
+        long_about = "Print the bundled flea coding-agent skill or install it for supported coding agents."
     )]
     Skill(skill::SkillArgs),
 }

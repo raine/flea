@@ -26,7 +26,7 @@ pub struct AuthArgs {
 pub enum AuthCommand {
     #[command(
         about = "Sign in through the browser",
-        long_about = "Open Tori sign-in in the default browser, wait for the Tori CLI callback receiver, and store credentials."
+        long_about = "Open Tori.fi sign-in in the default browser, wait for the Flea callback receiver, and store credentials."
     )]
     Login,
     #[command(
@@ -261,7 +261,7 @@ fn flow_not_found() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "tori auth start".to_owned(),
+            command: "flea auth start".to_owned(),
         });
     error
 }
@@ -275,7 +275,7 @@ fn flow_expired() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "tori auth start".to_owned(),
+            command: "flea auth start".to_owned(),
         });
     error
 }

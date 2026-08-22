@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use crate::error::{AppError, ExitClass};
 
-const SKILL_NAME: &str = "tori-cli";
-const SKILL_CONTENT: &str = include_str!("../../skills/tori-cli/SKILL.md");
+const SKILL_NAME: &str = "flea";
+const SKILL_CONTENT: &str = include_str!("../../skills/flea/SKILL.md");
 
 #[derive(Debug, Args)]
 pub struct SkillArgs {
@@ -20,8 +20,8 @@ pub struct SkillArgs {
 #[derive(Debug, Subcommand)]
 pub enum SkillCommand {
     #[command(
-        about = "Install the tori-cli skill for coding agents",
-        long_about = "Install the bundled tori-cli skill into one or more supported coding-agent skill directories."
+        about = "Install the flea skill for coding agents",
+        long_about = "Install the bundled flea skill into one or more supported coding-agent skill directories."
     )]
     Install(SkillInstallArgs),
 }

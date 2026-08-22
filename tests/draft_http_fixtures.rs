@@ -4,15 +4,15 @@ use std::{
     time::Duration,
 };
 
-use serde_json::{Map, Value, json};
-use tori::api::adinput::{
+use flea::api::adinput::{
     AdInputApi, DraftWorkflow, HttpAdInputApi, HttpRequest, HttpResponse, HttpTransport,
     ImageState, Method, RequestBody, RetryPolicy, WorkflowConfig,
 };
+use serde_json::{Map, Value, json};
 
 #[derive(Clone)]
 struct FixtureTransport {
-    responses: Arc<Mutex<VecDeque<Result<HttpResponse, tori::api::adinput::ApiError>>>>,
+    responses: Arc<Mutex<VecDeque<Result<HttpResponse, flea::api::adinput::ApiError>>>>,
     requests: Arc<Mutex<Vec<HttpRequest>>>,
 }
 
@@ -33,7 +33,7 @@ impl HttpTransport for FixtureTransport {
     async fn execute(
         &self,
         request: HttpRequest,
-    ) -> Result<HttpResponse, tori::api::adinput::ApiError> {
+    ) -> Result<HttpResponse, flea::api::adinput::ApiError> {
         self.requests.lock().unwrap().push(request);
         self.responses
             .lock()
@@ -106,7 +106,7 @@ impl HttpTransport for HangingPollTransport {
     async fn execute(
         &self,
         _request: HttpRequest,
-    ) -> Result<HttpResponse, tori::api::adinput::ApiError> {
+    ) -> Result<HttpResponse, flea::api::adinput::ApiError> {
         if let Some(response) = self.first.lock().unwrap().take() {
             return Ok(response);
         }
@@ -295,7 +295,7 @@ async fn creation_observation_failure_preserves_authoritative_identity() {
         recovery.completed_steps,
         ["create_draft", "establish_identity"]
     );
-    assert_eq!(recovery.next_safe_actions, ["tori draft show 98231"]);
+    assert_eq!(recovery.next_safe_actions, ["flea draft show 98231"]);
 }
 
 #[tokio::test]
@@ -385,7 +385,7 @@ async fn post_creation_failure_keeps_recovery_context() {
     assert_eq!(recovery.draft_id, "draft-1");
     assert_eq!(recovery.completed_steps, ["create_draft"]);
     assert!(!recovery.retryable);
-    assert_eq!(recovery.next_safe_actions, ["tori draft show draft-1"]);
+    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
 }
 
 #[tokio::test]
@@ -879,9 +879,9 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "listing-9",
                 "published listing identity must survive observation failure"
             );
-            assert_eq!(recovery.next_safe_actions, ["tori listing show listing-9"]);
+            assert_eq!(recovery.next_safe_actions, ["flea listing show listing-9"]);
         } else {
-            assert_eq!(recovery.next_safe_actions, ["tori draft show draft-1"]);
+            assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
         }
     }
 }
@@ -1037,5 +1037,5 @@ async fn publish_timeout_is_bounded_and_recoverable() {
     let recovery = error.recovery.unwrap();
     assert!(recovery.retryable);
     assert_eq!(recovery.completed_steps, ["fetch_draft", "validate"]);
-    assert_eq!(recovery.next_safe_actions, ["tori draft show draft-1"]);
+    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
 }

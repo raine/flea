@@ -928,7 +928,7 @@ fn listing_mutation_error(error: ListingsApiError, listing_id: &str, operation: 
     app_error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: format!("tori listing show {listing_id}"),
+            command: format!("flea listing show {listing_id}"),
         });
     app_error
 }

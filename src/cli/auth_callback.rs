@@ -7,7 +7,11 @@ const MAX_CAPTURED_CALLBACK_BYTES: u64 = 8 * 1024;
 pub fn prepare(paths: &StatePaths) -> Result<(), AppError> {
     paths.ensure().map_err(callback_receiver_error)?;
     clear(paths)?;
-    if std::env::var_os("TORI_AUTH_CALLBACK_RECEIVER").is_some_and(|value| value == "disabled") {
+    if ["FLEA_AUTH_CALLBACK_RECEIVER", "TORI_AUTH_CALLBACK_RECEIVER"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .any(|value| value == "disabled")
+    {
         return Ok(());
     }
     prepare_platform_receiver(paths)
@@ -27,7 +31,7 @@ pub fn open_and_wait(
     expires_at_unix: u64,
 ) -> Result<String, AppError> {
     open_browser(login_url)?;
-    eprintln!("Browser opened. Finish signing in and choose Open Tori CLI Auth when asked.");
+    eprintln!("Browser opened. Finish signing in and choose Open Flea Auth when asked.");
     eprintln!("Waiting for Tori to return to the CLI...");
 
     loop {
@@ -79,14 +83,14 @@ pub fn read(paths: &StatePaths) -> Result<String, AppError> {
 fn callback_capture_error() -> AppError {
     AppError::authentication(
         "auth.callback_not_captured",
-        "finish browser sign-in and allow the browser to open Tori CLI Auth, then retry the completion command",
+        "finish browser sign-in and allow the browser to open Flea Auth, then retry the completion command",
     )
 }
 
 fn callback_receiver_error(error: impl std::error::Error + Send + Sync + 'static) -> AppError {
     AppError::authentication(
         "auth.callback_receiver_failed",
-        "the Tori CLI browser callback receiver could not be prepared",
+        "the Flea browser callback receiver could not be prepared",
     )
     .with_source(error)
 }
@@ -124,7 +128,7 @@ fn prepare_platform_receiver(paths: &StatePaths) -> Result<(), AppError> {
     use std::process::Command;
 
     const SCHEME: &str = "fi.tori.www.6079834b9b0b741812e7e91f";
-    const BUNDLE_ID: &str = "fi.raine.tori-cli.auth-callback";
+    const BUNDLE_ID: &str = "fi.raine.flea.auth-callback";
 
     let app = paths.auth_callback_app();
     let register = |app: &Path| -> Result<(), AppError> {
@@ -145,7 +149,7 @@ fn prepare_platform_receiver(paths: &StatePaths) -> Result<(), AppError> {
 
     let temporary = paths
         .auth_dir()
-        .join(format!(".Tori CLI Auth.{}.app", uuid::Uuid::new_v4()));
+        .join(format!(".Flea Auth.{}.app", uuid::Uuid::new_v4()));
     let callback_path = paths.oauth_callback_file();
     let script = callback_script(&callback_path);
 
@@ -161,7 +165,7 @@ fn prepare_platform_receiver(paths: &StatePaths) -> Result<(), AppError> {
             "-replace",
             "CFBundleName",
             "-string",
-            "Tori CLI Auth",
+            "Flea Auth",
             path_text(&plist)?,
         ]))?;
         checked_command(Command::new("/usr/bin/plutil").args([
@@ -175,9 +179,7 @@ fn prepare_platform_receiver(paths: &StatePaths) -> Result<(), AppError> {
             "-insert",
             "CFBundleURLTypes",
             "-json",
-            &format!(
-                r#"[{{"CFBundleURLName":"Tori CLI OAuth","CFBundleURLSchemes":["{SCHEME}"]}}]"#
-            ),
+            &format!(r#"[{{"CFBundleURLName":"Flea OAuth","CFBundleURLSchemes":["{SCHEME}"]}}]"#),
             path_text(&plist)?,
         ]))?;
         checked_command(Command::new("/usr/bin/codesign").args([

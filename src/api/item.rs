@@ -447,7 +447,7 @@ fn add_search_action(error: &mut AppError) {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "tori search".to_owned(),
+            command: "flea search".to_owned(),
         });
 }
 

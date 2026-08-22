@@ -5,4 +5,4 @@ data:
   fields[1]{key,status,value}:
     title,set,Chair
 next_actions[1]{command}:
-  tori draft show 36443414
+  flea draft show 36443414

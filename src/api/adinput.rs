@@ -535,7 +535,7 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
                 "draft_id": draft_id,
                 "completed_steps": completed_steps,
                 "recovery_guidance": format!(
-                    "Inspect the draft with `tori draft show {draft_id}`; do not repeat creation"
+                    "Inspect the draft with `flea draft show {draft_id}`; do not repeat creation"
                 )
             })));
             error
@@ -1060,7 +1060,7 @@ impl WorkflowError {
                 .map(str::to_owned)
                 .collect();
             Some(Recovery {
-                next_safe_actions: vec![format!("tori draft show {draft_id}")],
+                next_safe_actions: vec![format!("flea draft show {draft_id}")],
                 draft_id,
                 listing_id: None,
                 completed_steps,
@@ -1092,7 +1092,7 @@ impl WorkflowError {
                 listing_id: None,
                 completed_steps: completed_steps.to_vec(),
                 retryable,
-                next_safe_actions: vec![format!("tori draft show {draft_id}")],
+                next_safe_actions: vec![format!("flea draft show {draft_id}")],
                 fresh_state: None,
             }),
             details: None,
@@ -1116,7 +1116,7 @@ impl WorkflowError {
                 listing_id: None,
                 completed_steps: completed_steps.to_vec(),
                 retryable: false,
-                next_safe_actions: vec![format!("tori draft update {draft_id} --input PATH")],
+                next_safe_actions: vec![format!("flea draft update {draft_id} --input PATH")],
                 fresh_state: None,
             }),
             details: Some(json!({ "missing_fields": missing })),
@@ -1352,7 +1352,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 let mut workflow = WorkflowError::for_draft(draft_id, &completed, conflict, false);
                 if let Some(recovery) = &mut workflow.recovery {
                     recovery.fresh_state = Some(fresh);
-                    recovery.next_safe_actions = vec![format!("tori draft show {draft_id}")];
+                    recovery.next_safe_actions = vec![format!("flea draft show {draft_id}")];
                 }
                 Err(workflow)
             }
@@ -1561,7 +1561,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 if let Some(recovery) = &mut workflow.recovery {
                     recovery.listing_id = Some(publication.listing_id.clone());
                     recovery.next_safe_actions =
-                        vec![format!("tori listing show {}", publication.listing_id)];
+                        vec![format!("flea listing show {}", publication.listing_id)];
                 }
                 workflow.details = Some(json!({
                     "listing_id": publication.listing_id,

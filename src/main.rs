@@ -1,9 +1,9 @@
 use std::process::ExitCode;
 
-use tori::Presentation;
+use flea::Presentation;
 
 fn main() -> ExitCode {
-    let result = tori::run(std::env::args_os());
+    let result = flea::run(std::env::args_os());
     match result.presentation {
         Presentation::Structured => println!("{}", result.document),
         Presentation::PlainStdout => print!("{}", result.document),

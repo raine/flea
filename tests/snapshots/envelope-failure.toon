@@ -9,8 +9,8 @@ partial:
   draft_id: "36443414"
   completed_steps[1]: fetch_draft
 next_actions[1]{command}:
-  "tori draft update 36443414 --input PATH"
+  "flea draft update 36443414 --input PATH"
 diagnostics:
   trace_id: "trace-fixture"
   correlation_id: "correlation-fixture"
-  log_path: "/state/tori-cli/logs/tori-cli.fixture.jsonl"
+  log_path: /state/flea/logs/flea.fixture.jsonl

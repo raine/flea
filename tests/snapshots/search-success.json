@@ -36,7 +36,7 @@
   },
   "next_actions": [
     {
-      "command": "tori search 'tuoli' --page 2 --limit 20"
+      "command": "flea search 'tuoli' --page 2 --limit 20"
     }
   ]
 }

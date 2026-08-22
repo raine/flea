@@ -235,7 +235,7 @@ fn install_safe_panic_hook() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         std::panic::set_hook(Box::new(|_| {
-            eprintln!("tori: command failed unexpectedly");
+            eprintln!("flea: command failed unexpectedly");
         }));
     });
 }

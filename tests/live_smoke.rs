@@ -2,18 +2,18 @@ use std::process::Command;
 
 use serde_json::{Value, json};
 
-const LIVE_OPT_IN: &str = "TORI_LIVE_SMOKE";
+const LIVE_OPT_IN: &str = "FLEA_LIVE_SMOKE";
 
 #[test]
-#[ignore = "requires an authenticated Tori account and TORI_LIVE_SMOKE=1"]
+#[ignore = "requires an authenticated Tori account and FLEA_LIVE_SMOKE=1"]
 fn authenticated_draft_lifecycle_never_publishes() {
     assert_eq!(
         std::env::var(LIVE_OPT_IN).as_deref(),
         Ok("1"),
         "set {LIVE_OPT_IN}=1 to acknowledge remote draft mutations"
     );
-    let category = std::env::var("TORI_LIVE_CATEGORY")
-        .expect("TORI_LIVE_CATEGORY must contain a selectable category machine value");
+    let category = std::env::var("FLEA_LIVE_CATEGORY")
+        .expect("FLEA_LIVE_CATEGORY must contain a selectable category machine value");
 
     let auth = invoke(&["auth", "status"]);
     assert_eq!(auth["ok"], true, "auth status failed: {auth}");
@@ -40,7 +40,7 @@ fn authenticated_draft_lifecycle_never_publishes() {
         "--category",
         &category,
         "--title",
-        "tori-cli live smoke draft",
+        "flea live smoke draft",
     ]);
     assert_eq!(created["ok"], true, "draft create failed: {created}");
     let draft_id = created["data"]["draft"]["draft_id"]
@@ -58,13 +58,13 @@ fn authenticated_draft_lifecycle_never_publishes() {
         "update",
         &draft_id,
         "--title",
-        "tori-cli live smoke draft updated",
+        "flea live smoke draft updated",
     ]);
     assert_eq!(updated["ok"], true, "draft update failed: {updated}");
     assert!(
         updated
             .to_string()
-            .contains("tori-cli live smoke draft updated"),
+            .contains("flea live smoke draft updated"),
         "updated draft did not return the replacement title: {updated}"
     );
 
@@ -76,14 +76,14 @@ fn invoke(arguments: &[&str]) -> Value {
         !arguments.contains(&"publish"),
         "the automated live harness must never publish"
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_tori"))
+    let output = Command::new(env!("CARGO_BIN_EXE_flea"))
         .args(arguments)
         .args(["--format", "json"])
         .output()
-        .expect("tori executable should run");
+        .expect("flea executable should run");
     serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
         panic!(
-            "tori returned invalid JSON: {error}; stderr: {}",
+            "flea returned invalid JSON: {error}; stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         )
     })

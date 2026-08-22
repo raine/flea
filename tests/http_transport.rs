@@ -4,14 +4,14 @@ use std::{
     time::Duration,
 };
 
-use reqwest::{
-    Method, StatusCode,
-    header::{AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue, IF_MATCH},
-};
-use tori::api::client::{
+use flea::api::client::{
     ClientConfig, DeviceIdentity, HttpClient, MultipartPart, RequestBody, RequestSpec, Transport,
     TransportError, TransportErrorKind, TransportFuture, TransportRequest, TransportResponse,
     compatibility,
+};
+use reqwest::{
+    Method, StatusCode,
+    header::{AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue, IF_MATCH},
 };
 
 #[derive(Clone)]

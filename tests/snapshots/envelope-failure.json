@@ -19,12 +19,12 @@
   },
   "next_actions": [
     {
-      "command": "tori draft update 36443414 --input PATH"
+      "command": "flea draft update 36443414 --input PATH"
     }
   ],
   "diagnostics": {
     "trace_id": "trace-fixture",
     "correlation_id": "correlation-fixture",
-    "log_path": "/state/tori-cli/logs/tori-cli.fixture.jsonl"
+    "log_path": "/state/flea/logs/flea.fixture.jsonl"
   }
 }

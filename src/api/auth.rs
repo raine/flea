@@ -533,7 +533,7 @@ impl<A> BrowserAuth<A> {
             ab_test_device_id: Uuid::new_v4().to_string(),
         };
         let output = AuthStart {
-            completion_command: format!("tori auth complete {flow_id}"),
+            completion_command: format!("flea auth complete {flow_id}"),
             flow_id,
             login_url: login_url.into(),
             expires_at_unix,
@@ -743,7 +743,7 @@ fn invalid_callback() -> AppError {
 fn restart_error(code: &str, message: &str) -> AppError {
     let mut error = AppError::new(code, message, ExitClass::Authentication);
     error.next_actions.push(NextAction {
-        command: "tori auth start".to_owned(),
+        command: "flea auth start".to_owned(),
     });
     error
 }
@@ -786,7 +786,7 @@ fn ensure_refresh_success(status: StatusCode) -> Result<(), AppError> {
         "status": status.as_u16()
     })));
     error.next_actions.push(NextAction {
-        command: "tori auth login".to_owned(),
+        command: "flea auth login".to_owned(),
     });
     Err(error)
 }
@@ -807,7 +807,7 @@ fn refresh_malformed_error() -> AppError {
     )
     .with_details(serde_json::json!({ "stage": "token_refresh" }));
     error.next_actions.push(NextAction {
-        command: "tori auth login".to_owned(),
+        command: "flea auth login".to_owned(),
     });
     error
 }
@@ -1242,7 +1242,7 @@ mod tests {
 
         assert_eq!(error.code, "auth.refresh_rejected");
         assert_eq!(error.exit_class, ExitClass::Authentication);
-        assert_eq!(error.next_actions[0].command, "tori auth login");
+        assert_eq!(error.next_actions[0].command, "flea auth login");
         assert!(!format!("{error:?}").contains("refresh-secret"));
     }
 

@@ -19,7 +19,7 @@ pub enum ItemCommand {
         long_about = "Fetch and normalize the public details of any marketplace listing ID returned by search without account authentication."
     )]
     Show {
-        /// Numeric marketplace listing ID returned by `tori search`.
+        /// Numeric marketplace listing ID returned by `flea search`.
         listing_id: String,
 
         /// Return the upstream JSON body inside the standard output envelope.

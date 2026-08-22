@@ -1,13 +1,13 @@
 use std::process::{Command, Output};
 
 use clap::{Command as ClapCommand, CommandFactory};
-use tori::cli::Cli;
+use flea::cli::Cli;
 
 fn invoke(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_tori"))
+    Command::new(env!("CARGO_BIN_EXE_flea"))
         .args(args)
         .output()
-        .expect("tori should run")
+        .expect("flea should run")
 }
 
 fn stdout(output: &Output) -> String {
@@ -74,8 +74,8 @@ fn bare_invocation_uses_clap_help_on_stderr() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(out.is_empty());
-    assert!(err.contains("Manage Tori.fi listing workflows"));
-    assert!(err.contains("Usage: tori [OPTIONS] <COMMAND>"));
+    assert!(err.contains("Manage Tori.fi listing workflows with Flea"));
+    assert!(err.contains("Usage: flea [OPTIONS] <COMMAND>"));
     assert!(err.contains("Commands:"));
     assert_no_envelope_fields(&err);
 }
@@ -88,7 +88,7 @@ fn top_level_help_flags_and_command_use_stdout() {
 
         assert_eq!(output.status.code(), Some(0), "args: {args:?}");
         assert!(stderr(&output).is_empty(), "args: {args:?}");
-        assert!(out.contains("Usage: tori [OPTIONS] <COMMAND>"));
+        assert!(out.contains("Usage: flea [OPTIONS] <COMMAND>"));
         assert!(out.contains("Commands:"));
         assert_no_envelope_fields(&out);
     }
@@ -108,7 +108,7 @@ fn nested_help_flags_and_commands_use_stdout() {
 
         assert_eq!(output.status.code(), Some(0), "args: {args:?}");
         assert!(stderr(&output).is_empty(), "args: {args:?}");
-        assert!(out.contains("Usage: tori draft"), "args: {args:?}");
+        assert!(out.contains("Usage: flea draft"), "args: {args:?}");
         assert_no_envelope_fields(&out);
     }
 }
@@ -124,8 +124,8 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(top.contains("skill     Print or install the coding-agent skill"));
 
     let item = stdout(&invoke(&["item", "show", "--help"]));
-    assert!(item.contains("Usage: tori item show [OPTIONS] <LISTING_ID>"));
-    assert!(item.contains("Numeric marketplace listing ID returned by `tori search`"));
+    assert!(item.contains("Usage: flea item show [OPTIONS] <LISTING_ID>"));
+    assert!(item.contains("Numeric marketplace listing ID returned by `flea search`"));
     assert!(item.contains("--raw"));
 
     let draft = stdout(&invoke(&["draft", "--help"]));
@@ -152,16 +152,16 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(auth.contains("logout  Clear authentication state"));
 
     let skill = stdout(&invoke(&["skill", "--help"]));
-    assert!(skill.contains("install  Install the tori-cli skill for coding agents"));
-    assert!(skill.contains("tori skill [OPTIONS] [COMMAND]"));
+    assert!(skill.contains("install  Install the flea skill for coding agents"));
+    assert!(skill.contains("flea skill [OPTIONS] [COMMAND]"));
 }
 
 #[test]
 fn version_flags_use_clap_stdout_and_propagate_to_subcommands() {
     for (args, command_name) in [
-        (&["--version"][..], "tori"),
-        (&["-V"][..], "tori"),
-        (&["draft", "--version"][..], "tori-draft"),
+        (&["--version"][..], "flea"),
+        (&["-V"][..], "flea"),
+        (&["draft", "--version"][..], "flea-draft"),
     ] {
         let output = invoke(args);
         let out = stdout(&output);
@@ -185,6 +185,6 @@ fn invalid_parser_usage_uses_clap_stderr() {
     assert_eq!(output.status.code(), Some(2));
     assert!(out.is_empty());
     assert!(err.contains("error: unrecognized subcommand 'unknown-command'"));
-    assert!(err.contains("Usage: tori [OPTIONS] <COMMAND>"));
+    assert!(err.contains("Usage: flea [OPTIONS] <COMMAND>"));
     assert_no_envelope_fields(&err);
 }

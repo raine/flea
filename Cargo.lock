@@ -352,6 +352,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "flea"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "clap",
+ "dirs",
+ "fs2",
+ "hmac",
+ "image",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "toon-format",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "form_urlencoded"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1485,32 +1511,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
-]
-
-[[package]]
-name = "tori"
-version = "0.1.0"
-dependencies = [
- "base64",
- "clap",
- "dirs",
- "fs2",
- "hmac",
- "image",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "thiserror",
- "time",
- "tokio",
- "toon-format",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "url",
- "uuid",
 ]
 
 [[package]]
