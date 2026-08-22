@@ -5,7 +5,7 @@ use tempfile::tempdir;
 use tori::{Presentation, cli::CommandRuntime, error::AppError};
 
 const LOGIN_URL: &str = "https://login.vend.fi/oauth/authorize?client_id=client&state=oauth-state";
-const COMPLETION_COMMAND: &str = "tori auth complete flow-1 CALLBACK_URL";
+const COMPLETION_COMMAND: &str = "tori auth complete flow-1";
 
 struct AuthStartRuntime;
 
@@ -57,9 +57,11 @@ fn binary_default_stdout_is_plain_and_json_is_machine_readable() {
     assert!(plain.status.success());
     assert!(plain.stderr.is_empty());
     let plain_stdout = String::from_utf8(plain.stdout).expect("UTF-8 stdout");
-    assert!(plain_stdout.contains("Open this URL in a browser"));
+    assert!(plain_stdout.contains("Sign in to Tori"));
     assert!(plain_stdout.contains("https://login.vend.fi/oauth/authorize?"));
+    assert!(plain_stdout.contains("Open ToriAuthHelper.app"));
     assert!(plain_stdout.contains("tori auth complete"));
+    assert!(!plain_stdout.contains("CALLBACK_URL"));
     assert!(!plain_stdout.contains("ok:"));
     assert!(!plain_stdout.contains("next_actions"));
     assert!(!plain_stdout.contains("[0]{"));

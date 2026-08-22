@@ -516,7 +516,7 @@ impl<A> BrowserAuth<A> {
             ab_test_device_id: Uuid::new_v4().to_string(),
         };
         let output = AuthStart {
-            completion_command: format!("tori auth complete {flow_id} CALLBACK_URL"),
+            completion_command: format!("tori auth complete {flow_id}"),
             flow_id,
             login_url: login_url.into(),
             expires_at_unix,

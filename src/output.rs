@@ -25,14 +25,13 @@ pub fn render<T: Serialize>(value: &T, format: OutputFormat) -> Result<String, A
 
 pub fn render_auth_start(data: &Value) -> Result<String, AppError> {
     let login_url = required_string(data, "login_url")?;
-    let expires_at = data
-        .get("expires_at_unix")
+    data.get("expires_at_unix")
         .and_then(Value::as_u64)
         .ok_or_else(|| AppError::output("authentication start output has an invalid expiry"))?;
     let completion_command = required_string(data, "completion_command")?;
 
     Ok(format!(
-        "Open this URL in a browser to sign in to Tori:\n\n{login_url}\n\nExpires at Unix time {expires_at}.\n\nAfter sign-in, run:\n{completion_command}\n"
+        "Sign in to Tori\n\n1. Open this URL:\n\n{login_url}\n\n2. Finish signing in.\n3. When the browser asks, choose Open ToriAuthHelper.app. The Vend tab may keep showing ‘Kirjaudutaan’; you can close it after the helper opens.\n4. Return here and run:\n\n{completion_command}\n\nComplete these steps within 10 minutes.\n"
     ))
 }
 

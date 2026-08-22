@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fs, io::Read, path::PathBuf, sync::Arc};
 
 use serde_json::Value;
 
@@ -44,11 +44,76 @@ impl CommandRuntime for ProductionRuntime {
     }
 }
 
-fn execute_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
+const MAX_CAPTURED_CALLBACK_BYTES: u64 = 8 * 1024;
+
+fn execute_auth(mut args: super::auth::AuthArgs) -> Result<Value, AppError> {
+    let uses_captured_callback = match &mut args.command {
+        super::auth::AuthCommand::Start => {
+            clear_captured_callback()?;
+            false
+        }
+        super::auth::AuthCommand::Complete { callback_url, .. } if callback_url.is_none() => {
+            *callback_url = Some(read_captured_callback()?);
+            true
+        }
+        _ => false,
+    };
+
     let paths = state_paths()?;
     let store = FileAuthStore::new(paths);
     let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
-    block_on(handler.dispatch(args.command, unix_time_now()?))
+    let result = block_on(handler.dispatch(args.command, unix_time_now()?));
+    if uses_captured_callback {
+        let _ = clear_captured_callback();
+    }
+    result
+}
+
+fn callback_capture_path() -> PathBuf {
+    std::env::temp_dir().join("tori_auth_callback.txt")
+}
+
+fn clear_captured_callback() -> Result<(), AppError> {
+    match fs::remove_file(callback_capture_path()) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(callback_capture_error().with_source(error)),
+    }
+}
+
+fn read_captured_callback() -> Result<String, AppError> {
+    let path = callback_capture_path();
+    let metadata =
+        fs::symlink_metadata(&path).map_err(|error| callback_capture_error().with_source(error))?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_CAPTURED_CALLBACK_BYTES
+    {
+        return Err(callback_capture_error());
+    }
+
+    let mut callback = String::new();
+    fs::File::open(path)
+        .and_then(|file| {
+            file.take(MAX_CAPTURED_CALLBACK_BYTES + 1)
+                .read_to_string(&mut callback)
+        })
+        .map_err(|error| callback_capture_error().with_source(error))?;
+    if callback.len() as u64 > MAX_CAPTURED_CALLBACK_BYTES {
+        return Err(callback_capture_error());
+    }
+    let callback = callback.trim();
+    if callback.is_empty() {
+        return Err(callback_capture_error());
+    }
+    Ok(callback.to_owned())
+}
+
+fn callback_capture_error() -> AppError {
+    AppError::authentication(
+        "auth.callback_not_captured",
+        "finish browser sign-in and allow the browser to open ToriAuthHelper.app, then retry the completion command",
+    )
 }
 
 fn authenticated_client() -> Result<HttpClient<ReqwestTransport>, AppError> {

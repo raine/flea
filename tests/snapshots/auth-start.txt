@@ -1,8 +1,13 @@
-Open this URL in a browser to sign in to Tori:
+Sign in to Tori
+
+1. Open this URL:
 
 https://login.vend.fi/oauth/authorize?client_id=client&state=oauth-state
 
-Expires at Unix time 1700000600.
+2. Finish signing in.
+3. When the browser asks, choose Open ToriAuthHelper.app. The Vend tab may keep showing ‘Kirjaudutaan’; you can close it after the helper opens.
+4. Return here and run:
 
-After sign-in, run:
-tori auth complete flow-1 CALLBACK_URL
+tori auth complete flow-1
+
+Complete these steps within 10 minutes.

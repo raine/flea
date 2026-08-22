@@ -37,7 +37,9 @@ pub enum AuthCommand {
         /// Flow identifier returned by `tori auth start`.
         flow_id: String,
         /// Full callback URL received after browser authentication.
-        callback_url: String,
+        ///
+        /// On macOS this is read from ToriAuthHelper when omitted.
+        callback_url: Option<String>,
     },
     #[command(
         about = "Show authentication status",
@@ -192,7 +194,10 @@ impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
             AuthCommand::Complete {
                 flow_id,
                 callback_url,
-            } => self.complete(&flow_id, &callback_url, now_unix).await,
+            } => {
+                let callback_url = callback_url.ok_or_else(callback_not_captured)?;
+                self.complete(&flow_id, &callback_url, now_unix).await
+            }
             AuthCommand::Status => self.status(),
             AuthCommand::Logout => self.logout(),
         }
@@ -314,6 +319,14 @@ fn flow_expired() -> AppError {
             command: "tori auth start".to_owned(),
         });
     error
+}
+
+fn callback_not_captured() -> AppError {
+    AppError::new(
+        "auth.callback_not_captured",
+        "the browser authentication callback has not been captured",
+        ExitClass::Authentication,
+    )
 }
 
 fn storage_error(source: AppError) -> AppError {
@@ -443,7 +456,7 @@ mod tests {
             .dispatch(
                 AuthCommand::Complete {
                     flow_id,
-                    callback_url: callback,
+                    callback_url: Some(callback),
                 },
                 1_001,
             )
@@ -478,7 +491,7 @@ mod tests {
             .dispatch(
                 AuthCommand::Complete {
                     flow_id: flow_id.clone(),
-                    callback_url: "redacted".into(),
+                    callback_url: Some("redacted".into()),
                 },
                 1_600,
             )
@@ -493,7 +506,7 @@ mod tests {
     fn complete_debug_redacts_callback() {
         let command = AuthCommand::Complete {
             flow_id: "flow".into(),
-            callback_url: "sensitive-callback".into(),
+            callback_url: Some("sensitive-callback".into()),
         };
         let rendered = format!("{command:?}");
         assert!(!rendered.contains("sensitive-callback"));
