@@ -47,7 +47,6 @@
       "depth": 1
     }
   },
-  "warnings": [],
   "next_actions": [
     {
       "command": "tori search 'tuoli' --page 2 --limit 20"

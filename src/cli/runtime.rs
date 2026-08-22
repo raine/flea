@@ -53,38 +53,22 @@ impl CommandRuntime for ProductionRuntime {
     }
 }
 
-fn execute_auth(mut args: super::auth::AuthArgs) -> Result<Value, AppError> {
+fn execute_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
     let paths = state_paths()?;
     if matches!(args.command, super::auth::AuthCommand::Login) {
         return execute_interactive_login(paths);
     }
 
-    let uses_captured_callback = match &mut args.command {
-        super::auth::AuthCommand::Start => {
-            auth_callback::prepare(&paths)?;
-            false
-        }
-        super::auth::AuthCommand::Complete { callback_url, .. } if callback_url.is_none() => {
-            *callback_url = Some(auth_callback::read(&paths)?);
-            true
-        }
-        _ => false,
-    };
-
-    let store = FileAuthStore::new(paths.clone());
+    let store = FileAuthStore::new(paths);
     let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
-    let result = block_on(handler.dispatch(args.command, unix_time_now()?));
-    if uses_captured_callback {
-        let _ = auth_callback::clear(&paths);
-    }
-    result
+    block_on(handler.dispatch(args.command))
 }
 
 fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError> {
     auth_callback::prepare(&paths)?;
     let store = FileAuthStore::new(paths.clone());
     let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
-    let started = block_on(handler.dispatch(super::auth::AuthCommand::Start, unix_time_now()?))?;
+    let started = handler.start(unix_time_now()?)?;
     let flow_id = auth_value(&started, "flow_id")?.to_owned();
     let login_url = auth_value(&started, "login_url")?;
     let expires_at_unix = started
@@ -92,13 +76,7 @@ fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError> {
         .and_then(Value::as_u64)
         .ok_or_else(|| AppError::unexpected("authentication start returned an invalid expiry"))?;
     let callback = auth_callback::open_and_wait(&paths, login_url, expires_at_unix)?;
-    let result = block_on(handler.dispatch(
-        super::auth::AuthCommand::Complete {
-            flow_id,
-            callback_url: Some(callback),
-        },
-        unix_time_now()?,
-    ));
+    let result = block_on(handler.complete(&flow_id, &callback, unix_time_now()?));
     let _ = auth_callback::clear(&paths);
     result
 }

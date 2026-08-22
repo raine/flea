@@ -17,7 +17,6 @@
       "fetch_draft"
     ]
   },
-  "warnings": [],
   "next_actions": [
     {
       "command": "tori draft update 36443414 --input PATH"

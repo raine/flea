@@ -12,7 +12,9 @@ pub struct Envelope<T = Value> {
     pub error: Option<ErrorBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partial: Option<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub next_actions: Vec<NextAction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<Diagnostics>,

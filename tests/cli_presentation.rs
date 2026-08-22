@@ -132,9 +132,10 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(create.contains("--input <PATH>"));
     assert!(create.contains("Read listing fields from a JSON object"));
 
-    let complete = stdout(&invoke(&["auth", "complete", "--help"]));
-    assert!(complete.contains("Flow identifier returned by `tori auth start`"));
-    assert!(complete.contains("Full callback URL received after browser authentication"));
+    let auth = stdout(&invoke(&["auth", "--help"]));
+    assert!(auth.contains("login   Sign in through the browser"));
+    assert!(auth.contains("status  Show authentication status"));
+    assert!(auth.contains("logout  Clear authentication state"));
 }
 
 #[test]

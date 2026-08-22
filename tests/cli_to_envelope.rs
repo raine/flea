@@ -66,10 +66,15 @@ struct TestRuntime {
 impl CommandRuntime for TestRuntime {
     fn execute(&self, command: Command) -> Result<Value, AppError> {
         match command {
-            Command::Auth(args) => block_on(
-                AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
-                    .dispatch(args.command, 1_000),
-            ),
+            Command::Auth(args) => match args.command {
+                tori::cli::auth::AuthCommand::Login => {
+                    Ok(json!({ "authenticated": true, "user_id": "user-1" }))
+                }
+                command => block_on(
+                    AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
+                        .dispatch(command),
+                ),
+            },
             Command::Category(args) => {
                 let api = HttpListingsApi::new(Arc::new(self.client.clone()));
                 category::dispatch_with_api(args, &api)
@@ -179,27 +184,18 @@ impl AuthenticationApi for FakeAuthApi {
 }
 
 #[test]
-fn auth_start_flows_from_parser_to_one_envelope() {
+fn auth_login_flows_from_parser_to_one_envelope() {
     let value = invoke(
         &TestRuntime {
             client: MockClient::default(),
         },
-        ["tori", "--format", "json", "auth", "start"],
+        ["tori", "--format", "json", "auth", "login"],
     );
 
     assert_eq!(value["ok"], true);
-    assert!(
-        value["data"]["login_url"]
-            .as_str()
-            .unwrap()
-            .contains("oauth")
-    );
-    assert!(
-        value["data"]["completion_command"]
-            .as_str()
-            .unwrap()
-            .starts_with("tori auth complete ")
-    );
+    assert_eq!(value["data"]["authenticated"], true);
+    assert!(value.get("warnings").is_none());
+    assert!(value.get("next_actions").is_none());
 }
 
 #[test]

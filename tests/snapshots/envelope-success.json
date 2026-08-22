@@ -11,7 +11,6 @@
       }
     ]
   },
-  "warnings": [],
   "next_actions": [
     {
       "command": "tori draft show 36443414"

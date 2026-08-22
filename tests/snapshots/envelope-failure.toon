@@ -8,7 +8,6 @@ error:
 partial:
   draft_id: "36443414"
   completed_steps[1]: fetch_draft
-warnings[0]:
 next_actions[1]{command}:
   "tori draft update 36443414 --input PATH"
 diagnostics:

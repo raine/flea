@@ -35,6 +35,5 @@ data:
     name: Helsinki
     parent: Uusimaa
     depth: 1
-warnings[0]:
 next_actions[1]{command}:
   "tori search 'tuoli' --page 2 --limit 20"

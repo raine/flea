@@ -30,23 +30,6 @@ pub enum AuthCommand {
     )]
     Login,
     #[command(
-        about = "Start browser authentication",
-        long_about = "Create a short-lived OAuth flow and print the login URL and exact completion command."
-    )]
-    Start,
-    #[command(
-        about = "Complete browser authentication",
-        long_about = "Validate an OAuth callback for a saved flow, exchange its code, and store Tori credentials."
-    )]
-    Complete {
-        /// Flow identifier returned by `tori auth start`.
-        flow_id: String,
-        /// Full callback URL received after browser authentication.
-        ///
-        /// On macOS this is read from the Tori CLI Auth receiver when omitted.
-        callback_url: Option<String>,
-    },
-    #[command(
         about = "Show authentication status",
         long_about = "Report whether Tori credentials are stored and identify the authenticated account when available."
     )]
@@ -62,12 +45,6 @@ impl std::fmt::Debug for AuthCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Login => formatter.write_str("Login"),
-            Self::Start => formatter.write_str("Start"),
-            Self::Complete { flow_id, .. } => formatter
-                .debug_struct("Complete")
-                .field("flow_id", flow_id)
-                .field("callback_url", &"<redacted>")
-                .finish(),
             Self::Status => formatter.write_str("Status"),
             Self::Logout => formatter.write_str("Logout"),
         }
@@ -194,31 +171,23 @@ impl<A, S> AuthCommandHandler<A, S> {
 }
 
 impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
-    pub async fn dispatch(&self, command: AuthCommand, now_unix: u64) -> Result<Value, AppError> {
+    pub async fn dispatch(&self, command: AuthCommand) -> Result<Value, AppError> {
         match command {
             AuthCommand::Login => Err(AppError::unexpected(
                 "interactive browser login requires the production runtime",
             )),
-            AuthCommand::Start => self.start(now_unix),
-            AuthCommand::Complete {
-                flow_id,
-                callback_url,
-            } => {
-                let callback_url = callback_url.ok_or_else(callback_not_captured)?;
-                self.complete(&flow_id, &callback_url, now_unix).await
-            }
             AuthCommand::Status => self.status(),
             AuthCommand::Logout => self.logout(),
         }
     }
 
-    fn start(&self, now_unix: u64) -> Result<Value, AppError> {
+    pub(crate) fn start(&self, now_unix: u64) -> Result<Value, AppError> {
         let (flow, output) = self.auth.start(now_unix)?;
         self.store.save_flow(&flow).map_err(storage_error)?;
         serialize(output)
     }
 
-    async fn complete(
+    pub(crate) async fn complete(
         &self,
         flow_id: &str,
         callback_url: &str,
@@ -328,14 +297,6 @@ fn flow_expired() -> AppError {
             command: "tori auth start".to_owned(),
         });
     error
-}
-
-fn callback_not_captured() -> AppError {
-    AppError::new(
-        "auth.callback_not_captured",
-        "the browser authentication callback has not been captured",
-        ExitClass::Authentication,
-    )
 }
 
 fn storage_error(source: AppError) -> AppError {
@@ -450,10 +411,10 @@ mod tests {
     #[tokio::test]
     async fn status_and_logout_are_idempotent_and_secret_free() {
         let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
-        let initial = handler.dispatch(AuthCommand::Status, 1_000).await.unwrap();
+        let initial = handler.dispatch(AuthCommand::Status).await.unwrap();
         assert_eq!(initial, serde_json::json!({ "authenticated": false }));
 
-        let started = handler.dispatch(AuthCommand::Start, 1_000).await.unwrap();
+        let started = handler.start(1_000).unwrap();
         let flow_id = started["flow_id"].as_str().unwrap().to_owned();
         let flow = handler.store.load_flow(&flow_id).unwrap().unwrap();
         let callback = format!(
@@ -461,18 +422,9 @@ mod tests {
             crate::api::auth::CALLBACK_SCHEME,
             flow.state_for_adapter()
         );
-        handler
-            .dispatch(
-                AuthCommand::Complete {
-                    flow_id,
-                    callback_url: Some(callback),
-                },
-                1_001,
-            )
-            .await
-            .unwrap();
+        handler.complete(&flow_id, &callback, 1_001).await.unwrap();
 
-        let status = handler.dispatch(AuthCommand::Status, 1_001).await.unwrap();
+        let status = handler.dispatch(AuthCommand::Status).await.unwrap();
         assert_eq!(
             status,
             serde_json::json!({ "authenticated": true, "user_id": "42" })
@@ -481,11 +433,11 @@ mod tests {
         assert!(!status.to_string().contains("refresh"));
 
         assert_eq!(
-            handler.dispatch(AuthCommand::Logout, 1_001).await.unwrap(),
+            handler.dispatch(AuthCommand::Logout).await.unwrap(),
             serde_json::json!({ "authenticated": false })
         );
         assert_eq!(
-            handler.dispatch(AuthCommand::Logout, 1_001).await.unwrap(),
+            handler.dispatch(AuthCommand::Logout).await.unwrap(),
             serde_json::json!({ "authenticated": false })
         );
     }
@@ -493,32 +445,15 @@ mod tests {
     #[tokio::test]
     async fn expired_completion_deletes_sensitive_flow_material() {
         let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
-        let started = handler.dispatch(AuthCommand::Start, 1_000).await.unwrap();
+        let started = handler.start(1_000).unwrap();
         let flow_id = started["flow_id"].as_str().unwrap().to_owned();
 
         let error = handler
-            .dispatch(
-                AuthCommand::Complete {
-                    flow_id: flow_id.clone(),
-                    callback_url: Some("redacted".into()),
-                },
-                1_600,
-            )
+            .complete(&flow_id, "redacted", 1_600)
             .await
             .unwrap_err();
 
         assert_eq!(error.code, "auth.flow_expired");
         assert!(handler.store.load_flow(&flow_id).unwrap().is_none());
-    }
-
-    #[test]
-    fn complete_debug_redacts_callback() {
-        let command = AuthCommand::Complete {
-            flow_id: "flow".into(),
-            callback_url: Some("sensitive-callback".into()),
-        };
-        let rendered = format!("{command:?}");
-        assert!(!rendered.contains("sensitive-callback"));
-        assert!(rendered.contains("<redacted>"));
     }
 }

@@ -33,7 +33,6 @@ pub struct RunResult {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AuthPresentation {
     Structured,
-    Start,
     Login,
 }
 
@@ -134,9 +133,6 @@ fn auth_presentation(format: output::OutputFormat, command: &cli::Command) -> Au
     }
     match command {
         cli::Command::Auth(cli::auth::AuthArgs {
-            command: cli::auth::AuthCommand::Start,
-        }) => AuthPresentation::Start,
-        cli::Command::Auth(cli::auth::AuthArgs {
             command: cli::auth::AuthCommand::Login,
         }) => AuthPresentation::Login,
         _ => AuthPresentation::Structured,
@@ -153,7 +149,6 @@ fn finish(
         Ok(mut data) => {
             let plain_document = match auth_presentation {
                 AuthPresentation::Structured => None,
-                AuthPresentation::Start => Some(output::render_auth_start(&data)),
                 AuthPresentation::Login => Some(output::render_auth_login(&data)),
             };
             if let Some(document) = plain_document {
