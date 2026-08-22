@@ -21,7 +21,7 @@ use tori::{
 type UpdateCall = (String, String, BTreeMap<String, Value>);
 
 struct MockListingsApi {
-    categories: Vec<UpstreamCategory>,
+    categories: Result<Vec<UpstreamCategory>, ListingsApiError>,
     pages: Mutex<VecDeque<UpstreamListingPage>>,
     listings: Mutex<VecDeque<UpstreamListing>>,
     updates: Mutex<VecDeque<Result<UpstreamListing, ListingsApiError>>>,
@@ -34,7 +34,7 @@ struct MockListingsApi {
 impl MockListingsApi {
     fn fixtures() -> Self {
         Self {
-            categories: fixture("categories.json"),
+            categories: Ok(fixture("categories.json")),
             pages: Mutex::new(VecDeque::from([
                 fixture("page-1.json"),
                 fixture("page-2.json"),
@@ -51,7 +51,7 @@ impl MockListingsApi {
 
 impl ListingsApi for MockListingsApi {
     fn categories(&self) -> Result<Vec<UpstreamCategory>, ListingsApiError> {
-        Ok(self.categories.clone())
+        self.categories.clone()
     }
 
     fn listing_page(
@@ -124,6 +124,65 @@ fn discovers_category_roots_children_and_search_paths() {
         matches.categories[0].path,
         "Koti ja sisustus > Huonekalut > Työtuolit"
     );
+}
+
+#[test]
+fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
+    let taxonomy: tori::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
+        include_str!("fixtures/listings/category-taxonomy-live.json"),
+    )
+    .unwrap();
+    let mut api = MockListingsApi::fixtures();
+    api.categories = Ok(taxonomy.categories);
+    let listings = Listings::new(&api);
+
+    let cycling = listings.search_categories("polkupyörä").unwrap();
+    assert_eq!(cycling.categories.len(), 2);
+    assert_eq!(cycling.categories[0].category_id, "8375");
+    assert_eq!(cycling.categories[1].category_id, "257");
+    assert_eq!(
+        cycling.categories[1].path,
+        "Urheilu ja ulkoilu > Pyöräily > Polkupyörät"
+    );
+
+    let children = listings.categories(Some("3963")).unwrap();
+    assert_eq!(children.categories.len(), 6);
+    assert!(children.categories.iter().all(|category| {
+        category.parent_id.as_deref() == Some("3963")
+            && category
+                .path
+                .starts_with("Urheilu ja ulkoilu > Pyöräily > ")
+    }));
+
+    let no_matches = listings.search_categories("lukko").unwrap();
+    assert!(no_matches.categories.is_empty());
+}
+
+#[test]
+fn category_failures_distinguish_collection_parent_and_protocol_errors() {
+    let mut api = MockListingsApi::fixtures();
+    api.categories = Err(ListingsApiError::NotFound);
+    let endpoint = Listings::new(&api)
+        .search_categories("pyöräily")
+        .unwrap_err();
+    assert_eq!(endpoint.code, "category.endpoint_unavailable");
+    assert_eq!(endpoint.exit_class.code(), 40);
+
+    let api = MockListingsApi::fixtures();
+    let parent = Listings::new(&api).categories(Some("missing")).unwrap_err();
+    assert_eq!(parent.code, "category.not_found");
+    assert_eq!(parent.details.unwrap()["category_id"], "missing");
+
+    let mut api = MockListingsApi::fixtures();
+    api.categories = Ok(vec![UpstreamCategory {
+        id: "100".to_owned(),
+        label: String::new(),
+        parent_id: None,
+        selectable: Some(true),
+        children: Vec::new(),
+    }]);
+    let malformed = Listings::new(&api).categories(None).unwrap_err();
+    assert_eq!(malformed.code, "category.protocol_drift");
 }
 
 #[test]

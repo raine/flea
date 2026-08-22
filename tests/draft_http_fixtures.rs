@@ -188,6 +188,29 @@ async fn update_conflict_fetches_and_returns_fresh_remote_state() {
 }
 
 #[tokio::test]
+async fn discovered_numeric_category_is_sent_as_the_composer_machine_value() {
+    let transport = FixtureTransport::new([
+        response(201, draft("one", json!({}))),
+        response(200, draft("two", json!({ "values": { "category": 258 } }))),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    workflow
+        .create(
+            Map::from_iter([("category".to_owned(), json!("258"))]),
+            &[] as &[&str],
+        )
+        .await
+        .unwrap();
+
+    let requests = transport.requests();
+    assert_eq!(
+        requests[1].body,
+        RequestBody::Json(json!({ "category": 258 }))
+    );
+}
+
+#[tokio::test]
 async fn post_creation_failure_keeps_recovery_context() {
     let transport = FixtureTransport::new([
         response(201, draft("one", json!({}))),

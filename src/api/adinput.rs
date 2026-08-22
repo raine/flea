@@ -853,6 +853,13 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         let mut completed = vec!["create_draft".to_owned()];
 
         if let Some(category) = values.remove("category") {
+            let category = match category {
+                Value::String(id) => id
+                    .parse::<u64>()
+                    .map(Value::from)
+                    .unwrap_or(Value::String(id)),
+                category => category,
+            };
             let category_values = Map::from_iter([("category".to_owned(), category)]);
             draft = self
                 .api

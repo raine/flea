@@ -6,7 +6,23 @@ and the live smoke harness must not publish listings.
 1. Authenticate with `tori auth start`, complete the browser flow, and run
    `tori auth status`.
 2. Choose a selectable machine value with `tori category search QUERY` or
-   `tori category list`.
+   `tori category list`. Discover category IDs from Tori's listing-composer
+   taxonomy for every workflow. Do not guess or retain an ID based on its label.
+
+   For example, discover the bicycle-accessory category and pass the returned
+   machine value into draft creation:
+
+   ```sh
+   tori --format json category search pyöräilyvarusteet
+   CATEGORY="$(tori --format json category search pyöräilyvarusteet \
+     | jq -er '.data.categories[] | select(.label == "Pyöräilyvarusteet" and .selectable) | .category_id' \
+     | head -n 1)"
+   tori draft create --category "$CATEGORY"
+   ```
+
+   Browse the same hierarchy with `tori category list` and
+   `tori category list --parent "$CATEGORY"`. A query with no matches succeeds
+   with an empty `categories` collection.
 3. Create a draft with an explicit category, title, description, price, trade
    type, postal code, and delivery configuration. Add one disposable test image.
 4. Run `tori draft show DRAFT_ID`. Confirm every required field is set, the

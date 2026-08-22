@@ -5,7 +5,7 @@ use std::{
 };
 
 use reqwest::{Method, StatusCode, header::HeaderValue};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
@@ -83,31 +83,31 @@ impl HttpListingsApi {
                 .join()
                 .map_err(|_| ListingsApiError::Upstream("HTTP worker panicked".to_owned()))?
         })?;
-        match response.status {
-            StatusCode::NOT_FOUND => return Err(ListingsApiError::NotFound),
-            StatusCode::PRECONDITION_FAILED | StatusCode::CONFLICT => {
-                return Err(ListingsApiError::Conflict);
-            }
-            status if !status.is_success() => {
-                let message = serde_json::from_slice::<Value>(&response.body)
-                    .ok()
-                    .and_then(|value| {
-                        value
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .unwrap_or_else(|| format!("Tori returned HTTP {}", status.as_u16()));
-                return Err(ListingsApiError::Upstream(message));
-            }
-            _ => {}
-        }
-        if response.body.is_empty() {
-            serde_json::from_value(Value::Null)
-        } else {
-            serde_json::from_slice(&response.body)
-        }
-        .map_err(|error| ListingsApiError::UnexpectedResponse(error.to_string()))
+        decode_response(response.status, &response.body)
+    }
+
+    fn request_with_service<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: String,
+        service: &str,
+    ) -> Result<T, ListingsApiError> {
+        let request = RequestSpec::new(method, path, service);
+        let client = Arc::clone(&self.client);
+        let response = std::thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|error| ListingsApiError::Upstream(error.to_string()))?
+                        .block_on(client.execute(request))
+                        .map_err(|error| ListingsApiError::Upstream(error.to_string()))
+                })
+                .join()
+                .map_err(|_| ListingsApiError::Upstream("HTTP worker panicked".to_owned()))?
+        })?;
+        decode_response(response.status, &response.body)
     }
 
     fn empty(&self, method: Method, path: String) -> Result<(), ListingsApiError> {
@@ -115,14 +115,48 @@ impl HttpListingsApi {
     }
 }
 
+fn decode_response<T: DeserializeOwned>(
+    status: StatusCode,
+    body: &[u8],
+) -> Result<T, ListingsApiError> {
+    match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+            return Err(ListingsApiError::Authentication);
+        }
+        StatusCode::NOT_FOUND => return Err(ListingsApiError::NotFound),
+        StatusCode::PRECONDITION_FAILED | StatusCode::CONFLICT => {
+            return Err(ListingsApiError::Conflict);
+        }
+        status if !status.is_success() => {
+            let message = serde_json::from_slice::<Value>(body)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| format!("Tori returned HTTP {}", status.as_u16()));
+            return Err(ListingsApiError::Upstream(message));
+        }
+        _ => {}
+    }
+    if body.is_empty() {
+        serde_json::from_value(Value::Null)
+    } else {
+        serde_json::from_slice(body)
+    }
+    .map_err(|error| ListingsApiError::UnexpectedResponse(error.to_string()))
+}
+
 impl ListingsApi for HttpListingsApi {
     fn categories(&self) -> Result<Vec<UpstreamCategory>, ListingsApiError> {
-        self.request(
+        self.request_with_service::<UpstreamCategoryTaxonomy>(
             Method::GET,
-            "/my/listings/categories".to_owned(),
-            None,
-            None,
+            "/categories/taxonomy".to_owned(),
+            compatibility::SERVICE_ITEM_CREATION,
         )
+        .map(|taxonomy| taxonomy.categories)
     }
 
     fn listing_page(
@@ -172,6 +206,8 @@ impl ListingsApi for HttpListingsApi {
 
 #[derive(Clone, thiserror::Error, PartialEq)]
 pub enum ListingsApiError {
+    #[error("authentication failed")]
+    Authentication,
     #[error("resource was not found")]
     NotFound,
     #[error("the resource changed remotely")]
@@ -190,6 +226,7 @@ pub enum ListingsApiError {
 impl fmt::Debug for ListingsApiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Authentication => formatter.write_str("Authentication"),
             Self::NotFound => formatter.write_str("NotFound"),
             Self::Conflict => formatter.write_str("Conflict"),
             Self::Validation { fields, .. } => formatter
@@ -204,16 +241,34 @@ impl fmt::Debug for ListingsApiError {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct UpstreamCategoryTaxonomy {
+    pub categories: Vec<UpstreamCategory>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct UpstreamCategory {
-    #[serde(alias = "category_id")]
+    #[serde(alias = "category_id", deserialize_with = "deserialize_category_id")]
     pub id: String,
     pub label: String,
     #[serde(default, alias = "parent_id")]
     pub parent_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "isSelectable")]
     pub selectable: Option<bool>,
     #[serde(default)]
     pub children: Vec<UpstreamCategory>,
+}
+
+fn deserialize_category_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match Value::deserialize(deserializer)? {
+        Value::String(id) => Ok(id),
+        Value::Number(id) if id.is_u64() => Ok(id.to_string()),
+        _ => Err(serde::de::Error::custom(
+            "category ID must be a string or unsigned integer",
+        )),
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -325,7 +380,7 @@ impl<'a> Listings<'a> {
 
     pub fn categories(&self, parent: Option<&str>) -> Result<CategoryList, AppError> {
         let categories = self.api.categories().map_err(category_error)?;
-        let flattened = flatten_categories(&categories);
+        let flattened = flatten_categories(&categories).map_err(category_protocol_error)?;
 
         if let Some(parent_id) = parent
             && !flattened
@@ -355,6 +410,7 @@ impl<'a> Listings<'a> {
 
         let categories = self.api.categories().map_err(category_error)?;
         let mut scored: Vec<(u8, Category)> = flatten_categories(&categories)
+            .map_err(category_protocol_error)?
             .into_iter()
             .filter_map(|category| {
                 let label = category.label.to_lowercase();
@@ -525,15 +581,29 @@ impl<'a> Listings<'a> {
     }
 }
 
-fn flatten_categories(roots: &[UpstreamCategory]) -> Vec<Category> {
+fn flatten_categories(roots: &[UpstreamCategory]) -> Result<Vec<Category>, String> {
     fn visit(
         nodes: &[UpstreamCategory],
         inherited_parent: Option<&str>,
         parent_path: &str,
+        seen: &mut HashSet<String>,
         output: &mut Vec<Category>,
-    ) {
+    ) -> Result<(), String> {
         for node in nodes {
-            let parent_id = node.parent_id.as_deref().or(inherited_parent);
+            if node.id.trim().is_empty() || !node.id.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("category taxonomy contains an invalid ID".to_owned());
+            }
+            if node.label.trim().is_empty() {
+                return Err("category taxonomy contains an empty label".to_owned());
+            }
+            if !seen.insert(node.id.clone()) {
+                return Err("category taxonomy contains a duplicate ID".to_owned());
+            }
+            if let Some(parent_id) = node.parent_id.as_deref()
+                && Some(parent_id) != inherited_parent
+            {
+                return Err("category taxonomy contains an inconsistent parent ID".to_owned());
+            }
             let path = if parent_path.is_empty() {
                 node.label.clone()
             } else {
@@ -542,17 +612,21 @@ fn flatten_categories(roots: &[UpstreamCategory]) -> Vec<Category> {
             output.push(Category {
                 category_id: node.id.clone(),
                 label: node.label.clone(),
-                parent_id: parent_id.map(ToOwned::to_owned),
+                parent_id: inherited_parent.map(ToOwned::to_owned),
                 path: path.clone(),
                 selectable: node.selectable.unwrap_or(node.children.is_empty()),
             });
-            visit(&node.children, Some(&node.id), &path, output);
+            visit(&node.children, Some(&node.id), &path, seen, output)?;
         }
+        Ok(())
     }
 
+    if roots.is_empty() {
+        return Err("category taxonomy is empty".to_owned());
+    }
     let mut output = Vec::new();
-    visit(roots, None, "", &mut output);
-    output
+    visit(roots, None, "", &mut HashSet::new(), &mut output)?;
+    Ok(output)
 }
 
 fn normalize_summary(raw: UpstreamListingSummary) -> Result<ListingSummary, AppError> {
@@ -773,13 +847,39 @@ fn validation_error(field: &str, message: &str) -> AppError {
 
 fn category_error(error: ListingsApiError) -> AppError {
     match error {
-        ListingsApiError::NotFound => resource_not_found("category.not_found", "category", ""),
-        other => upstream_error(other),
+        ListingsApiError::Authentication => AppError::authentication(
+            "category.authentication_failed",
+            "Tori rejected authentication for category discovery",
+        ),
+        ListingsApiError::NotFound => AppError::upstream(
+            "category.endpoint_unavailable",
+            "Tori's category taxonomy endpoint is unavailable",
+        ),
+        ListingsApiError::UnexpectedResponse(message) => category_protocol_error(message),
+        other => {
+            let mut error = AppError::upstream(
+                "category.request_failed",
+                "the Tori category taxonomy request failed",
+            );
+            error.retryable = matches!(other, ListingsApiError::Upstream(_));
+            error
+        }
     }
+}
+
+fn category_protocol_error(_message: String) -> AppError {
+    AppError::upstream(
+        "category.protocol_drift",
+        "Tori returned an unexpected category taxonomy response",
+    )
 }
 
 fn listing_error(error: ListingsApiError, listing_id: Option<&str>) -> AppError {
     match error {
+        ListingsApiError::Authentication => AppError::authentication(
+            "auth.rejected",
+            "Tori rejected authentication for the listing request",
+        ),
         ListingsApiError::NotFound => resource_not_found(
             "listing.not_found",
             "listing",

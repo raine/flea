@@ -440,7 +440,13 @@ fn public_search_result_flows_into_unauthenticated_item_detail() {
 fn category_and_listing_commands_flow_through_http_normalization() {
     let categories = MockClient::with_responses([response(
         StatusCode::OK,
-        json!([{ "id": "100", "label": "Furniture", "selectable": true }]),
+        json!({
+            "categories": [{
+                "id": 100,
+                "label": "Furniture",
+                "isSelectable": true
+            }]
+        }),
     )]);
     let category = invoke(
         &TestRuntime {
@@ -449,6 +455,9 @@ fn category_and_listing_commands_flow_through_http_normalization() {
         ["tori", "--format", "json", "category", "list"],
     );
     assert_eq!(category["data"]["categories"][0]["category_id"], "100");
+    let requests = categories.requests.lock().unwrap();
+    assert_eq!(requests[0].path_and_query, "/categories/taxonomy");
+    assert_eq!(requests[0].service, "RC-ITEM-CREATION-FLOW-API");
 
     let listings = MockClient::with_responses([response(
         StatusCode::OK,
@@ -467,6 +476,39 @@ fn category_and_listing_commands_flow_through_http_normalization() {
     );
     assert_eq!(listing["data"]["listing_id"], "listing-1");
     assert_eq!(listing["data"]["fields"]["title"], "Chair");
+}
+
+#[test]
+fn category_http_failures_have_specific_structured_errors() {
+    let endpoint = invoke_error(
+        &TestRuntime {
+            client: MockClient::with_responses([response(StatusCode::NOT_FOUND, Value::Null)]),
+        },
+        ["tori", "--format", "json", "category", "list"],
+    );
+    assert_eq!(endpoint["error"]["code"], "category.endpoint_unavailable");
+
+    let authentication = invoke_error(
+        &TestRuntime {
+            client: MockClient::with_responses([response(StatusCode::UNAUTHORIZED, Value::Null)]),
+        },
+        ["tori", "--format", "json", "category", "list"],
+    );
+    assert_eq!(
+        authentication["error"]["code"],
+        "category.authentication_failed"
+    );
+
+    let malformed = invoke_error(
+        &TestRuntime {
+            client: MockClient::with_responses([response(
+                StatusCode::OK,
+                json!({ "categories": [{ "id": "bad" }] }),
+            )]),
+        },
+        ["tori", "--format", "json", "category", "list"],
+    );
+    assert_eq!(malformed["error"]["code"], "category.protocol_drift");
 }
 
 #[test]
@@ -502,6 +544,13 @@ fn listing_list_uses_the_published_listing_search_endpoint_and_paginates() {
 fn invoke<const N: usize>(runtime: &TestRuntime, args: [&str; N]) -> Value {
     let result = run_with_runtime(args, runtime);
     assert_eq!(result.exit_code, 0, "{}", result.document);
+    assert_eq!(result.presentation, Presentation::Structured);
+    serde_json::from_str(&result.document).expect("one JSON envelope")
+}
+
+fn invoke_error<const N: usize>(runtime: &TestRuntime, args: [&str; N]) -> Value {
+    let result = run_with_runtime(args, runtime);
+    assert_ne!(result.exit_code, 0, "{}", result.document);
     assert_eq!(result.presentation, Presentation::Structured);
     serde_json::from_str(&result.document).expect("one JSON envelope")
 }

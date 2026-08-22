@@ -1,0 +1,3180 @@
+{
+  "categories": [
+    {
+      "id": 76,
+      "label": "Antiikki ja taide",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 5178,
+          "label": "Antiikkihuonekalut",
+          "isSelectable": true
+        },
+        {
+          "id": 5179,
+          "label": "Aterimet ja pöytähopeat",
+          "isSelectable": true
+        },
+        {
+          "id": 5176,
+          "label": "Keramiikka, posliini ja lasi",
+          "isSelectable": true
+        },
+        {
+          "id": 5177,
+          "label": "Taide",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 385,
+              "label": "Akryylimaalaukset",
+              "isSelectable": true
+            },
+            {
+              "id": 394,
+              "label": "Grafiikka",
+              "isSelectable": true
+            },
+            {
+              "id": 389,
+              "label": "Litografia",
+              "isSelectable": true
+            },
+            {
+              "id": 392,
+              "label": "Piirustukset",
+              "isSelectable": true
+            },
+            {
+              "id": 393,
+              "label": "Puupiirrokset",
+              "isSelectable": true
+            },
+            {
+              "id": 387,
+              "label": "Sekatekniikkateokset",
+              "isSelectable": true
+            },
+            {
+              "id": 388,
+              "label": "Valokuvat",
+              "isSelectable": true
+            },
+            {
+              "id": 391,
+              "label": "Veistokset",
+              "isSelectable": true
+            },
+            {
+              "id": 386,
+              "label": "Vesivärimaalaukset",
+              "isSelectable": true
+            },
+            {
+              "id": 390,
+              "label": "Öljyvärimaalaukset",
+              "isSelectable": true
+            },
+            {
+              "id": 395,
+              "label": "Muu taide",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5175,
+          "label": "Muu antiikki",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 90,
+      "label": "Auto-, vene- ja moottoripyörätarvikkeet",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 70,
+          "label": "Asuntoauto- ja matkailuautotarvikkeet",
+          "isSelectable": true
+        },
+        {
+          "id": 82,
+          "label": "Auton osat",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 3,
+              "label": "Auton istuimet",
+              "isSelectable": true
+            },
+            {
+              "id": 8,
+              "label": "Auton sisätilatarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 2,
+              "label": "Auton varaosat",
+              "isSelectable": true
+            },
+            {
+              "id": 5,
+              "label": "Autostereot",
+              "isSelectable": true
+            },
+            {
+              "id": 4,
+              "label": "Kattotelineet ja suksiboksit",
+              "isSelectable": true
+            },
+            {
+              "id": 344,
+              "label": "Navigaattorit autoon",
+              "isSelectable": true
+            },
+            {
+              "id": 6,
+              "label": "Renkaat ja vanteet",
+              "isSelectable": true
+            },
+            {
+              "id": 9,
+              "label": "Muut auton osat",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 20,
+          "label": "MP-tarvikkeet ja varaosat",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9433,
+              "label": "Moottorikelkan varaosat ja tarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 10,
+              "label": "Moottoripyörän varaosat",
+              "isSelectable": true
+            },
+            {
+              "id": 12,
+              "label": "Moottoripyörävaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 11,
+              "label": "Moottoripyörävarusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 9432,
+              "label": "Mopon varaosat ja tarvikkeet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3975,
+          "label": "Mönkijän varaosat",
+          "isSelectable": true
+        },
+        {
+          "id": 80,
+          "label": "Trailerit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 17,
+              "label": "Autotrailerit",
+              "isSelectable": true
+            },
+            {
+              "id": 19,
+              "label": "Hevostrailerit",
+              "isSelectable": true
+            },
+            {
+              "id": 309,
+              "label": "Kippikärryt",
+              "isSelectable": true
+            },
+            {
+              "id": 15,
+              "label": "Kuomukärryt",
+              "isSelectable": true
+            },
+            {
+              "id": 18,
+              "label": "Lavettikärryt",
+              "isSelectable": true
+            },
+            {
+              "id": 517,
+              "label": "Myyntivaunut ja kioskivaunut",
+              "isSelectable": true
+            },
+            {
+              "id": 16,
+              "label": "Mönkijä- ja moottoripyöräkärryt",
+              "isSelectable": true
+            },
+            {
+              "id": 13,
+              "label": "Peräkärryt",
+              "isSelectable": true
+            },
+            {
+              "id": 308,
+              "label": "Traileritarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 14,
+              "label": "Vene- ja säilytystrailerit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 30,
+          "label": "Veneen varaosat",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 323,
+              "label": "Purjevenetarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 319,
+              "label": "Sähkö- ja putkityöt",
+              "isSelectable": true
+            },
+            {
+              "id": 324,
+              "label": "Veneen kiinnitystarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 340,
+              "label": "Veneen moottorin varaosat",
+              "isSelectable": true
+            },
+            {
+              "id": 345,
+              "label": "Veneen navigaattorit",
+              "isSelectable": true
+            },
+            {
+              "id": 321,
+              "label": "Veneen ohjaus ja vinssit",
+              "isSelectable": true
+            },
+            {
+              "id": 320,
+              "label": "Veneen penkit ja sisustus",
+              "isSelectable": true
+            },
+            {
+              "id": 318,
+              "label": "Veneen sähkötarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 9810,
+              "label": "Venemoottorit",
+              "isSelectable": true
+            },
+            {
+              "id": 322,
+              "label": "Veneturvallisuus",
+              "isSelectable": true
+            },
+            {
+              "id": 325,
+              "label": "Muut venetarvikkeet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3974,
+          "label": "Muut autotarvikkeet",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 93,
+      "label": "Elektroniikka ja kodinkoneet",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 3907,
+          "label": "Kodinkoneet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 509,
+              "label": "Astianpesukoneet",
+              "isSelectable": true
+            },
+            {
+              "id": 292,
+              "label": "Jääkaapit",
+              "isSelectable": true
+            },
+            {
+              "id": 75,
+              "label": "Keittolevyt",
+              "isSelectable": true
+            },
+            {
+              "id": 510,
+              "label": "Kuivausrummut ja kuivauskaapit",
+              "isSelectable": true
+            },
+            {
+              "id": 73,
+              "label": "Liedet",
+              "isSelectable": true
+            },
+            {
+              "id": 511,
+              "label": "Liesituulettimet",
+              "isSelectable": true
+            },
+            {
+              "id": 508,
+              "label": "Mikroaaltouunit",
+              "isSelectable": true
+            },
+            {
+              "id": 72,
+              "label": "Pakastimet",
+              "isSelectable": true
+            },
+            {
+              "id": 79,
+              "label": "Pyykinpesukoneet",
+              "isSelectable": true
+            },
+            {
+              "id": 74,
+              "label": "Uunit",
+              "isSelectable": true
+            },
+            {
+              "id": 305,
+              "label": "Muut kodinkoneet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3216,
+          "label": "Kodin pienkoneet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 506,
+              "label": "Kahvinkeittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 87,
+              "label": "Leivänpaahtimet",
+              "isSelectable": true
+            },
+            {
+              "id": 507,
+              "label": "Monitoimikoneet ja yleiskoneet",
+              "isSelectable": true
+            },
+            {
+              "id": 81,
+              "label": "Pölynimurit",
+              "isSelectable": true
+            },
+            {
+              "id": 89,
+              "label": "Sauvasekoittimet ja sähkövatkaimet",
+              "isSelectable": true
+            },
+            {
+              "id": 84,
+              "label": "Silitysraudat",
+              "isSelectable": true
+            },
+            {
+              "id": 83,
+              "label": "Tehosekoittimet ja blenderit",
+              "isSelectable": true
+            },
+            {
+              "id": 85,
+              "label": "Vedenkeittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 88,
+              "label": "Vohveliraudat ja voileipägrillit",
+              "isSelectable": true
+            },
+            {
+              "id": 304,
+              "label": "Muut kodin pienkoneet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3217,
+          "label": "Puhelimet ja tarvikkeet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 39,
+              "label": "Matkapuhelimet",
+              "isSelectable": true
+            },
+            {
+              "id": 41,
+              "label": "Puhelintarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 40,
+              "label": "Muut puhelimet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 9809,
+          "label": "Terveys ja hyvinvointi",
+          "isSelectable": true
+        },
+        {
+          "id": 3215,
+          "label": "Tietotekniikka",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 43,
+              "label": "Kannettavat tietokoneet",
+              "isSelectable": true
+            },
+            {
+              "id": 8367,
+              "label": "Kiintolevyt ja tallennustila",
+              "isSelectable": true
+            },
+            {
+              "id": 47,
+              "label": "Laskimet",
+              "isSelectable": true
+            },
+            {
+              "id": 45,
+              "label": "Näytöt",
+              "isSelectable": true
+            },
+            {
+              "id": 46,
+              "label": "Oheislaitteet",
+              "isSelectable": true
+            },
+            {
+              "id": 49,
+              "label": "Ohjelmistot",
+              "isSelectable": true
+            },
+            {
+              "id": 44,
+              "label": "Pöytäkoneet",
+              "isSelectable": true
+            },
+            {
+              "id": 48,
+              "label": "Tabletit ja lukulaitteet",
+              "isSelectable": true
+            },
+            {
+              "id": 8368,
+              "label": "Tietokonekomponentit",
+              "isSelectable": true
+            },
+            {
+              "id": 9434,
+              "label": "Verkkolaitteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3904,
+          "label": "Valokuvaus ja video",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 303,
+              "label": "Hybridikamerat",
+              "isSelectable": true
+            },
+            {
+              "id": 66,
+              "label": "Järjestelmäkamerat",
+              "isSelectable": true
+            },
+            {
+              "id": 500,
+              "label": "Kameralaukut",
+              "isSelectable": true
+            },
+            {
+              "id": 502,
+              "label": "Kompaktikamerat",
+              "isSelectable": true
+            },
+            {
+              "id": 503,
+              "label": "Objektiivit",
+              "isSelectable": true
+            },
+            {
+              "id": 504,
+              "label": "Videokamerat",
+              "isSelectable": true
+            },
+            {
+              "id": 505,
+              "label": "Muut valokuvaustarvikkeet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3905,
+          "label": "Videopelit ja konsolit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 65,
+              "label": "Oheistuotteet",
+              "isSelectable": true
+            },
+            {
+              "id": 63,
+              "label": "Pelikonsolit",
+              "isSelectable": true
+            },
+            {
+              "id": 64,
+              "label": "Pelit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3906,
+          "label": "Ääni ja kuva",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 56,
+              "label": "Blu-ray-soittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 57,
+              "label": "DVD-soittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 326,
+              "label": "Kaapelit ja oheislaitteet",
+              "isSelectable": true
+            },
+            {
+              "id": 53,
+              "label": "Kaiuttimet",
+              "isSelectable": true
+            },
+            {
+              "id": 59,
+              "label": "Kotiteatterilaitteet",
+              "isSelectable": true
+            },
+            {
+              "id": 51,
+              "label": "Kuulokkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 61,
+              "label": "Mediatoistimet ja digiboksit",
+              "isSelectable": true
+            },
+            {
+              "id": 50,
+              "label": "MP3-soittimet ja muut kannettavat soittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 54,
+              "label": "PA-laitteet",
+              "isSelectable": true
+            },
+            {
+              "id": 302,
+              "label": "Radiot",
+              "isSelectable": true
+            },
+            {
+              "id": 55,
+              "label": "Stereot",
+              "isSelectable": true
+            },
+            {
+              "id": 62,
+              "label": "TV",
+              "isSelectable": true
+            },
+            {
+              "id": 52,
+              "label": "Vahvistimet ja viritinvahvistimet",
+              "isSelectable": true
+            },
+            {
+              "id": 58,
+              "label": "Videonauhurit",
+              "isSelectable": true
+            },
+            {
+              "id": 60,
+              "label": "Videotykit ja valkokankaat",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3213,
+          "label": "Muu elektroniikka ja kodinkoneet",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 77,
+      "label": "Eläimet ja eläintarvikkeet",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 3976,
+          "label": "Akvaariot",
+          "isSelectable": true
+        },
+        {
+          "id": 5186,
+          "label": "Eläinten ruokinta, hoito, jalostus ja tallipaikat",
+          "isSelectable": true
+        },
+        {
+          "id": 5190,
+          "label": "Hevoset",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 36,
+              "label": "Kylmäveriset hevoset",
+              "isSelectable": true
+            },
+            {
+              "id": 38,
+              "label": "Lämminveriset hevoset",
+              "isSelectable": true
+            },
+            {
+              "id": 37,
+              "label": "Ponit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5195,
+          "label": "Hevostarvikkeet ja ratsastustarvikkeet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9437,
+              "label": "Hevosen varusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 9436,
+              "label": "Ratsastusvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 9435,
+              "label": "Satulat",
+              "isSelectable": true
+            },
+            {
+              "id": 9438,
+              "label": "Muut varusteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5208,
+          "label": "Hyönteiset ja hämähäkit",
+          "isSelectable": true
+        },
+        {
+          "id": 3977,
+          "label": "Häkit",
+          "isSelectable": true
+        },
+        {
+          "id": 5207,
+          "label": "Jyrsijät ja kanit",
+          "isSelectable": true
+        },
+        {
+          "id": 5206,
+          "label": "Kalat",
+          "isSelectable": true
+        },
+        {
+          "id": 9439,
+          "label": "Karja",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9440,
+              "label": "Kanat ja muu siipikarja",
+              "isSelectable": true
+            },
+            {
+              "id": 9441,
+              "label": "Lampaat ja vuohet",
+              "isSelectable": true
+            },
+            {
+              "id": 9443,
+              "label": "Muu karja",
+              "isSelectable": true
+            },
+            {
+              "id": 9442,
+              "label": "Nautakarja",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5191,
+          "label": "Kissat",
+          "isSelectable": true
+        },
+        {
+          "id": 5194,
+          "label": "Kissatarvikkeet",
+          "isSelectable": true
+        },
+        {
+          "id": 5192,
+          "label": "Koirat",
+          "isSelectable": true
+        },
+        {
+          "id": 5193,
+          "label": "Koiratarvikkeet",
+          "isSelectable": true
+        },
+        {
+          "id": 5205,
+          "label": "Linnut",
+          "isSelectable": true
+        },
+        {
+          "id": 5210,
+          "label": "Matelijat",
+          "isSelectable": true
+        },
+        {
+          "id": 5183,
+          "label": "Muut eläimet",
+          "isSelectable": true
+        },
+        {
+          "id": 5185,
+          "label": "Muut eläintarvikkeet",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 78,
+      "label": "Koti ja sisustus",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 5223,
+          "label": "Astiat ja keittiötarvikkeet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 8361,
+              "label": "Astiastot",
+              "isSelectable": true
+            },
+            {
+              "id": 8360,
+              "label": "Juomalasit",
+              "isSelectable": true
+            },
+            {
+              "id": 8359,
+              "label": "Kahvikupit ja mukit",
+              "isSelectable": true
+            },
+            {
+              "id": 8364,
+              "label": "Keittiövälineet",
+              "isSelectable": true
+            },
+            {
+              "id": 8362,
+              "label": "Ruokailuvälineet",
+              "isSelectable": true
+            },
+            {
+              "id": 8365,
+              "label": "Säilytysastiat",
+              "isSelectable": true
+            },
+            {
+              "id": 8363,
+              "label": "Tarjoiluastiat",
+              "isSelectable": true
+            },
+            {
+              "id": 8366,
+              "label": "Muut keittiötarvikkeet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 8345,
+          "label": "Hyllyt ja lipastot",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 221,
+              "label": "Lipastot",
+              "isSelectable": true
+            },
+            {
+              "id": 219,
+              "label": "Seinähyllyt ja hyllyt",
+              "isSelectable": true
+            },
+            {
+              "id": 220,
+              "label": "Senkit",
+              "isSelectable": true
+            },
+            {
+              "id": 224,
+              "label": "TV-tasot ja mediakalusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 223,
+              "label": "Yöpöydät",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5198,
+          "label": "Kaapit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 222,
+              "label": "Astiakaapit",
+              "isSelectable": true
+            },
+            {
+              "id": 218,
+              "label": "Vaatekaapit",
+              "isSelectable": true
+            },
+            {
+              "id": 225,
+              "label": "Muut kaapit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5222,
+          "label": "Koriste- ja sisustusesineet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 237,
+              "label": "Kuvat ja kehykset",
+              "isSelectable": true
+            },
+            {
+              "id": 240,
+              "label": "Kynttilänjalat",
+              "isSelectable": true
+            },
+            {
+              "id": 238,
+              "label": "Maljakot ja ruukut",
+              "isSelectable": true
+            },
+            {
+              "id": 299,
+              "label": "Peilit",
+              "isSelectable": true
+            },
+            {
+              "id": 239,
+              "label": "Seinälautaset",
+              "isSelectable": true
+            },
+            {
+              "id": 241,
+              "label": "Muut koriste-esineet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5197,
+          "label": "Makuuhuone",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 203,
+              "label": "Patjat",
+              "isSelectable": true
+            },
+            {
+              "id": 293,
+              "label": "Runkopatjat",
+              "isSelectable": true
+            },
+            {
+              "id": 202,
+              "label": "Sängyt",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5180,
+          "label": "Matot ja tekstiilit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 231,
+              "label": "Matot",
+              "isSelectable": true
+            },
+            {
+              "id": 2469,
+              "label": "Pyyhkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 233,
+              "label": "Pöytäliinat",
+              "isSelectable": true
+            },
+            {
+              "id": 232,
+              "label": "Tyynyt",
+              "isSelectable": true
+            },
+            {
+              "id": 234,
+              "label": "Verhot",
+              "isSelectable": true
+            },
+            {
+              "id": 2468,
+              "label": "Vuodetekstiilit",
+              "isSelectable": true
+            },
+            {
+              "id": 235,
+              "label": "Muut matot ja tekstiilit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5196,
+          "label": "Pöydät ja tuolit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 211,
+              "label": "Ruokailuryhmät",
+              "isSelectable": true
+            },
+            {
+              "id": 213,
+              "label": "Ruokapöydät",
+              "isSelectable": true
+            },
+            {
+              "id": 212,
+              "label": "Sohvapöydät",
+              "isSelectable": true
+            },
+            {
+              "id": 215,
+              "label": "Toimistotuolit",
+              "isSelectable": true
+            },
+            {
+              "id": 216,
+              "label": "Tuolit ja jakkarat",
+              "isSelectable": true
+            },
+            {
+              "id": 214,
+              "label": "Työpöydät",
+              "isSelectable": true
+            },
+            {
+              "id": 217,
+              "label": "Muut pöydät ja tuolit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 9760,
+          "label": "Sesonkitarvikkeet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9761,
+              "label": "Joulukuuset",
+              "isSelectable": true
+            },
+            {
+              "id": 9765,
+              "label": "Kattaus",
+              "isSelectable": true
+            },
+            {
+              "id": 9762,
+              "label": "Koristeet",
+              "isSelectable": true
+            },
+            {
+              "id": 9764,
+              "label": "Koristevalot",
+              "isSelectable": true
+            },
+            {
+              "id": 9763,
+              "label": "Tekstiilit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 7756,
+          "label": "Sohvat ja lepotuolit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 207,
+              "label": "Kulmasohvat",
+              "isSelectable": true
+            },
+            {
+              "id": 210,
+              "label": "Nojatuolit",
+              "isSelectable": true
+            },
+            {
+              "id": 209,
+              "label": "Rahit",
+              "isSelectable": true
+            },
+            {
+              "id": 208,
+              "label": "Sohvaryhmät",
+              "isSelectable": true
+            },
+            {
+              "id": 8374,
+              "label": "Sohvat",
+              "isSelectable": true
+            },
+            {
+              "id": 206,
+              "label": "Vuodesohvat",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5181,
+          "label": "Valaisimet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 226,
+              "label": "Kattovalaisimet",
+              "isSelectable": true
+            },
+            {
+              "id": 228,
+              "label": "Lattiavalaisimet",
+              "isSelectable": true
+            },
+            {
+              "id": 229,
+              "label": "Pöytävalaisimet",
+              "isSelectable": true
+            },
+            {
+              "id": 227,
+              "label": "Seinävalaisimet",
+              "isSelectable": true
+            },
+            {
+              "id": 230,
+              "label": "Muut valaisimet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3971,
+          "label": "Muu koti ja sisustus",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 68,
+      "label": "Lapset ja vanhemmat",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 3916,
+          "label": "Lasten kalusteet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 316,
+              "label": "Hoitopöydät",
+              "isSelectable": true
+            },
+            {
+              "id": 314,
+              "label": "Koulupöydät ja muut lasten pöydät",
+              "isSelectable": true
+            },
+            {
+              "id": 315,
+              "label": "Lastenhuoneen säilytyskalusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 312,
+              "label": "Lasten sängyt",
+              "isSelectable": true
+            },
+            {
+              "id": 313,
+              "label": "Lasten tuolit",
+              "isSelectable": true
+            },
+            {
+              "id": 317,
+              "label": "Muut lasten kalusteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3915,
+          "label": "Lasten kengät",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9456,
+              "label": "Ballerinat",
+              "isSelectable": true
+            },
+            {
+              "id": 9452,
+              "label": "Lasten juhlakengät",
+              "isSelectable": true
+            },
+            {
+              "id": 9450,
+              "label": "Lasten kumisaappaat",
+              "isSelectable": true
+            },
+            {
+              "id": 9458,
+              "label": "Lasten lenkkarit",
+              "isSelectable": true
+            },
+            {
+              "id": 9457,
+              "label": "Lasten loaferit ja purjehduskengät",
+              "isSelectable": true
+            },
+            {
+              "id": 9454,
+              "label": "Lasten pistokkaat ja puukengät",
+              "isSelectable": true
+            },
+            {
+              "id": 9449,
+              "label": "Lasten saappaat",
+              "isSelectable": true
+            },
+            {
+              "id": 9453,
+              "label": "Lasten sandaalit",
+              "isSelectable": true
+            },
+            {
+              "id": 9451,
+              "label": "Lasten talvikengät",
+              "isSelectable": true
+            },
+            {
+              "id": 9455,
+              "label": "Tohvelit",
+              "isSelectable": true
+            },
+            {
+              "id": 9448,
+              "label": "Vauvan kengät",
+              "isSelectable": true
+            },
+            {
+              "id": 9459,
+              "label": "Muut lasten kengät",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 8369,
+          "label": "Lasten kirjat",
+          "isSelectable": true
+        },
+        {
+          "id": 3918,
+          "label": "Lastentarvikkeet ja turvallisuus",
+          "isSelectable": true
+        },
+        {
+          "id": 9445,
+          "label": "Lasten tekstiilit ja sisustustarvikkeet",
+          "isSelectable": true
+        },
+        {
+          "id": 3913,
+          "label": "Lasten vaatteet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9444,
+              "label": "Juhlavaatteet ja erityistilaisuudet",
+              "isSelectable": true
+            },
+            {
+              "id": 8350,
+              "label": "Lasten hatut, hanskat ja rukkaset",
+              "isSelectable": true
+            },
+            {
+              "id": 8352,
+              "label": "Lasten housut ja shortsit",
+              "isSelectable": true
+            },
+            {
+              "id": 8357,
+              "label": "Lasten mekot ja hameet",
+              "isSelectable": true
+            },
+            {
+              "id": 8353,
+              "label": "Lasten oloasut ja yöasut",
+              "isSelectable": true
+            },
+            {
+              "id": 8355,
+              "label": "Lasten t-paidat ja paidat",
+              "isSelectable": true
+            },
+            {
+              "id": 8356,
+              "label": "Lasten ulkovaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 8354,
+              "label": "Lasten villapaidat ja muut neuleet",
+              "isSelectable": true
+            },
+            {
+              "id": 9808,
+              "label": "Vaatepaketit",
+              "isSelectable": true
+            },
+            {
+              "id": 8351,
+              "label": "Vauvan bodyt",
+              "isSelectable": true
+            },
+            {
+              "id": 8358,
+              "label": "Muut lasten vaatteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3914,
+          "label": "Lastenvaunut ja rattaat",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9465,
+              "label": "Juoksurattaat",
+              "isSelectable": true
+            },
+            {
+              "id": 9466,
+              "label": "Lastenvaunujen osat ja tarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 9460,
+              "label": "Lastenvaunut",
+              "isSelectable": true
+            },
+            {
+              "id": 9464,
+              "label": "Matkarattaat",
+              "isSelectable": true
+            },
+            {
+              "id": 9463,
+              "label": "Rattaat",
+              "isSelectable": true
+            },
+            {
+              "id": 9462,
+              "label": "Sisarusrattaat ja tuplarattaat",
+              "isSelectable": true
+            },
+            {
+              "id": 9461,
+              "label": "Yhdistelmävaunut",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3912,
+          "label": "Lelut",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9775,
+              "label": "LEGO ja DUPLO",
+              "isSelectable": true
+            },
+            {
+              "id": 332,
+              "label": "Leluautot ja junaradat",
+              "isSelectable": true
+            },
+            {
+              "id": 331,
+              "label": "Pehmolelut, nuket ja figuurit",
+              "isSelectable": true
+            },
+            {
+              "id": 334,
+              "label": "Piirustus- ja askartelutarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 333,
+              "label": "Rakennussarjat ja rakennuspalikat",
+              "isSelectable": true
+            },
+            {
+              "id": 335,
+              "label": "Ulkopelit lapsille",
+              "isSelectable": true
+            },
+            {
+              "id": 330,
+              "label": "Vauvan lelut",
+              "isSelectable": true
+            },
+            {
+              "id": 336,
+              "label": "Muut lelut",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3911,
+          "label": "Turvaistuimet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9447,
+              "label": "Lastenistuimet pyörään",
+              "isSelectable": true
+            },
+            {
+              "id": 9446,
+              "label": "Turvaistuimet autoon",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3948,
+          "label": "Äitiysvaatteet",
+          "isSelectable": true
+        },
+        {
+          "id": 3970,
+          "label": "Muut",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 91,
+      "label": "Liiketoiminta ja palvelut",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 3110,
+          "label": "Esitystekniikka",
+          "isSelectable": true
+        },
+        {
+          "id": 3108,
+          "label": "Kauppa ja jälleenmyynti",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 358,
+              "label": "Maksupäätteet",
+              "isSelectable": true
+            },
+            {
+              "id": 359,
+              "label": "Myymäläkalusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 362,
+              "label": "Myymälävalaistus",
+              "isSelectable": true
+            },
+            {
+              "id": 363,
+              "label": "Tavaraerät ja konkurssipesät",
+              "isSelectable": true
+            },
+            {
+              "id": 360,
+              "label": "Turvallisuus ja valvonta",
+              "isSelectable": true
+            },
+            {
+              "id": 361,
+              "label": "Varastokalusteet ja -tarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 364,
+              "label": "Muut myymälätarvikkeet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3112,
+          "label": "Konetekniikka ja varaosat",
+          "isSelectable": true
+        },
+        {
+          "id": 3111,
+          "label": "Kontit ja työmaakopit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 365,
+              "label": "Kontit",
+              "isSelectable": true
+            },
+            {
+              "id": 367,
+              "label": "Taukovaunut ja siirrettävät WC:t",
+              "isSelectable": true
+            },
+            {
+              "id": 366,
+              "label": "Työmaakopit",
+              "isSelectable": true
+            },
+            {
+              "id": 368,
+              "label": "Muut varusteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3114,
+          "label": "Maatalous",
+          "isSelectable": true
+        },
+        {
+          "id": 3113,
+          "label": "Rahti ja tavarankuljetus",
+          "isSelectable": true
+        },
+        {
+          "id": 3102,
+          "label": "Rakentaminen ja remontointi",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 372,
+              "label": "Ilmankuivaimet",
+              "isSelectable": true
+            },
+            {
+              "id": 373,
+              "label": "Kompressorit",
+              "isSelectable": true
+            },
+            {
+              "id": 377,
+              "label": "Koneet ja tarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 375,
+              "label": "Puuntyöstökoneet",
+              "isSelectable": true
+            },
+            {
+              "id": 374,
+              "label": "Rakennustelineet",
+              "isSelectable": true
+            },
+            {
+              "id": 370,
+              "label": "Työpajatarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 369,
+              "label": "Työvälineet",
+              "isSelectable": true
+            },
+            {
+              "id": 371,
+              "label": "Valaistus",
+              "isSelectable": true
+            },
+            {
+              "id": 378,
+              "label": "Varastot",
+              "isSelectable": true
+            },
+            {
+              "id": 379,
+              "label": "Muut tarvikkeet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3103,
+          "label": "Suurtalouskeittiö ja ravintola-ala",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 354,
+              "label": "Astianpesu",
+              "isSelectable": true
+            },
+            {
+              "id": 352,
+              "label": "Jääkaapit ja pakastimet",
+              "isSelectable": true
+            },
+            {
+              "id": 355,
+              "label": "Kalusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 351,
+              "label": "Keittiötarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 353,
+              "label": "Ruoanlaittovälineet",
+              "isSelectable": true
+            },
+            {
+              "id": 356,
+              "label": "Muut välineet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 8343,
+          "label": "Terveys ja ensiapu",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 348,
+              "label": "Apuvälineet",
+              "isSelectable": true
+            },
+            {
+              "id": 347,
+              "label": "Ensiaputarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 349,
+              "label": "Kauneuden- ja terveydenhoito",
+              "isSelectable": true
+            },
+            {
+              "id": 350,
+              "label": "Varastontyhjennys",
+              "isSelectable": true
+            },
+            {
+              "id": 357,
+              "label": "Muu terveys ja ensiapu",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3105,
+          "label": "Toimistotarvikkeet ja toimistokalusteet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 243,
+              "label": "Kopiokoneet",
+              "isSelectable": true
+            },
+            {
+              "id": 294,
+              "label": "Toimistokalusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 242,
+              "label": "Toimistotarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 244,
+              "label": "Tulostimet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3106,
+          "label": "Verkkotunnukset",
+          "isSelectable": true
+        },
+        {
+          "id": 3104,
+          "label": "Muu liiketoiminta ja palvelut",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 67,
+      "label": "Piha ja remontointi",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 8348,
+          "label": "Autotallin ovet ja kalusteet",
+          "isSelectable": true
+        },
+        {
+          "id": 8347,
+          "label": "Hälyttimet ja turvallisuus",
+          "isSelectable": true
+        },
+        {
+          "id": 3900,
+          "label": "Keittiöt",
+          "isSelectable": true
+        },
+        {
+          "id": 7749,
+          "label": "Kylpyhuone",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 156,
+              "label": "Hanat ja suihkut",
+              "isSelectable": true
+            },
+            {
+              "id": 159,
+              "label": "Höyrysuihkukaapit",
+              "isSelectable": true
+            },
+            {
+              "id": 157,
+              "label": "Kylpyammeet",
+              "isSelectable": true
+            },
+            {
+              "id": 164,
+              "label": "Kylpyhuonekalusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 163,
+              "label": "Kylpyhuonetarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 162,
+              "label": "Pesualtaat",
+              "isSelectable": true
+            },
+            {
+              "id": 158,
+              "label": "Sauna",
+              "isSelectable": true
+            },
+            {
+              "id": 160,
+              "label": "Suihkuseinät ja suihkukaapit",
+              "isSelectable": true
+            },
+            {
+              "id": 161,
+              "label": "WC-pöntöt",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5218,
+          "label": "Lämmitys ja ilmanvaihto",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 154,
+              "label": "Ilmalämpöpumput",
+              "isSelectable": true
+            },
+            {
+              "id": 297,
+              "label": "Ilmastointilaitteet ja tuulettimet",
+              "isSelectable": true
+            },
+            {
+              "id": 155,
+              "label": "Lämmittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 151,
+              "label": "Patterit",
+              "isSelectable": true
+            },
+            {
+              "id": 153,
+              "label": "Polttopuut ja polttoaineet",
+              "isSelectable": true
+            },
+            {
+              "id": 152,
+              "label": "Takat",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3968,
+          "label": "Mökkitarvikkeet",
+          "isSelectable": true
+        },
+        {
+          "id": 3901,
+          "label": "Piha ja puutarha",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 147,
+              "label": "Grillit",
+              "isSelectable": true
+            },
+            {
+              "id": 144,
+              "label": "Juhlateltat",
+              "isSelectable": true
+            },
+            {
+              "id": 339,
+              "label": "Kasvit ja istutus",
+              "isSelectable": true
+            },
+            {
+              "id": 148,
+              "label": "Lumenluonti",
+              "isSelectable": true
+            },
+            {
+              "id": 146,
+              "label": "Markiisit ja aurinkovarjot",
+              "isSelectable": true
+            },
+            {
+              "id": 142,
+              "label": "Puutarhakalusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 143,
+              "label": "Puutarhatyökalut",
+              "isSelectable": true
+            },
+            {
+              "id": 149,
+              "label": "Ruohonleikkurit",
+              "isSelectable": true
+            },
+            {
+              "id": 150,
+              "label": "Uima-altaat ja ulkoporealtaat",
+              "isSelectable": true
+            },
+            {
+              "id": 145,
+              "label": "Muut puutarhatarvikkeet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3899,
+          "label": "Rakennustarvikkeet ja remontointi",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 168,
+              "label": "Ikkunat",
+              "isSelectable": true
+            },
+            {
+              "id": 167,
+              "label": "Lattiat",
+              "isSelectable": true
+            },
+            {
+              "id": 169,
+              "label": "Ovet",
+              "isSelectable": true
+            },
+            {
+              "id": 346,
+              "label": "Portaat",
+              "isSelectable": true
+            },
+            {
+              "id": 166,
+              "label": "Talopaketit",
+              "isSelectable": true
+            },
+            {
+              "id": 301,
+              "label": "Tapetit ja maalit",
+              "isSelectable": true
+            },
+            {
+              "id": 165,
+              "label": "Muut rakennusmateriaalit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5219,
+          "label": "Työkalut",
+          "isSelectable": true
+        },
+        {
+          "id": 3969,
+          "label": "Muu piha ja remontointi",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 69,
+      "label": "Urheilu ja ulkoilu",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 3938,
+          "label": "Extreme-urheilu",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 265,
+              "label": "Kiipeily",
+              "isSelectable": true
+            },
+            {
+              "id": 266,
+              "label": "Laskuvarjohyppy",
+              "isSelectable": true
+            },
+            {
+              "id": 264,
+              "label": "Leijalautailu",
+              "isSelectable": true
+            },
+            {
+              "id": 267,
+              "label": "Rullalautailu ja longboarding",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3937,
+          "label": "Fanituotteet",
+          "isSelectable": true
+        },
+        {
+          "id": 5164,
+          "label": "Golf",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9767,
+              "label": "Golfkengät",
+              "isSelectable": true
+            },
+            {
+              "id": 9771,
+              "label": "Golfkärryt ja -bägit",
+              "isSelectable": true
+            },
+            {
+              "id": 9770,
+              "label": "Golfmailat",
+              "isSelectable": true
+            },
+            {
+              "id": 9768,
+              "label": "Golfpallot",
+              "isSelectable": true
+            },
+            {
+              "id": 9769,
+              "label": "Golfsetit",
+              "isSelectable": true
+            },
+            {
+              "id": 9766,
+              "label": "Golfvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 9772,
+              "label": "Muut golfvälineet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3962,
+          "label": "Hiihto ja laskettelu",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 253,
+              "label": "Laskettelu",
+              "isSelectable": true
+            },
+            {
+              "id": 252,
+              "label": "Lumilautailu",
+              "isSelectable": true
+            },
+            {
+              "id": 255,
+              "label": "Murtomaahiihto",
+              "isSelectable": true
+            },
+            {
+              "id": 254,
+              "label": "Telemark",
+              "isSelectable": true
+            },
+            {
+              "id": 256,
+              "label": "Muut hiihtovarusteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 8346,
+          "label": "Jääkiekko ja luistelu",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 406,
+              "label": "Jääkiekko- ja luisteluvarusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 405,
+              "label": "Lasten luistimet",
+              "isSelectable": true
+            },
+            {
+              "id": 404,
+              "label": "Naisten ja miesten luistimet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5166,
+          "label": "Kuntosalilaitteet ja kuntoiluvälineet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 291,
+              "label": "Crosstrainerit",
+              "isSelectable": true
+            },
+            {
+              "id": 516,
+              "label": "Juoksumatot",
+              "isSelectable": true
+            },
+            {
+              "id": 289,
+              "label": "Kuntoiluvälineet",
+              "isSelectable": true
+            },
+            {
+              "id": 286,
+              "label": "Kuntopyörät",
+              "isSelectable": true
+            },
+            {
+              "id": 287,
+              "label": "Soutulaitteet",
+              "isSelectable": true
+            },
+            {
+              "id": 290,
+              "label": "Steppilaudat",
+              "isSelectable": true
+            },
+            {
+              "id": 288,
+              "label": "Voimaharjoittelu",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3961,
+          "label": "Pallopelit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 245,
+              "label": "Jalkapallo",
+              "isSelectable": true
+            },
+            {
+              "id": 247,
+              "label": "Koripallo",
+              "isSelectable": true
+            },
+            {
+              "id": 246,
+              "label": "Käsipallo",
+              "isSelectable": true
+            },
+            {
+              "id": 248,
+              "label": "Lentopallo",
+              "isSelectable": true
+            },
+            {
+              "id": 9486,
+              "label": "Padel",
+              "isSelectable": true
+            },
+            {
+              "id": 3613,
+              "label": "Pesäpallo",
+              "isSelectable": true
+            },
+            {
+              "id": 9487,
+              "label": "Pingis",
+              "isSelectable": true
+            },
+            {
+              "id": 250,
+              "label": "Salibandy",
+              "isSelectable": true
+            },
+            {
+              "id": 9488,
+              "label": "Squash",
+              "isSelectable": true
+            },
+            {
+              "id": 9485,
+              "label": "Sulkapallo",
+              "isSelectable": true
+            },
+            {
+              "id": 249,
+              "label": "Tennis",
+              "isSelectable": true
+            },
+            {
+              "id": 251,
+              "label": "Muut pallopelit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3963,
+          "label": "Pyöräily",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 8375,
+              "label": "Lasten polkupyörät",
+              "isSelectable": true
+            },
+            {
+              "id": 257,
+              "label": "Polkupyörät",
+              "isSelectable": true
+            },
+            {
+              "id": 9774,
+              "label": "Pyöräilykengät",
+              "isSelectable": true
+            },
+            {
+              "id": 9773,
+              "label": "Pyöräilyvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 258,
+              "label": "Pyöräilyvarusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 8376,
+              "label": "Skuutit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 8281,
+          "label": "Ravintolisät",
+          "isSelectable": true
+        },
+        {
+          "id": 3964,
+          "label": "Retkeily, kalastus ja metsästys",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 268,
+              "label": "Aseet ja patruunat",
+              "isSelectable": true
+            },
+            {
+              "id": 279,
+              "label": "Kajakit ja kanootit",
+              "isSelectable": true
+            },
+            {
+              "id": 274,
+              "label": "Kalastusvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 273,
+              "label": "Kelat, perhot ja koukut",
+              "isSelectable": true
+            },
+            {
+              "id": 300,
+              "label": "Kiikarit ja kaukoputket",
+              "isSelectable": true
+            },
+            {
+              "id": 276,
+              "label": "Makuupussit",
+              "isSelectable": true
+            },
+            {
+              "id": 269,
+              "label": "Metsästysvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 278,
+              "label": "Reput ja rinkat",
+              "isSelectable": true
+            },
+            {
+              "id": 277,
+              "label": "Teltat",
+              "isSelectable": true
+            },
+            {
+              "id": 271,
+              "label": "Vavat",
+              "isSelectable": true
+            },
+            {
+              "id": 272,
+              "label": "Verkot, katiskat ja merrat",
+              "isSelectable": true
+            },
+            {
+              "id": 275,
+              "label": "Muut kalastustarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 270,
+              "label": "Muut metsästysvarusteet",
+              "isSelectable": true
+            },
+            {
+              "id": 280,
+              "label": "Muut retkeilyvarusteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3967,
+          "label": "Urheilukellot ja aktiivisuusrannekkeet",
+          "isSelectable": true
+        },
+        {
+          "id": 3940,
+          "label": "Urheiluvaatteet ja -kengät",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 3983,
+              "label": "Lasten urheiluvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 3984,
+              "label": "Lenkkarit ja muut urheilukengät",
+              "isSelectable": true
+            },
+            {
+              "id": 3980,
+              "label": "Miesten urheiluvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 3981,
+              "label": "Naisten urheiluvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 3982,
+              "label": "Unisex-urheiluvaatteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 7738,
+          "label": "Vesiurheilu",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 260,
+              "label": "Melonta ja suppailu",
+              "isSelectable": true
+            },
+            {
+              "id": 261,
+              "label": "Purjehdus",
+              "isSelectable": true
+            },
+            {
+              "id": 338,
+              "label": "Purjelautailu",
+              "isSelectable": true
+            },
+            {
+              "id": 259,
+              "label": "Sukellus",
+              "isSelectable": true
+            },
+            {
+              "id": 262,
+              "label": "Surffaus",
+              "isSelectable": true
+            },
+            {
+              "id": 2467,
+              "label": "Wingfoil",
+              "isSelectable": true
+            },
+            {
+              "id": 263,
+              "label": "Muu vesiurheilu",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3966,
+          "label": "Muu urheilu",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 71,
+      "label": "Vaatteet, kosmetiikka ja asusteet",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 9481,
+          "label": "Asusteet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9483,
+              "label": "Solmiot ja rusetit",
+              "isSelectable": true
+            },
+            {
+              "id": 9482,
+              "label": "Vyöt",
+              "isSelectable": true
+            },
+            {
+              "id": 9484,
+              "label": "Muut asusteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 8280,
+          "label": "Ihonhoito ja hiustenhoito",
+          "isSelectable": true
+        },
+        {
+          "id": 3945,
+          "label": "Kellot ja rannekellot",
+          "isSelectable": true
+        },
+        {
+          "id": 3949,
+          "label": "Kengät",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 193,
+              "label": "Miesten kengät",
+              "isSelectable": true
+            },
+            {
+              "id": 194,
+              "label": "Naisten kengät",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 7748,
+          "label": "Korut ja korurasiat",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9468,
+              "label": "Helat ja riipukset",
+              "isSelectable": true
+            },
+            {
+              "id": 9467,
+              "label": "Kalvosinnapit",
+              "isSelectable": true
+            },
+            {
+              "id": 195,
+              "label": "Kaulakorut",
+              "isSelectable": true
+            },
+            {
+              "id": 307,
+              "label": "Korurasiat ja säilytys",
+              "isSelectable": true
+            },
+            {
+              "id": 9470,
+              "label": "Korusetit",
+              "isSelectable": true
+            },
+            {
+              "id": 197,
+              "label": "Korvakorut",
+              "isSelectable": true
+            },
+            {
+              "id": 198,
+              "label": "Rannekorut",
+              "isSelectable": true
+            },
+            {
+              "id": 9469,
+              "label": "Rintaneulat ja -korut",
+              "isSelectable": true
+            },
+            {
+              "id": 196,
+              "label": "Sormukset",
+              "isSelectable": true
+            },
+            {
+              "id": 306,
+              "label": "Muut korut",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 8282,
+          "label": "Kosmetiikka",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 1660,
+              "label": "Hajuvesi",
+              "isSelectable": true
+            },
+            {
+              "id": 1659,
+              "label": "Meikki",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3946,
+          "label": "Laukut ja lompakot",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 9479,
+              "label": "Iltalaukut",
+              "isSelectable": true
+            },
+            {
+              "id": 9473,
+              "label": "Käsilaukut",
+              "isSelectable": true
+            },
+            {
+              "id": 9471,
+              "label": "Lompakot ja kukkarot",
+              "isSelectable": true
+            },
+            {
+              "id": 9478,
+              "label": "Lähettilaukut",
+              "isSelectable": true
+            },
+            {
+              "id": 9476,
+              "label": "Matkalaukut",
+              "isSelectable": true
+            },
+            {
+              "id": 9474,
+              "label": "Olkalaukut",
+              "isSelectable": true
+            },
+            {
+              "id": 9472,
+              "label": "Reput",
+              "isSelectable": true
+            },
+            {
+              "id": 9477,
+              "label": "Salkut ja tietokonelaukut",
+              "isSelectable": true
+            },
+            {
+              "id": 9475,
+              "label": "Treenikassit",
+              "isSelectable": true
+            },
+            {
+              "id": 9480,
+              "label": "Muut laukut",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3950,
+          "label": "Miesten vaatteet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 186,
+              "label": "Collegepaidat ja neuleet",
+              "isSelectable": true
+            },
+            {
+              "id": 190,
+              "label": "Frakit, smokit ja saketit",
+              "isSelectable": true
+            },
+            {
+              "id": 185,
+              "label": "Kauluspaidat",
+              "isSelectable": true
+            },
+            {
+              "id": 191,
+              "label": "Miesten alusvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 8373,
+              "label": "Miesten farkut",
+              "isSelectable": true
+            },
+            {
+              "id": 311,
+              "label": "Miesten hatut, huivit ja hanskat",
+              "isSelectable": true
+            },
+            {
+              "id": 184,
+              "label": "Miesten housut ja shortsit",
+              "isSelectable": true
+            },
+            {
+              "id": 188,
+              "label": "Miesten kansallispuvut",
+              "isSelectable": true
+            },
+            {
+              "id": 189,
+              "label": "Miesten puvut",
+              "isSelectable": true
+            },
+            {
+              "id": 187,
+              "label": "Miesten T-paidat ja paidat",
+              "isSelectable": true
+            },
+            {
+              "id": 183,
+              "label": "Ulkovaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 192,
+              "label": "Muut miesten vaatteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 8349,
+          "label": "Naamiaisasut",
+          "isSelectable": true
+        },
+        {
+          "id": 3941,
+          "label": "Naisten vaatteet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 181,
+              "label": "Alusvaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 8370,
+              "label": "Farkut",
+              "isSelectable": true
+            },
+            {
+              "id": 175,
+              "label": "Hameet",
+              "isSelectable": true
+            },
+            {
+              "id": 310,
+              "label": "Hatut, huivit ja hanskat",
+              "isSelectable": true
+            },
+            {
+              "id": 174,
+              "label": "Housut ja shortsit",
+              "isSelectable": true
+            },
+            {
+              "id": 171,
+              "label": "Hääpuvut",
+              "isSelectable": true
+            },
+            {
+              "id": 8372,
+              "label": "Jumpsuitit ja haalarit",
+              "isSelectable": true
+            },
+            {
+              "id": 170,
+              "label": "Kansallispuvut",
+              "isSelectable": true
+            },
+            {
+              "id": 172,
+              "label": "Mekot",
+              "isSelectable": true
+            },
+            {
+              "id": 180,
+              "label": "Paidat ja puserot",
+              "isSelectable": true
+            },
+            {
+              "id": 8371,
+              "label": "Puvut ja bleiserit",
+              "isSelectable": true
+            },
+            {
+              "id": 178,
+              "label": "Takit ",
+              "isSelectable": true
+            },
+            {
+              "id": 176,
+              "label": "Topit",
+              "isSelectable": true
+            },
+            {
+              "id": 179,
+              "label": "T-paidat",
+              "isSelectable": true
+            },
+            {
+              "id": 173,
+              "label": "Ulkovaatteet",
+              "isSelectable": true
+            },
+            {
+              "id": 177,
+              "label": "Villapaidat ja muut neuleet",
+              "isSelectable": true
+            },
+            {
+              "id": 182,
+              "label": "Muut naistenvaatteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 8344,
+          "label": "Silmälasit ja linssit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 199,
+              "label": "Aurinkolasit",
+              "isSelectable": true
+            },
+            {
+              "id": 201,
+              "label": "Piilolinssit",
+              "isSelectable": true
+            },
+            {
+              "id": 200,
+              "label": "Silmälasit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5204,
+          "label": "Muut vaatteet, kosmetiikka ja asusteet",
+          "isSelectable": true
+        }
+      ]
+    },
+    {
+      "id": 86,
+      "label": "Viihde ja harrastukset",
+      "isSelectable": false,
+      "children": [
+        {
+          "id": 3972,
+          "label": "Elintarvikkeet",
+          "isSelectable": true
+        },
+        {
+          "id": 285,
+          "label": "Keräily",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 400,
+              "label": "Keräilyfiguurit",
+              "isSelectable": true
+            },
+            {
+              "id": 396,
+              "label": "Keräilykortit",
+              "isSelectable": true
+            },
+            {
+              "id": 399,
+              "label": "Keräilylelut",
+              "isSelectable": true
+            },
+            {
+              "id": 138,
+              "label": "Kolikot ja setelit",
+              "isSelectable": true
+            },
+            {
+              "id": 398,
+              "label": "Kyltit ja julisteet",
+              "isSelectable": true
+            },
+            {
+              "id": 397,
+              "label": "Militaria",
+              "isSelectable": true
+            },
+            {
+              "id": 139,
+              "label": "Pinssit",
+              "isSelectable": true
+            },
+            {
+              "id": 140,
+              "label": "Postikortit",
+              "isSelectable": true
+            },
+            {
+              "id": 137,
+              "label": "Postimerkit",
+              "isSelectable": true
+            },
+            {
+              "id": 141,
+              "label": "Muut keräilykohteet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5209,
+          "label": "Kirjat ja lehdet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 512,
+              "label": "Aikakauslehdet ja lehtiset",
+              "isSelectable": true
+            },
+            {
+              "id": 514,
+              "label": "Kaunokirjallisuus",
+              "isSelectable": true
+            },
+            {
+              "id": 94,
+              "label": "Keittokirjat",
+              "isSelectable": true
+            },
+            {
+              "id": 513,
+              "label": "Oppikirjat",
+              "isSelectable": true
+            },
+            {
+              "id": 515,
+              "label": "Sarjakuvat",
+              "isSelectable": true
+            },
+            {
+              "id": 520,
+              "label": "Tietokirjat",
+              "isSelectable": true
+            },
+            {
+              "id": 521,
+              "label": "Yleisteokset, sanakirjat",
+              "isSelectable": true
+            },
+            {
+              "id": 97,
+              "label": "Muut kirjat",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 7734,
+          "label": "Käsityöt",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 131,
+              "label": "Helmet ja jalokivet",
+              "isSelectable": true
+            },
+            {
+              "id": 127,
+              "label": "Kangaspuut",
+              "isSelectable": true
+            },
+            {
+              "id": 125,
+              "label": "Kankaat",
+              "isSelectable": true
+            },
+            {
+              "id": 124,
+              "label": "Langat",
+              "isSelectable": true
+            },
+            {
+              "id": 128,
+              "label": "Maalit ja maalaustarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 123,
+              "label": "Ompelukoneet",
+              "isSelectable": true
+            },
+            {
+              "id": 126,
+              "label": "Ompelutarvikkeet ja neulomistarvikkeet",
+              "isSelectable": true
+            },
+            {
+              "id": 132,
+              "label": "Puutyöt",
+              "isSelectable": true
+            },
+            {
+              "id": 130,
+              "label": "Savityöt",
+              "isSelectable": true
+            },
+            {
+              "id": 129,
+              "label": "Skräppäys",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 7735,
+          "label": "Matkat ja matkaliput",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 114,
+              "label": "Junaliput",
+              "isSelectable": true
+            },
+            {
+              "id": 113,
+              "label": "Lentoliput",
+              "isSelectable": true
+            },
+            {
+              "id": 112,
+              "label": "Pakettimatkat",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3922,
+          "label": "Musiikki ja elokuvat",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 102,
+              "label": "Blu-rayt",
+              "isSelectable": true
+            },
+            {
+              "id": 98,
+              "label": "CD-levyt",
+              "isSelectable": true
+            },
+            {
+              "id": 402,
+              "label": "C-kasetit",
+              "isSelectable": true
+            },
+            {
+              "id": 100,
+              "label": "DVD:t",
+              "isSelectable": true
+            },
+            {
+              "id": 101,
+              "label": "VHS-kasetit",
+              "isSelectable": true
+            },
+            {
+              "id": 99,
+              "label": "Vinyylilevyt",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 7732,
+          "label": "Pienoismallit ja rakennussarjat",
+          "isSelectable": true
+        },
+        {
+          "id": 7733,
+          "label": "Radio-ohjattavat",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 133,
+              "label": "Autot",
+              "isSelectable": true
+            },
+            {
+              "id": 401,
+              "label": "Droonit",
+              "isSelectable": true
+            },
+            {
+              "id": 136,
+              "label": "Helikopterit",
+              "isSelectable": true
+            },
+            {
+              "id": 135,
+              "label": "Lentokoneet",
+              "isSelectable": true
+            },
+            {
+              "id": 327,
+              "label": "Pienoisrautatiet",
+              "isSelectable": true
+            },
+            {
+              "id": 134,
+              "label": "Veneet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 5203,
+          "label": "Seurapelit ja lautapelit",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 119,
+              "label": "Lautapelit",
+              "isSelectable": true
+            },
+            {
+              "id": 329,
+              "label": "Pulmapelit",
+              "isSelectable": true
+            },
+            {
+              "id": 120,
+              "label": "Pöytäpelit",
+              "isSelectable": true
+            },
+            {
+              "id": 121,
+              "label": "Ulkopelit",
+              "isSelectable": true
+            },
+            {
+              "id": 122,
+              "label": "Muut pelit",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 92,
+          "label": "Soittimet",
+          "isSelectable": true,
+          "children": [
+            {
+              "id": 296,
+              "label": "Bassot",
+              "isSelectable": true
+            },
+            {
+              "id": 328,
+              "label": "Harmonikat",
+              "isSelectable": true
+            },
+            {
+              "id": 105,
+              "label": "Jousisoittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 295,
+              "label": "Kitarat",
+              "isSelectable": true
+            },
+            {
+              "id": 110,
+              "label": "Kosketinsoittimet ja syntetisaattorit",
+              "isSelectable": true
+            },
+            {
+              "id": 109,
+              "label": "Pianot ja flyygelit",
+              "isSelectable": true
+            },
+            {
+              "id": 103,
+              "label": "Puupuhaltimet",
+              "isSelectable": true
+            },
+            {
+              "id": 107,
+              "label": "Rummut ja perkussiosoittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 108,
+              "label": "Studiolaitteet",
+              "isSelectable": true
+            },
+            {
+              "id": 337,
+              "label": "Urut",
+              "isSelectable": true
+            },
+            {
+              "id": 104,
+              "label": "Vaskisoittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 106,
+              "label": "Muut kielisoittimet",
+              "isSelectable": true
+            },
+            {
+              "id": 111,
+              "label": "Muut soittimet",
+              "isSelectable": true
+            }
+          ]
+        },
+        {
+          "id": 3973,
+          "label": "Muu viihde ja harrastukset",
+          "isSelectable": true
+        }
+      ]
+    }
+  ]
+}
