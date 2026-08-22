@@ -417,7 +417,7 @@ fn auth_required() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "flea auth start".to_owned(),
+            command: "flea auth login".to_owned(),
         });
     error
 }
@@ -719,5 +719,13 @@ mod tests {
         assert_eq!(error.code, "auth.storage_failed");
         assert_eq!(error.details.unwrap()["operation"], "write");
         assert_eq!(error.next_actions[0].command, "flea auth status");
+    }
+
+    #[test]
+    fn missing_authentication_recommends_public_login() {
+        let error = auth_required();
+
+        assert_eq!(error.code, "auth.required");
+        assert_eq!(error.next_actions[0].command, "flea auth login");
     }
 }

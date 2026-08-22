@@ -534,7 +534,7 @@ impl<A> BrowserAuth<A> {
             ab_test_device_id: Uuid::new_v4().to_string(),
         };
         let output = AuthStart {
-            completion_command: format!("flea auth complete {flow_id}"),
+            completion_command: "flea auth login".to_owned(),
             flow_id,
             login_url: login_url.into(),
             expires_at_unix,
@@ -744,7 +744,7 @@ fn invalid_callback() -> AppError {
 fn restart_error(code: &str, message: &str) -> AppError {
     let mut error = AppError::new(code, message, ExitClass::Authentication);
     error.next_actions.push(NextAction {
-        command: "flea auth start".to_owned(),
+        command: "flea auth login".to_owned(),
     });
     error
 }
@@ -983,6 +983,7 @@ mod tests {
         assert!((43..=128).contains(&first.pkce_verifier.expose().len()));
         assert_eq!(query.get("code_challenge_method").unwrap(), "S256");
         assert_eq!(output.expires_at_unix, 1_600);
+        assert_eq!(output.completion_command, "flea auth login");
         let debug = format!("{first:?}");
         assert!(!debug.contains(first.pkce_verifier.expose()));
         assert!(!debug.contains(&first.device_id));
@@ -1017,6 +1018,7 @@ mod tests {
         let error = auth.complete(&flow, "invalid", 1_600).await.unwrap_err();
 
         assert_eq!(error.code, "auth.flow_expired");
+        assert_eq!(error.next_actions[0].command, "flea auth login");
         assert!(auth.api.calls.lock().unwrap().is_empty());
     }
 
@@ -1041,6 +1043,11 @@ mod tests {
             );
             if case.valid {
                 assert_eq!(result.unwrap().expose(), "ok");
+            } else {
+                assert_eq!(
+                    result.unwrap_err().next_actions[0].command,
+                    "flea auth login"
+                );
             }
         }
     }

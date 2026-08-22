@@ -261,7 +261,7 @@ fn flow_not_found() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "flea auth start".to_owned(),
+            command: "flea auth login".to_owned(),
         });
     error
 }
@@ -275,7 +275,7 @@ fn flow_expired() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "flea auth start".to_owned(),
+            command: "flea auth login".to_owned(),
         });
     error
 }
@@ -415,6 +415,20 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, "auth.flow_expired");
+        assert_eq!(error.next_actions[0].command, "flea auth login");
         assert!(handler.store.load_flow(&flow_id).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn missing_completion_restarts_public_login() {
+        let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
+
+        let error = handler
+            .complete("missing", "redacted", 1_000)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "auth.flow_not_found");
+        assert_eq!(error.next_actions[0].command, "flea auth login");
     }
 }

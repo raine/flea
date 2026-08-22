@@ -81,10 +81,20 @@ pub fn read(paths: &StatePaths) -> Result<String, AppError> {
 }
 
 fn callback_capture_error() -> AppError {
-    AppError::authentication(
+    retry_login_error(
         "auth.callback_not_captured",
-        "finish browser sign-in and allow the browser to open Flea Auth, then retry the completion command",
+        "finish browser sign-in and allow the browser to open Flea Auth, then run `flea auth login` again",
     )
+}
+
+fn retry_login_error(code: &'static str, message: &'static str) -> AppError {
+    let mut error = AppError::authentication(code, message);
+    error
+        .next_actions
+        .push(crate::domain::envelope::NextAction {
+            command: "flea auth login".to_owned(),
+        });
+    error
 }
 
 fn callback_receiver_error(error: impl std::error::Error + Send + Sync + 'static) -> AppError {
@@ -102,10 +112,21 @@ fn prepare_platform_receiver(_paths: &StatePaths) -> Result<(), AppError> {
 
 #[cfg(not(target_os = "macos"))]
 fn open_browser(_login_url: &str) -> Result<(), AppError> {
-    Err(AppError::authentication(
+    Err(interactive_login_unsupported())
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn interactive_login_unsupported() -> AppError {
+    let mut error = AppError::authentication(
         "auth.interactive_login_unsupported",
-        "interactive browser login is supported on macOS; use auth start and auth complete on this platform",
-    ))
+        "interactive browser login requires macOS; run `flea auth login` on macOS",
+    );
+    error
+        .next_actions
+        .push(crate::domain::envelope::NextAction {
+            command: "flea auth login".to_owned(),
+        });
+    error
 }
 
 #[cfg(target_os = "macos")]
@@ -285,10 +306,30 @@ fn set_default_url_handler(scheme: &str, bundle_id: &str) -> Result<(), AppError
     Ok(())
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn callback_capture_recommends_public_login() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let error = read(&paths).unwrap_err();
+
+        assert_eq!(error.code, "auth.callback_not_captured");
+        assert!(error.message.contains("`flea auth login`"));
+        assert_eq!(error.next_actions[0].command, "flea auth login");
+    }
+
+    #[test]
+    fn unsupported_platform_error_identifies_public_login() {
+        let error = interactive_login_unsupported();
+
+        assert!(error.message.contains("`flea auth login` on macOS"));
+        assert_eq!(error.next_actions[0].command, "flea auth login");
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn callback_script_shell_quotes_the_url_and_private_destination() {
         let script = callback_script(Path::new("/tmp/path with spaces/callback"));

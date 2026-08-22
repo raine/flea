@@ -824,7 +824,7 @@ pub fn command_name(args: &[OsString]) -> String {
     };
     let root = arguments[root_index];
     let leaves: &[&str] = match root {
-        "auth" => &["start", "complete", "status", "logout"],
+        "auth" => &["login", "status", "logout"],
         "category" => &["search", "list"],
         "draft" => &["create", "show", "update", "publish", "delete", "image"],
         "item" => &["show"],
@@ -1037,15 +1037,15 @@ mod tests {
     }
 
     #[test]
-    fn command_name_excludes_values_and_callback_urls() {
-        let args = [
-            OsString::from("flea"),
-            OsString::from("auth"),
-            OsString::from("complete"),
-            OsString::from("flow-secret"),
-            OsString::from("flea://oauth/callback?code=secret"),
-        ];
-        assert_eq!(command_name(&args), "auth complete");
+    fn command_name_recognizes_public_auth_commands() {
+        for command in ["login", "status", "logout"] {
+            let args = [
+                OsString::from("flea"),
+                OsString::from("auth"),
+                OsString::from(command),
+            ];
+            assert_eq!(command_name(&args), format!("auth {command}"));
+        }
 
         let item = [
             OsString::from("flea"),
