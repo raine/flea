@@ -95,11 +95,11 @@ fn assert_snapshot(actual: String, expected: &str) {
 }
 
 #[test]
-fn syntax_failures_use_the_requested_output_format() {
+fn syntax_failures_use_clap_presentation() {
     let result = tori::run(["tori", "--format", "json", "draft", "show"]);
-    let decoded: Value = serde_json::from_str(&result.document).expect("JSON should parse");
 
     assert_eq!(result.exit_code, 2);
-    assert_eq!(decoded["ok"], false);
-    assert_eq!(decoded["error"]["code"], "cli.invalid_usage");
+    assert_eq!(result.presentation, tori::Presentation::PlainStderr);
+    assert!(result.document.contains("Usage: tori draft show"));
+    assert!(!result.document.contains("cli.invalid_usage"));
 }

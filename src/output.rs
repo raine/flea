@@ -1,5 +1,3 @@
-use std::ffi::OsString;
-
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -22,32 +20,4 @@ pub fn render<T: Serialize>(value: &T, format: OutputFormat) -> Result<String, A
             AppError::output("failed to serialize TOON output").with_source(error)
         }),
     }
-}
-
-pub fn format_from_args<I, T>(args: I) -> Option<OutputFormat>
-where
-    I: IntoIterator<Item = T>,
-    T: Into<OsString>,
-{
-    let mut args = args.into_iter().map(Into::into);
-    while let Some(argument) = args.next() {
-        if argument == "--format" {
-            return args.next().and_then(|value| match value.to_str() {
-                Some("json") => Some(OutputFormat::Json),
-                Some("toon") => Some(OutputFormat::Toon),
-                _ => None,
-            });
-        }
-        if let Some(value) = argument
-            .to_str()
-            .and_then(|value| value.strip_prefix("--format="))
-        {
-            return match value {
-                "json" => Some(OutputFormat::Json),
-                "toon" => Some(OutputFormat::Toon),
-                _ => None,
-            };
-        }
-    }
-    None
 }

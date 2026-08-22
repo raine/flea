@@ -12,14 +12,22 @@ use std::{
     sync::Once,
 };
 
-use clap::{CommandFactory, Parser, error::ErrorKind};
+use clap::{CommandFactory, Parser};
 use diagnostics::{DiagnosticsContext, DiagnosticsSession};
 use domain::envelope::{Envelope, Warning};
 use error::{AppError, ExitClass};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Presentation {
+    Structured,
+    PlainStdout,
+    PlainStderr,
+}
+
 pub struct RunResult {
     pub document: String,
     pub exit_code: u8,
+    pub presentation: Presentation,
 }
 
 pub fn run<I, T>(args: I) -> RunResult
@@ -29,21 +37,28 @@ where
 {
     install_safe_panic_hook();
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    let requested_format = output::format_from_args(args.iter().cloned()).unwrap_or_default();
+    let cli = match cli::Cli::try_parse_from(args.iter().cloned()) {
+        Ok(cli) => cli,
+        Err(error) => return clap_presentation(error),
+    };
     let command = diagnostics::command_name(&args);
 
     let session = match DiagnosticsSession::initialize() {
         Ok(session) => session,
-        Err(error) => return finish(requested_format, Err(error.into_app_error()), None),
+        Err(error) => return finish(cli.format, Err(error.into_app_error()), None),
     };
     let runtime = cli::runtime::ProductionRuntime;
     session.run(&command, || {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            run_parsed(args, requested_format, Some(session.context()), &runtime)
+            finish(
+                cli.format,
+                cli::dispatch_with_runtime(cli.command, &runtime),
+                Some(session.context()),
+            )
         }))
         .unwrap_or_else(|_| {
             finish(
-                requested_format,
+                cli.format,
                 Err(AppError::unexpected("command failed unexpectedly")),
                 Some(session.context()),
             )
@@ -60,48 +75,36 @@ where
 {
     install_safe_panic_hook();
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    let requested_format = output::format_from_args(args.iter().cloned()).unwrap_or_default();
+    let cli = match cli::Cli::try_parse_from(args) {
+        Ok(cli) => cli,
+        Err(error) => return clap_presentation(error),
+    };
     catch_unwind(AssertUnwindSafe(|| {
-        run_parsed(args, requested_format, None, runtime)
+        finish(
+            cli.format,
+            cli::dispatch_with_runtime(cli.command, runtime),
+            None,
+        )
     }))
     .unwrap_or_else(|_| {
         finish(
-            requested_format,
+            cli.format,
             Err(AppError::unexpected("command failed unexpectedly")),
             None,
         )
     })
 }
 
-fn run_parsed(
-    args: Vec<OsString>,
-    requested_format: output::OutputFormat,
-    diagnostics: Option<&DiagnosticsContext>,
-    runtime: &dyn cli::CommandRuntime,
-) -> RunResult {
-    match cli::Cli::try_parse_from(args) {
-        Ok(cli) => finish(
-            cli.format,
-            cli::dispatch_with_runtime(cli.command, runtime),
-            diagnostics,
-        ),
-        Err(error)
-            if matches!(
-                error.kind(),
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-            ) =>
-        {
-            finish(
-                requested_format,
-                Ok(serde_json::json!({ "text": error.to_string() })),
-                diagnostics,
-            )
-        }
-        Err(error) => finish(
-            requested_format,
-            Err(AppError::usage(error.to_string())),
-            diagnostics,
-        ),
+fn clap_presentation(error: clap::Error) -> RunResult {
+    let presentation = if error.use_stderr() {
+        Presentation::PlainStderr
+    } else {
+        Presentation::PlainStdout
+    };
+    RunResult {
+        document: error.to_string(),
+        exit_code: u8::try_from(error.exit_code()).unwrap_or(1),
+        presentation,
     }
 }
 
@@ -150,6 +153,7 @@ fn finish(
         Ok(document) => RunResult {
             document,
             exit_code,
+            presentation: Presentation::Structured,
         },
         Err(mut render_error) => {
             render_error.diagnostics = diagnostics.map(|context| Box::new(context.envelope()));
@@ -164,6 +168,7 @@ fn finish(
             RunResult {
                 document,
                 exit_code: ExitClass::Upstream.code(),
+                presentation: Presentation::Structured,
             }
         }
     }

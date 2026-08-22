@@ -1,7 +1,13 @@
 use std::process::ExitCode;
 
+use tori::Presentation;
+
 fn main() -> ExitCode {
     let result = tori::run(std::env::args_os());
-    println!("{}", result.document);
+    match result.presentation {
+        Presentation::Structured => println!("{}", result.document),
+        Presentation::PlainStdout => print!("{}", result.document),
+        Presentation::PlainStderr => eprint!("{}", result.document),
+    }
     ExitCode::from(result.exit_code)
 }

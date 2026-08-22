@@ -8,6 +8,7 @@ use std::{
 use reqwest::{StatusCode, header::HeaderMap};
 use serde_json::{Value, json};
 use tori::{
+    Presentation,
     api::{
         adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
         auth::{
@@ -232,6 +233,7 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
     let value: Value = serde_json::from_str(&result.document).expect("one JSON envelope");
 
     assert_eq!(result.exit_code, 50);
+    assert_eq!(result.presentation, Presentation::Structured);
     assert_eq!(value["ok"], false);
     assert_eq!(value["partial"]["draft_id"], "draft-1");
     assert_eq!(
@@ -354,12 +356,14 @@ fn category_and_listing_commands_flow_through_http_normalization() {
 fn invoke<const N: usize>(runtime: &TestRuntime, args: [&str; N]) -> Value {
     let result = run_with_runtime(args, runtime);
     assert_eq!(result.exit_code, 0, "{}", result.document);
+    assert_eq!(result.presentation, Presentation::Structured);
     serde_json::from_str(&result.document).expect("one JSON envelope")
 }
 
 fn invoke_vec(runtime: &TestRuntime, args: Vec<String>) -> Value {
     let result = run_with_runtime(args, runtime);
     assert_eq!(result.exit_code, 0, "{}", result.document);
+    assert_eq!(result.presentation, Presentation::Structured);
     serde_json::from_str(&result.document).expect("one JSON envelope")
 }
 
