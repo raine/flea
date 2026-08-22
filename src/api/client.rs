@@ -44,6 +44,7 @@ pub mod compatibility {
     pub const SERVICE_LOGIN: &str = "LOGIN-SERVER-AUTH";
     pub const SERVICE_SEARCH: &str = "SEARCH-QUEST";
     pub const SERVICE_FAVORITES: &str = "FAVORITE-MANAGEMENT";
+    pub const SERVICE_SAVED_SEARCHES: &str = "SEARCH-SAVEDSEARCH";
 
     pub const UPLOAD_DRAFT_INTEROP_VERSION: &str = "6";
 }

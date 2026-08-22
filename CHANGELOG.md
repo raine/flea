@@ -4,6 +4,9 @@
 
 - Favorites folders and saved status can be inspected, and marketplace listings
   can be saved to or removed from the default or an explicitly selected folder
+- Saved searches can be listed and inspected, created from public-search filters,
+  renamed, have email, push, or notification-center alerts toggled, and deleted
+  with read-only recovery after uncertain mutations
 
 ## v0.1.1 (2026-08-22)
 

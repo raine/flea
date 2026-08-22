@@ -10,6 +10,7 @@ focused commands and structured results for the complete listing workflow:
 
 - Search and inspect public listings without signing in
 - Save and remove favorites in Tori folders
+- Create and manage saved searches and their email, push, or in-app alerts
 - Discover valid categories, locations, and listing options
 - Prepare and validate drafts before publishing
 - Process photos locally and remove embedded metadata
@@ -98,6 +99,7 @@ Authenticated operations cover:
 
 - Browser authentication and local credential refresh
 - Favorites folder discovery and saved-listing management
+- Saved-search listing, inspection, creation, notification/name updates, and deletion
 - Category and composer-option discovery
 - Offline draft preview and image preprocessing
 - Draft creation, copying, inspection, updates, image management, validation,
@@ -109,6 +111,8 @@ Run command help for current syntax, constraints, and examples:
 ```sh
 flea search --help
 flea favorite --help
+flea saved-search --help
+flea saved-search create --help
 flea draft --help
 flea draft create --help
 flea listing update --help
@@ -179,6 +183,12 @@ inspection.
 
 A failed draft creation can still return a persisted draft ID. Continue against
 that draft instead of repeating creation and risking a duplicate.
+
+Saved-search mutation failures return `saved-search list` or `saved-search show`
+as read-only recovery actions. Flea only marks the same mutation safe to retry
+when an authenticated recovery read proves the intended result absent. A
+recovery read can also prove that the mutation succeeded despite its failed
+response.
 
 Publication requires the exact revision returned by `draft show` or
 `draft validate`.

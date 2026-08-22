@@ -56,6 +56,46 @@ impl PublicItemApi for ExplainItemApi {
 }
 
 #[test]
+fn saved_search_creation_reuses_public_search_argument_mapping() {
+    let api = FixtureApi::new(empty_fixture());
+    let cli = Cli::parse_from([
+        "flea",
+        "saved-search",
+        "create",
+        "--name",
+        "Chair alert",
+        "--email",
+        "chair",
+        "--category",
+        "2.93.3215.8368",
+        "--price-from",
+        "10",
+        "--trade-type",
+        "sell",
+        "--shipping",
+        "--facet",
+        "brand=42",
+    ]);
+    let Command::SavedSearch(args) = cli.command else {
+        panic!("saved search command")
+    };
+    let flea::cli::saved_search::SavedSearchCommand::Create { search: args, .. } = args.command
+    else {
+        panic!("create command")
+    };
+
+    let parameters = search::saved_search_parameters(args, &api).unwrap();
+
+    assert_eq!(parameters["q"], ["chair"]);
+    assert_eq!(parameters["product_category"], ["2.93.3215.8368"]);
+    assert_eq!(parameters["price_from"], ["10"]);
+    assert_eq!(parameters["trade_type"], ["1"]);
+    assert_eq!(parameters["shipping_exists"], ["true"]);
+    assert_eq!(parameters["brand"], ["42"]);
+    assert!(!parameters.contains_key("dealer_segment"));
+}
+
+#[test]
 fn canonical_leaf_category_value_is_accepted_by_search() {
     let api = FixtureApi::new(empty_fixture());
     let cli = Cli::parse_from([

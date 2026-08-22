@@ -17,12 +17,13 @@ use flea::{
         favorites::HttpFavoritesApi,
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
+        saved_searches::HttpSavedSearchesApi,
         search::HttpPublicSearchApi,
     },
     cli::{
         Command, CommandRuntime,
         auth::{AuthCommandHandler, AuthStore},
-        category, draft, favorite, item, listing, location, search,
+        category, draft, favorite, item, listing, location, saved_search, search,
     },
     error::AppError,
     run_with_runtime,
@@ -114,6 +115,11 @@ impl CommandRuntime for TestRuntime {
             Command::Search(args) => {
                 let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
                 search::dispatch_with_api(*args, &api)
+            }
+            Command::SavedSearch(args) => {
+                let api = HttpSavedSearchesApi::new(Arc::new(self.client.clone()));
+                let search_api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
+                saved_search::dispatch_with_apis(*args, &api, &search_api)
             }
             Command::Location(args) => {
                 let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));

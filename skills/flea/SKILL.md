@@ -5,14 +5,13 @@ description: Operate Tori.fi through the flea CLI. Use for marketplace search, f
 
 # Flea
 
-Use `flea` as a structured CLI for Tori.fi. Keep the default TOON output for
-compact agent-readable results. Add `--format json` when another tool requires
-JSON. Run `flea <command> --help` for current syntax, filters, and examples.
+Use default TOON output for compact results. Add `--format json` for JSON.
+Run `flea <command> --help` for syntax and examples.
 
 ## Rules
 
-- Treat returned IDs, revisions, and option values as opaque machine values.
-  Discover them with `category`, `location`, or the relevant `show` command.
+- Treat IDs, revisions, and option values as opaque. Discover them with
+  `category`, `location`, or the relevant `show` command.
 - Follow `next_actions` and honor `safe_to_retry`. After an uncertain mutation,
   use the reported read-only inspection command. Retry only work explicitly
   classified as absent, and inspect indeterminate work before touching it.
@@ -38,22 +37,23 @@ named places, and coordinates with `--radius-km` define a distance boundary.
 Ask what an ambiguous phrase such as "Helsinki area" includes, or state the
 places chosen.
 
-Start with the requested filters. Use meaningful aliases when recall is poor.
-Merge searches by numeric `listing_id`; ranks from different
-queries are not comparable. Use `--explain N` for opaque matches and `item show`
-for full details. Call a match exact only when its title or public details
-confirm the requested identity.
+Start with requested filters. Merge searches by `listing_id`; ranks across
+queries are not comparable. Use `--explain N` or `item show` for opaque matches.
 
 Return concise linked results with title, price, location, and URL. State the
 scope and ordering. Save with `flea favorite add LISTING_ID`, optionally using
 a folder from `flea favorite folders`. Remove with `flea favorite remove LISTING_ID`.
-Search summaries expose `price.amount` and
-`price.currency`. Item, draft, and account-listing output also provide
-normalized `trade_type` and `price.kind`. Never parse `price.display`.
+Use `price.amount`, `price.currency`, `trade_type`, and `price.kind`. Never parse
+`price.display`.
 
-Use `taxonomy_value` with `search --category` and `category_id` for drafts or
-`category list --parent`. Refine broad searches with `--parent` or `--path`, and
-follow pagination actions instead of dumping the full taxonomy.
+Use `taxonomy_value` with `search --category` and `category_id` for drafts.
+Follow pagination actions instead of dumping the taxonomy.
+
+Manage authenticated alerts with `flea saved-search list|show|create|update|delete`.
+Create accepts public-search query and filter arguments. Choose email, push,
+notification-center, or no notifications explicitly. Omitted update channels
+retain remote state. After uncertain mutations, follow the returned read-only
+`next_actions`; retry only when `safe_to_retry` is true.
 
 ## Create and publish listings
 

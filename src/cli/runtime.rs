@@ -11,12 +11,13 @@ use crate::{
         favorites::HttpFavoritesApi,
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
+        saved_searches::HttpSavedSearchesApi,
         search::HttpPublicSearchApi,
     },
     cli::{
         Command, CommandRuntime,
         auth::{AuthCommandHandler, FileAuthStore, unix_time_now},
-        auth_callback, category, draft, favorite, listing,
+        auth_callback, category, draft, favorite, listing, saved_search,
     },
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
@@ -75,6 +76,13 @@ impl CommandRuntime for ProductionRuntime {
                 let search_api = HttpPublicSearchApi::new(Arc::new(public_client()));
                 let item_api = HttpPublicItemApi::new(Arc::new(public_client()));
                 super::search::dispatch_with_apis(*args, &search_api, Some(&item_api))
+            }
+            Command::SavedSearch(args) => {
+                let client: Arc<dyn crate::api::client::ToriClient> =
+                    Arc::new(authenticated_client()?);
+                let api = HttpSavedSearchesApi::new(Arc::clone(&client));
+                let search_api = HttpPublicSearchApi::new(client);
+                saved_search::dispatch_with_apis(*args, &api, &search_api)
             }
             Command::Location(args) => {
                 let api = HttpPublicSearchApi::new(Arc::new(public_client()));

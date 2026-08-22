@@ -8,6 +8,7 @@ pub mod item;
 pub mod listing;
 pub mod location;
 pub mod runtime;
+pub mod saved_search;
 pub mod search;
 pub mod skill;
 
@@ -66,9 +67,15 @@ pub enum Command {
     Listing(listing::ListingArgs),
     #[command(
         about = "Search public marketplace listings",
-        long_about = "Search public Tori marketplace listings with normalized filters, facets, locations, sorting, and bounded pagination."
+        long_about = "Search public Tori marketplace listings with normalized filters, facets, locations, sorting, and bounded pagination.",
+        after_long_help = "Helsinki-area example:\n  flea search 'tuoli' --area Helsinki,Espoo,Vantaa"
     )]
     Search(Box<search::SearchArgs>),
+    #[command(
+        about = "Manage saved searches and alerts",
+        long_about = "List, inspect, create, update, or delete authenticated Tori search alerts. Mutation failures include read-only recovery actions."
+    )]
+    SavedSearch(Box<saved_search::SavedSearchArgs>),
     #[command(
         about = "Discover public marketplace location identifiers",
         long_about = "Discover deterministic Tori location identifiers for subsequent public marketplace searches."

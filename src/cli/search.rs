@@ -84,9 +84,6 @@ impl Seller {
 }
 
 #[derive(Debug, Args)]
-#[command(
-    after_long_help = "Helsinki-area example:\n  flea search 'tuoli' --area Helsinki,Espoo,Vantaa"
-)]
 pub struct SearchArgs {
     /// Free-text marketplace query. May be omitted to browse filtered listings.
     pub query: Option<String>,
@@ -216,105 +213,12 @@ pub fn dispatch_with_apis(
     api: &dyn PublicSearchApi,
     item_api: Option<&dyn PublicItemApi>,
 ) -> Result<Value, AppError> {
-    let input = collect_input(args)?;
-    validate(&input)?;
+    let prepared = prepare(args, api)?;
+    let input = prepared.input;
+    let request = prepared.request;
     let search = PublicSearch::new(api);
-    let mut parameters = input.facets.clone();
-    if let Some(category) = input.category.as_deref() {
-        let name = category_parameter(category)?;
-        insert_parameter(&mut parameters, name, vec![category.to_owned()])?;
-    }
-    insert_parameter(
-        &mut parameters,
-        "price_from",
-        input
-            .price_from
-            .map(|value| value.to_string())
-            .into_iter()
-            .collect(),
-    )?;
-    insert_parameter(
-        &mut parameters,
-        "price_to",
-        input
-            .price_to
-            .map(|value| value.to_string())
-            .into_iter()
-            .collect(),
-    )?;
-    insert_parameter(
-        &mut parameters,
-        "trade_type",
-        input
-            .trade_type
-            .map(|value| value.upstream().to_owned())
-            .into_iter()
-            .collect(),
-    )?;
-    insert_parameter(&mut parameters, "condition", input.condition.clone())?;
-    insert_parameter(
-        &mut parameters,
-        "dealer_segment",
-        input
-            .seller
-            .map(|value| value.upstream().to_owned())
-            .into_iter()
-            .collect(),
-    )?;
-    if input.shipping {
-        insert_parameter(&mut parameters, "shipping_exists", vec!["true".to_owned()])?;
-    }
-    insert_parameter(
-        &mut parameters,
-        "sort",
-        input
-            .sort
-            .map(|value| value.upstream().to_owned())
-            .into_iter()
-            .collect(),
-    )?;
-
-    let resolved_location = if let Some(location) = input.location.as_deref() {
-        let resolved = search.resolve_location(location)?;
-        insert_parameter(&mut parameters, "location", vec![resolved.id.clone()])?;
-        Some(resolved)
-    } else {
-        None
-    };
-    let resolved_area = if input.area.is_empty() {
-        None
-    } else {
-        let resolved = search.resolve_area(&input.area)?;
-        insert_parameter(
-            &mut parameters,
-            "location",
-            resolved
-                .locations
-                .iter()
-                .map(|location| location.id.clone())
-                .collect(),
-        )?;
-        Some(resolved)
-    };
-    if let (Some(latitude), Some(longitude), Some(radius_km)) =
-        (input.latitude, input.longitude, input.radius_km)
-    {
-        parameters.insert("lat".to_owned(), vec![latitude.to_string()]);
-        parameters.insert("lon".to_owned(), vec![longitude.to_string()]);
-        parameters.insert(
-            "radius".to_owned(),
-            vec![((radius_km * 1000.0).ceil() as u64).to_string()],
-        );
-    }
-    let request = UpstreamSearchRequest {
-        query: input.query,
-        page: input.page.unwrap_or(1),
-        limit: input.limit.unwrap_or(SEARCH_LIMIT_DEFAULT),
-        include_filters: input.include_facets,
-        facet_option_limit: input.facet_option_limit,
-        parameters,
-    };
-    let (mut result, raw) = search.execute_with_area(&request, resolved_location, resolved_area)?;
+    let (mut result, raw) =
+        search.execute_with_area(&request, prepared.resolved_location, prepared.resolved_area)?;
     if input.raw {
         return Ok(raw);
     }
@@ -397,6 +301,143 @@ pub fn dispatch_with_apis(
             .insert("_next_actions".to_owned(), Value::Array(actions));
     }
     Ok(value)
+}
+
+struct PreparedSearch {
+    input: SearchInput,
+    request: UpstreamSearchRequest,
+    resolved_location: Option<crate::domain::search::SearchLocation>,
+    resolved_area: Option<crate::domain::search::SearchArea>,
+}
+
+fn prepare(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<PreparedSearch, AppError> {
+    let input = collect_input(args)?;
+    validate(&input)?;
+    let search = PublicSearch::new(api);
+    let mut parameters = input.facets.clone();
+    if let Some(category) = input.category.as_deref() {
+        let name = category_parameter(category)?;
+        insert_parameter(&mut parameters, name, vec![category.to_owned()])?;
+    }
+    insert_parameter(
+        &mut parameters,
+        "price_from",
+        input
+            .price_from
+            .map(|value| value.to_string())
+            .into_iter()
+            .collect(),
+    )?;
+    insert_parameter(
+        &mut parameters,
+        "price_to",
+        input
+            .price_to
+            .map(|value| value.to_string())
+            .into_iter()
+            .collect(),
+    )?;
+    insert_parameter(
+        &mut parameters,
+        "trade_type",
+        input
+            .trade_type
+            .map(|value| value.upstream().to_owned())
+            .into_iter()
+            .collect(),
+    )?;
+    insert_parameter(&mut parameters, "condition", input.condition.clone())?;
+    insert_parameter(
+        &mut parameters,
+        "dealer_segment",
+        input
+            .seller
+            .map(|value| value.upstream().to_owned())
+            .into_iter()
+            .collect(),
+    )?;
+    if input.shipping {
+        insert_parameter(&mut parameters, "shipping_exists", vec!["true".to_owned()])?;
+    }
+    insert_parameter(
+        &mut parameters,
+        "sort",
+        input
+            .sort
+            .map(|value| value.upstream().to_owned())
+            .into_iter()
+            .collect(),
+    )?;
+    let resolved_location = if let Some(location) = input.location.as_deref() {
+        let resolved = search.resolve_location(location)?;
+        insert_parameter(&mut parameters, "location", vec![resolved.id.clone()])?;
+        Some(resolved)
+    } else {
+        None
+    };
+    let resolved_area = if input.area.is_empty() {
+        None
+    } else {
+        let resolved = search.resolve_area(&input.area)?;
+        insert_parameter(
+            &mut parameters,
+            "location",
+            resolved
+                .locations
+                .iter()
+                .map(|location| location.id.clone())
+                .collect(),
+        )?;
+        Some(resolved)
+    };
+    if let (Some(latitude), Some(longitude), Some(radius_km)) =
+        (input.latitude, input.longitude, input.radius_km)
+    {
+        parameters.insert("lat".to_owned(), vec![latitude.to_string()]);
+        parameters.insert("lon".to_owned(), vec![longitude.to_string()]);
+        parameters.insert(
+            "radius".to_owned(),
+            vec![((radius_km * 1000.0).ceil() as u64).to_string()],
+        );
+    }
+    let request = UpstreamSearchRequest {
+        query: input.query.clone(),
+        page: input.page.unwrap_or(1),
+        limit: input.limit.unwrap_or(SEARCH_LIMIT_DEFAULT),
+        include_filters: input.include_facets,
+        facet_option_limit: input.facet_option_limit,
+        parameters,
+    };
+    Ok(PreparedSearch {
+        input,
+        request,
+        resolved_location,
+        resolved_area,
+    })
+}
+
+pub fn saved_search_parameters(
+    args: SearchArgs,
+    api: &dyn PublicSearchApi,
+) -> Result<BTreeMap<String, Vec<String>>, AppError> {
+    let prepared = prepare(args, api)?;
+    let input = &prepared.input;
+    if input.page.is_some()
+        || input.limit.is_some()
+        || input.explain.is_some()
+        || input.include_facets
+        || input.facet_option_limit.is_some()
+        || input.raw
+    {
+        return Err(AppError::usage(
+            "saved searches do not accept pagination, explanation, facet-output, or raw-output options",
+        ));
+    }
+    let mut parameters = prepared.request.parameters;
+    if !prepared.request.query.is_empty() {
+        parameters.insert("q".to_owned(), vec![prepared.request.query]);
+    }
+    Ok(parameters)
 }
 
 fn explain_matches(

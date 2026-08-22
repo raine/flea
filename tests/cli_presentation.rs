@@ -116,12 +116,13 @@ fn nested_help_flags_and_commands_use_stdout() {
 #[test]
 fn help_tables_include_agent_oriented_summaries() {
     let top = stdout(&invoke(&["--help"]));
-    assert!(top.contains("auth      Manage browser authentication"));
-    assert!(top.contains("category  Discover Tori categories (authentication required)"));
-    assert!(top.contains("draft     Preview input and manage remote drafts"));
-    assert!(top.contains("item      Inspect public marketplace listings"));
-    assert!(top.contains("listing   Manage published listings"));
-    assert!(top.contains("skill     Print or install the coding-agent skill"));
+    assert!(top.contains("auth          Manage browser authentication"));
+    assert!(top.contains("category      Discover Tori categories (authentication required)"));
+    assert!(top.contains("draft         Preview input and manage remote drafts"));
+    assert!(top.contains("item          Inspect public marketplace listings"));
+    assert!(top.contains("listing       Manage published listings"));
+    assert!(top.contains("saved-search  Manage saved searches and alerts"));
+    assert!(top.contains("skill         Print or install the coding-agent skill"));
 
     let item = stdout(&invoke(&["item", "show", "--help"]));
     assert!(item.contains("Usage: flea item show [OPTIONS] <LISTING_ID>"));

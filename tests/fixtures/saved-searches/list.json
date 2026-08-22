@@ -1,0 +1,22 @@
+[
+  {
+    "id": 987654321,
+    "type": "alert",
+    "userKey": "opaque-user",
+    "searchKey": "SEARCH_ID_BAP_COMMON",
+    "description": "Helsinki chairs",
+    "changed": 1760000000123,
+    "created": 1750000000456,
+    "deleted": false,
+    "notifications": ["EMAIL", "NC"],
+    "parameters": {
+      "q": ["tuoli"],
+      "location": ["1.100018.110091"],
+      "dealer_segment": ["1"],
+      "stored-id": ["987654321"]
+    },
+    "searchKeyDescription": "Tuoli",
+    "vertical": "bap",
+    "verticalDescription": "Tori"
+  }
+]
