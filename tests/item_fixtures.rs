@@ -114,8 +114,8 @@ fn missing_expired_and_upstream_invalid_items_have_distinct_actionable_errors() 
 }
 
 #[test]
-fn unexpected_and_transport_failures_are_redacted_and_retryable_as_appropriate() {
-    for (api_error, retryable) in [
+fn read_failures_separate_transience_from_safe_replay_and_redact_details() {
+    for (api_error, upstream_transient) in [
         (
             PublicItemApiError::Unexpected("secret response body".to_owned()),
             false,
@@ -130,7 +130,8 @@ fn unexpected_and_transport_failures_are_redacted_and_retryable_as_appropriate()
         let error = PublicItems::new(&FixtureApi::error(api_error))
             .show("42346404")
             .unwrap_err();
-        assert_eq!(error.retryable, retryable);
+        assert_eq!(error.upstream_transient, upstream_transient);
+        assert!(error.safe_to_retry);
         assert!(!format!("{error:?}").contains("secret"));
     }
 }

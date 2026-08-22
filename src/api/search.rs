@@ -6,13 +6,14 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use url::form_urlencoded;
 
 use crate::{
-    api::client::{RequestSpec, ToriClient, compatibility},
+    api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
     domain::search::{
         AppliedFilter, LocationCollection, SearchArea, SearchAreaContext, SearchCollection,
         SearchFacet, SearchFacetOption, SearchFacetRange, SearchListing, SearchLocation,
         SearchLocationContext, SearchPagination, SearchPrice,
     },
     error::{AppError, ExitClass},
+    retry::{FailureKind, OperationMethod, RetryContext, classify},
 };
 
 pub const SEARCH_PAGE_MAX: usize = 50;
@@ -49,12 +50,12 @@ impl HttpPublicSearchApi {
                     tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .map_err(|error| SearchApiError::Transport(error.to_string()))?
+                        .map_err(|_| SearchApiError::Unexpected("HTTP runtime failed".to_owned()))?
                         .block_on(client.execute(request))
-                        .map_err(|error| SearchApiError::Transport(error.to_string()))
+                        .map_err(search_http_error)
                 })
                 .join()
-                .map_err(|_| SearchApiError::Transport("HTTP worker panicked".to_owned()))?
+                .map_err(|_| SearchApiError::Unexpected("HTTP worker failed".to_owned()))?
         })?;
         if !response.status.is_success() {
             return Err(match response.status {
@@ -82,6 +83,22 @@ impl PublicSearchApi for HttpPublicSearchApi {
             }
             .path_and_query(),
         )
+    }
+}
+
+fn search_http_error(error: HttpError) -> SearchApiError {
+    match error {
+        HttpError::Transport(transport)
+            if matches!(
+                transport.kind,
+                TransportErrorKind::Timeout | TransportErrorKind::Connection
+            ) =>
+        {
+            SearchApiError::Transport(transport.to_string())
+        }
+        HttpError::InvalidRequest | HttpError::ResponseTooLarge | HttpError::Transport(_) => {
+            SearchApiError::Unexpected("HTTP adapter failed".to_owned())
+        }
     }
 }
 
@@ -750,16 +767,26 @@ fn search_error(error: SearchApiError) -> AppError {
             "the Tori search request failed",
             ExitClass::Upstream,
         )
-        .retryable(true),
+        .retry_classification(classify(
+            FailureKind::Transport,
+            RetryContext::read(OperationMethod::Get),
+        )),
         SearchApiError::Upstream(status) => AppError::new(
             "upstream.request_failed",
             "the Tori search request failed",
             ExitClass::Upstream,
         )
-        .retryable(status == 429 || status >= 500),
+        .retry_classification(classify(
+            FailureKind::HttpStatus(status),
+            RetryContext::read(OperationMethod::Get),
+        )),
     }
 }
 
 fn unexpected(message: &str) -> AppError {
     AppError::new("upstream.unexpected_response", message, ExitClass::Upstream)
+        .retry_classification(classify(
+            FailureKind::MalformedSuccess,
+            RetryContext::read(OperationMethod::Get),
+        ))
 }

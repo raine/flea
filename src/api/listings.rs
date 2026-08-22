@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::{
-    api::client::{RequestSpec, ToriClient, compatibility},
+    api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
     domain::listing::{
         Category, CategoryList, CategorySearchContext, CategorySearchResult, ListingAction,
         ListingActionName, ListingCollection, ListingCopySource, ListingDetail, ListingFacet,
@@ -18,6 +18,7 @@ use crate::{
         ListingSummary,
     },
     error::{AppError, ExitClass},
+    retry::{FailureKind, OperationMethod, RetryContext, classify},
 };
 
 pub const LISTING_PAGE_SIZE: usize = 50;
@@ -80,12 +81,16 @@ impl HttpListingsApi {
                     tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .map_err(|error| ListingsApiError::Upstream(error.to_string()))?
+                        .map_err(|_| {
+                            ListingsApiError::UnexpectedResponse("HTTP runtime failed".to_owned())
+                        })?
                         .block_on(client.execute(request))
-                        .map_err(|error| ListingsApiError::Upstream(error.to_string()))
+                        .map_err(listings_http_error)
                 })
                 .join()
-                .map_err(|_| ListingsApiError::Upstream("HTTP worker panicked".to_owned()))?
+                .map_err(|_| {
+                    ListingsApiError::UnexpectedResponse("HTTP worker failed".to_owned())
+                })?
         })?;
         decode_response(response.status, &response.body)
     }
@@ -104,18 +109,38 @@ impl HttpListingsApi {
                     tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .map_err(|error| ListingsApiError::Upstream(error.to_string()))?
+                        .map_err(|_| {
+                            ListingsApiError::UnexpectedResponse("HTTP runtime failed".to_owned())
+                        })?
                         .block_on(client.execute(request))
-                        .map_err(|error| ListingsApiError::Upstream(error.to_string()))
+                        .map_err(listings_http_error)
                 })
                 .join()
-                .map_err(|_| ListingsApiError::Upstream("HTTP worker panicked".to_owned()))?
+                .map_err(|_| {
+                    ListingsApiError::UnexpectedResponse("HTTP worker failed".to_owned())
+                })?
         })?;
         decode_response(response.status, &response.body)
     }
 
     fn empty(&self, method: Method, path: String) -> Result<(), ListingsApiError> {
         self.request::<Value>(method, path, None, None).map(|_| ())
+    }
+}
+
+fn listings_http_error(error: HttpError) -> ListingsApiError {
+    match error {
+        HttpError::Transport(transport)
+            if matches!(
+                transport.kind,
+                TransportErrorKind::Timeout | TransportErrorKind::Connection
+            ) =>
+        {
+            ListingsApiError::Transport
+        }
+        HttpError::InvalidRequest | HttpError::ResponseTooLarge | HttpError::Transport(_) => {
+            ListingsApiError::UnexpectedResponse("HTTP adapter failed".to_owned())
+        }
     }
 }
 
@@ -132,16 +157,7 @@ fn decode_response<T: DeserializeOwned>(
             return Err(ListingsApiError::Conflict);
         }
         status if !status.is_success() => {
-            let message = serde_json::from_slice::<Value>(body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .unwrap_or_else(|| format!("Tori returned HTTP {}", status.as_u16()));
-            return Err(ListingsApiError::Upstream(message));
+            return Err(ListingsApiError::Upstream(status.as_u16()));
         }
         _ => {}
     }
@@ -221,8 +237,10 @@ pub enum ListingsApiError {
         message: String,
         fields: BTreeMap<String, String>,
     },
-    #[error("{0}")]
-    Upstream(String),
+    #[error("listing transport failed")]
+    Transport,
+    #[error("Tori listing service returned HTTP {0}")]
+    Upstream(u16),
     #[error("unexpected upstream response: {0}")]
     UnexpectedResponse(String),
 }
@@ -238,7 +256,8 @@ impl fmt::Debug for ListingsApiError {
                 .field("message", &"[REDACTED]")
                 .field("field_names", &fields.keys().collect::<Vec<_>>())
                 .finish(),
-            Self::Upstream(_) => formatter.write_str("Upstream([REDACTED])"),
+            Self::Transport => formatter.write_str("Transport"),
+            Self::Upstream(status) => formatter.debug_tuple("Upstream").field(status).finish(),
             Self::UnexpectedResponse(_) => formatter.write_str("UnexpectedResponse([REDACTED])"),
         }
     }
@@ -517,7 +536,9 @@ impl<'a> Listings<'a> {
             let page = self
                 .api
                 .listing_page(offset, LISTING_PAGE_SIZE)
-                .map_err(|error| listing_error(error, None))?;
+                .map_err(|error| {
+                    listing_error(error, None, RetryContext::read(OperationMethod::Get))
+                })?;
             let expected_total = *total.get_or_insert(page.total);
             if page.total != expected_total {
                 return Err(unexpected("listing total changed during pagination"));
@@ -561,7 +582,13 @@ impl<'a> Listings<'a> {
         validate_id(listing_id)?;
         self.api
             .listing(listing_id)
-            .map_err(|error| listing_error(error, Some(listing_id)))
+            .map_err(|error| {
+                listing_error(
+                    error,
+                    Some(listing_id),
+                    RetryContext::read(OperationMethod::Get),
+                )
+            })
             .and_then(|listing| normalize_listing_for_id(listing, listing_id))
     }
 
@@ -593,16 +620,26 @@ impl<'a> Listings<'a> {
                     .snapshot(listing_id)
                     .ok()
                     .map(|snapshot| snapshot.detail);
+                let mut retry_context = RetryContext::mutation(OperationMethod::Put).with_etag();
+                if fresh.is_some() {
+                    retry_context = retry_context.with_authoritative_observation();
+                }
+                let classification = classify(FailureKind::PreconditionFailed, retry_context);
                 let mut error = AppError::new(
                     "listing.conflict",
                     "listing changed remotely; no fields were overwritten",
                     ExitClass::Conflict,
-                );
-                error.retryable = true;
+                )
+                .retry_classification(classification);
                 error.details = Some(Box::new(json!({
                     "listing_id": listing_id,
                     "current": fresh,
                 })));
+                error
+                    .next_actions
+                    .push(crate::domain::envelope::NextAction {
+                        command: format!("flea listing show {listing_id}"),
+                    });
                 Err(error)
             }
             Err(error) => Err(listing_mutation_error(error, listing_id, "update")),
@@ -1137,6 +1174,7 @@ fn validation_error(field: &str, message: &str) -> AppError {
 }
 
 fn category_error(error: ListingsApiError) -> AppError {
+    let read = RetryContext::read(OperationMethod::Get);
     match error {
         ListingsApiError::Authentication => AppError::authentication(
             "category.authentication_failed",
@@ -1145,16 +1183,10 @@ fn category_error(error: ListingsApiError) -> AppError {
         ListingsApiError::NotFound => AppError::upstream(
             "category.endpoint_unavailable",
             "Tori's category taxonomy endpoint is unavailable",
-        ),
+        )
+        .retry_classification(classify(FailureKind::HttpStatus(404), read)),
         ListingsApiError::UnexpectedResponse(message) => category_protocol_error(message),
-        other => {
-            let mut error = AppError::upstream(
-                "category.request_failed",
-                "the Tori category taxonomy request failed",
-            );
-            error.retryable = matches!(other, ListingsApiError::Upstream(_));
-            error
-        }
+        other => upstream_error(other, read),
     }
 }
 
@@ -1163,9 +1195,17 @@ fn category_protocol_error(_message: String) -> AppError {
         "category.protocol_drift",
         "Tori returned an unexpected category taxonomy response",
     )
+    .retry_classification(classify(
+        FailureKind::MalformedSuccess,
+        RetryContext::read(OperationMethod::Get),
+    ))
 }
 
-fn listing_error(error: ListingsApiError, listing_id: Option<&str>) -> AppError {
+fn listing_error(
+    error: ListingsApiError,
+    listing_id: Option<&str>,
+    context: RetryContext,
+) -> AppError {
     match error {
         ListingsApiError::Authentication => AppError::authentication(
             "auth.rejected",
@@ -1193,7 +1233,7 @@ fn listing_error(error: ListingsApiError, listing_id: Option<&str>) -> AppError 
             })));
             error
         }
-        other => upstream_error(other),
+        other => upstream_error(other, context),
     }
 }
 
@@ -1208,9 +1248,33 @@ fn resource_not_found(code: &str, resource: &str, id: &str) -> AppError {
 }
 
 fn listing_mutation_error(error: ListingsApiError, listing_id: &str, operation: &str) -> AppError {
-    let app_error = listing_error(error, Some(listing_id));
+    let outcome_uncertain = matches!(
+        &error,
+        ListingsApiError::Transport
+            | ListingsApiError::UnexpectedResponse(_)
+            | ListingsApiError::Upstream(408 | 425 | 429 | 500 | 502 | 503 | 504)
+    );
+    let method = match operation {
+        "update" => OperationMethod::Put,
+        "delete" => OperationMethod::Delete,
+        _ => OperationMethod::Post,
+    };
+    let mut app_error = listing_error(error, Some(listing_id), RetryContext::mutation(method));
     if app_error.exit_class != ExitClass::Upstream {
+        if app_error.exit_class == ExitClass::Conflict {
+            app_error
+                .next_actions
+                .push(crate::domain::envelope::NextAction {
+                    command: format!("flea listing show {listing_id}"),
+                });
+        }
         return app_error;
+    }
+    if outcome_uncertain {
+        app_error.code = "mutation.uncertain".to_owned();
+        app_error.message =
+            "The upstream failure may be temporary, but the listing mutation outcome is unknown"
+                .to_owned();
     }
     let mut app_error = app_error.with_partial(json!({
         "listing_id": listing_id,
@@ -1224,20 +1288,36 @@ fn listing_mutation_error(error: ListingsApiError, listing_id: &str, operation: 
     app_error
 }
 
-fn upstream_error(error: ListingsApiError) -> AppError {
-    let retryable = matches!(error, ListingsApiError::Upstream(_));
-    let (code, message) = match error {
+fn upstream_error(error: ListingsApiError, context: RetryContext) -> AppError {
+    let (code, message, failure) = match error {
+        ListingsApiError::Transport => (
+            "upstream.request_failed",
+            "the Tori listing request failed",
+            FailureKind::Transport,
+        ),
+        ListingsApiError::Upstream(status) => (
+            "upstream.request_failed",
+            "the Tori listing request failed",
+            FailureKind::HttpStatus(status),
+        ),
         ListingsApiError::UnexpectedResponse(_) => (
             "upstream.unexpected_response",
             "Tori returned an unexpected listing response",
+            FailureKind::MalformedSuccess,
         ),
-        _ => ("upstream.request_failed", "the Tori listing request failed"),
+        _ => (
+            "upstream.request_failed",
+            "the Tori listing request failed",
+            FailureKind::Local,
+        ),
     };
-    let mut app_error = AppError::new(code, message, ExitClass::Upstream);
-    app_error.retryable = retryable;
-    app_error
+    AppError::new(code, message, ExitClass::Upstream)
+        .retry_classification(classify(failure, context))
 }
 
 fn unexpected(message: &str) -> AppError {
-    upstream_error(ListingsApiError::UnexpectedResponse(message.to_owned()))
+    upstream_error(
+        ListingsApiError::UnexpectedResponse(message.to_owned()),
+        RetryContext::read(OperationMethod::Get),
+    )
 }

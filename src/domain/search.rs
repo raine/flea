@@ -67,7 +67,8 @@ pub struct SearchExplainSummary {
 pub struct SearchExplainFailure {
     pub listing_id: String,
     pub code: String,
-    pub retryable: bool,
+    pub upstream_transient: bool,
+    pub safe_to_retry: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

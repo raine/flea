@@ -389,7 +389,8 @@ fn explain_matches(
             Err(error) => failures.push(SearchExplainFailure {
                 listing_id,
                 code: error.code.to_owned(),
-                retryable: error.retryable,
+                upstream_transient: error.upstream_transient,
+                safe_to_retry: error.safe_to_retry,
             }),
         }
     }

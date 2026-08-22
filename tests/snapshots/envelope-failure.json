@@ -3,7 +3,8 @@
   "error": {
     "code": "draft.validation_failed",
     "message": "Required fields are missing",
-    "retryable": false,
+    "upstream_transient": false,
+    "safe_to_retry": false,
     "details": {
       "missing_fields": [
         "title",

@@ -404,7 +404,7 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
 }
 
 #[test]
-fn upstream_failures_are_retryable_bounded_and_redacted() {
+fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
     struct ErrorApi;
     impl PublicSearchApi for ErrorApi {
         fn search(&self, _request: &UpstreamSearchRequest) -> Result<Value, SearchApiError> {
@@ -422,7 +422,8 @@ fn upstream_failures_are_retryable_bounded_and_redacted() {
     };
     let error = search::dispatch_with_api(*args, &ErrorApi).unwrap_err();
     assert_eq!(error.code, "upstream.request_failed");
-    assert!(error.retryable);
+    assert!(error.upstream_transient);
+    assert!(error.safe_to_retry);
     let rendered = format!("{error:?}");
     assert!(!rendered.contains("private query"));
     assert!(!rendered.contains("stack trace"));
@@ -590,7 +591,8 @@ fn explain_enforces_its_request_bound_and_reports_partial_failures() {
         output["explain"]["failures"][0]["code"],
         "upstream.request_failed"
     );
-    assert_eq!(output["explain"]["failures"][0]["retryable"], true);
+    assert_eq!(output["explain"]["failures"][0]["upstream_transient"], true);
+    assert_eq!(output["explain"]["failures"][0]["safe_to_retry"], true);
 }
 
 #[test]

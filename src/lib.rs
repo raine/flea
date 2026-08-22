@@ -4,6 +4,7 @@ pub mod diagnostics;
 pub mod domain;
 pub mod error;
 pub mod output;
+pub mod retry;
 pub mod storage;
 
 use std::{
@@ -198,7 +199,8 @@ fn finish(
             tracing::error!(
                 event = "command.failed",
                 error.code = error.code,
-                error.retryable = error.retryable,
+                error.upstream_transient = error.upstream_transient,
+                error.safe_to_retry = error.safe_to_retry,
                 error.chain = ?error.internal_chain(),
                 partial = ?error.partial
             );
@@ -220,7 +222,7 @@ fn finish(
             );
             let fallback = Envelope::failure(render_error);
             let document = serde_json::to_string(&fallback).unwrap_or_else(|_| {
-                "{\"ok\":false,\"error\":{\"code\":\"output.failed\",\"message\":\"failed to serialize output\",\"retryable\":false},\"warnings\":[],\"next_actions\":[]}".to_owned()
+                "{\"ok\":false,\"error\":{\"code\":\"output.failed\",\"message\":\"failed to serialize output\",\"upstream_transient\":false,\"safe_to_retry\":false},\"warnings\":[],\"next_actions\":[]}".to_owned()
             });
             RunResult {
                 document,

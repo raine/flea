@@ -478,9 +478,29 @@ fn etag_conflict_returns_fresh_state_without_retrying_the_mutation() {
 
     assert_eq!(error.code, "listing.conflict");
     assert_eq!(error.exit_class.code(), 30);
-    assert!(error.retryable);
+    assert!(!error.upstream_transient);
+    assert!(error.safe_to_retry);
+    assert_eq!(error.next_actions[0].command, "flea listing show 36443414");
     assert_eq!(error.details.unwrap()["current"]["fields"]["price"], 50);
     assert_eq!(api.update_calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn etag_conflict_without_fresh_observation_requires_authoritative_show() {
+    let mut api = MockListingsApi::fixtures();
+    api.updates = Mutex::new(VecDeque::from([Err(ListingsApiError::Conflict)]));
+
+    let error = Listings::new(&api)
+        .update(
+            "36443414",
+            BTreeMap::from([("price".to_owned(), json!(60))]),
+        )
+        .unwrap_err();
+
+    assert!(!error.upstream_transient);
+    assert!(!error.safe_to_retry);
+    assert_eq!(error.details.unwrap()["current"], Value::Null);
+    assert_eq!(error.next_actions[0].command, "flea listing show 36443414");
 }
 
 #[test]
@@ -537,9 +557,7 @@ fn json_and_flag_duplicates_are_a_structured_usage_error() {
 #[test]
 fn ambiguous_mutation_failures_include_listing_recovery_context() {
     let mut api = MockListingsApi::fixtures();
-    api.updates = Mutex::new(VecDeque::from([Err(ListingsApiError::Upstream(
-        "Bearer upstream-secret".to_owned(),
-    ))]));
+    api.updates = Mutex::new(VecDeque::from([Err(ListingsApiError::Upstream(502))]));
 
     let error = Listings::new(&api)
         .update(
@@ -549,6 +567,9 @@ fn ambiguous_mutation_failures_include_listing_recovery_context() {
         .unwrap_err();
 
     assert_eq!(error.exit_class.code(), 50);
+    assert_eq!(error.code, "mutation.uncertain");
+    assert!(error.upstream_transient);
+    assert!(!error.safe_to_retry);
     assert_eq!(error.partial.as_ref().unwrap()["listing_id"], "36443414");
     assert_eq!(error.partial.as_ref().unwrap()["operation"], "update");
     assert_eq!(error.next_actions[0].command, "flea listing show 36443414");

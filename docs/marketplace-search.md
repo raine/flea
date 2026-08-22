@@ -34,8 +34,10 @@ CLI compared normalized tokens rather than receiving match evidence from the sea
 
 The top-level `explain` summary reports the request limit, attempted requests, successful
 hydrations, explanations, and whether additional opaque results were left unhydrated by the bound.
-A failed detail request appears in `failures` with its listing ID, structured error code, and retry
-classification. Other search results and successful explanations remain in the response.
+A failed detail request appears in `failures` with its listing ID, structured error code,
+`upstream_transient`, and `safe_to_retry` classifications. Other search results and successful
+explanations remain in the response. See [Error retry semantics](error-schema.md) for the shared
+schema.
 
 For the full public detail, pass the numeric `listing_id` from a search result to the item command:
 

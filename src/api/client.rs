@@ -15,6 +15,8 @@ use reqwest::{
 };
 use url::Position;
 
+use crate::retry::{FailureKind, OperationMethod, RetryContext, classify};
+
 use super::signing::{SigningContext, sign};
 
 pub mod compatibility {
@@ -60,7 +62,7 @@ pub struct ClientConfig {
     pub adinput_base_url: String,
     pub request_timeout: Duration,
     pub max_response_bytes: usize,
-    /// Number of attempts after the initial GET or HEAD request.
+    /// Number of attempts after the initial request when replay is classified as safe.
     pub max_get_retries: usize,
     pub retry_base_delay: Duration,
     pub retry_max_delay: Duration,
@@ -186,6 +188,8 @@ pub struct RequestSpec {
     pub if_match: Option<HeaderValue>,
     pub content_length_zero: bool,
     pub headers: HeaderMap,
+    idempotency_contract: bool,
+    idempotency_key: bool,
 }
 
 impl fmt::Debug for RequestSpec {
@@ -200,6 +204,8 @@ impl fmt::Debug for RequestSpec {
             .field("content_type", &self.content_type)
             .field("has_if_match", &self.if_match.is_some())
             .field("content_length_zero", &self.content_length_zero)
+            .field("idempotency_contract", &self.idempotency_contract)
+            .field("has_idempotency_key", &self.idempotency_key)
             .field("header_names", &header_names(&self.headers))
             .finish()
     }
@@ -221,6 +227,8 @@ impl RequestSpec {
             if_match: None,
             content_length_zero: false,
             headers: HeaderMap::new(),
+            idempotency_contract: false,
+            idempotency_key: false,
         }
     }
 
@@ -249,6 +257,37 @@ impl RequestSpec {
     pub fn if_match(mut self, etag: HeaderValue) -> Self {
         self.if_match = Some(etag);
         self
+    }
+
+    pub fn with_source_backed_idempotency_contract(mut self) -> Self {
+        self.idempotency_contract = true;
+        self
+    }
+
+    pub fn with_source_backed_idempotency_key(
+        mut self,
+        header_name: HeaderName,
+        header_value: HeaderValue,
+    ) -> Self {
+        self.headers.insert(header_name, header_value);
+        self.idempotency_key = true;
+        self
+    }
+
+    fn retry_context(&self) -> RetryContext {
+        let method = OperationMethod::from_reqwest(&self.method);
+        let mut context = if matches!(method, OperationMethod::Get | OperationMethod::Head) {
+            RetryContext::read(method)
+        } else {
+            RetryContext::mutation(method)
+        };
+        if self.idempotency_contract {
+            context = context.with_idempotency_contract();
+        }
+        if self.idempotency_key {
+            context = context.with_idempotency_key();
+        }
+        context
     }
 }
 
@@ -504,12 +543,8 @@ impl<T: Transport> HttpClient<T> {
 
     pub async fn send(&self, request: RequestSpec) -> Result<HttpResponse, HttpError> {
         validate_path(&request.path_and_query)?;
-        let retryable_method = matches!(request.method, Method::GET | Method::HEAD);
-        let max_attempts = if retryable_method {
-            self.config.max_get_retries.min(MAX_GET_RETRIES) + 1
-        } else {
-            1
-        };
+        let retry_context = request.retry_context();
+        let max_attempts = self.config.max_get_retries.min(MAX_GET_RETRIES) + 1;
         let mut attempt = 0;
 
         loop {
@@ -519,7 +554,14 @@ impl<T: Transport> HttpClient<T> {
                     if response.body.len() > self.config.max_response_bytes {
                         return Err(HttpError::ResponseTooLarge);
                     }
-                    if attempt + 1 < max_attempts && is_transient_status(response.status) {
+                    let classification = classify(
+                        FailureKind::HttpStatus(response.status.as_u16()),
+                        retry_context,
+                    );
+                    if attempt + 1 < max_attempts
+                        && classification.upstream_transient
+                        && classification.safe_to_retry
+                    {
                         self.sleep_before_retry(attempt).await;
                         attempt += 1;
                         continue;
@@ -530,11 +572,18 @@ impl<T: Transport> HttpClient<T> {
                         body: response.body,
                     });
                 }
-                Err(error) if attempt + 1 < max_attempts && is_transient_error(error.kind) => {
-                    self.sleep_before_retry(attempt).await;
-                    attempt += 1;
+                Err(error) => {
+                    let classification = retry_transport_classification(error.kind, retry_context);
+                    if attempt + 1 < max_attempts
+                        && classification.upstream_transient
+                        && classification.safe_to_retry
+                    {
+                        self.sleep_before_retry(attempt).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(error.into());
                 }
-                Err(error) => return Err(error.into()),
             }
         }
     }
@@ -733,24 +782,15 @@ fn validate_custom_headers(headers: &HeaderMap) -> Result<(), HttpError> {
     Ok(())
 }
 
-fn is_transient_status(status: StatusCode) -> bool {
-    matches!(
-        status,
-        StatusCode::REQUEST_TIMEOUT
-            | StatusCode::TOO_EARLY
-            | StatusCode::TOO_MANY_REQUESTS
-            | StatusCode::INTERNAL_SERVER_ERROR
-            | StatusCode::BAD_GATEWAY
-            | StatusCode::SERVICE_UNAVAILABLE
-            | StatusCode::GATEWAY_TIMEOUT
-    )
-}
-
-fn is_transient_error(kind: TransportErrorKind) -> bool {
-    matches!(
-        kind,
-        TransportErrorKind::Timeout | TransportErrorKind::Connection
-    )
+fn retry_transport_classification(
+    kind: TransportErrorKind,
+    context: RetryContext,
+) -> crate::retry::RetryClassification {
+    let failure = match kind {
+        TransportErrorKind::Timeout | TransportErrorKind::Connection => FailureKind::Transport,
+        TransportErrorKind::Other => FailureKind::Local,
+    };
+    classify(failure, context)
 }
 
 fn retry_delay(config: &ClientConfig, attempt: usize) -> Duration {

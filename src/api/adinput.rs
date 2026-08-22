@@ -17,9 +17,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::client::{MultipartPart, RequestSpec, ToriClient, compatibility},
+    api::client::{
+        HttpError, MultipartPart, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+    },
     diagnostics,
     domain::field::Field,
+    retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -40,6 +43,16 @@ pub enum Method {
 impl Method {
     const fn is_mutation(&self) -> bool {
         !matches!(self, Self::Get)
+    }
+
+    const fn retry_method(&self) -> OperationMethod {
+        match self {
+            Self::Get => OperationMethod::Get,
+            Self::Post => OperationMethod::Post,
+            Self::Patch => OperationMethod::Patch,
+            Self::Put => OperationMethod::Put,
+            Self::Delete => OperationMethod::Delete,
+        }
     }
 }
 
@@ -124,6 +137,15 @@ impl HttpRequest {
             body,
         }
     }
+
+    fn retry_context(&self) -> RetryContext {
+        let method = self.method.retry_method();
+        if self.method.is_mutation() {
+            RetryContext::mutation(method)
+        } else {
+            RetryContext::read(method)
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -140,7 +162,8 @@ pub struct HttpResponse {
 pub struct ApiError {
     pub code: String,
     pub message: String,
-    pub retryable: bool,
+    pub upstream_transient: bool,
+    pub safe_to_retry: bool,
     pub status: Option<u16>,
     pub details: Option<Box<Value>>,
 }
@@ -150,13 +173,14 @@ impl ApiError {
         Self {
             code: code.into(),
             message: message.into(),
-            retryable: false,
+            upstream_transient: false,
+            safe_to_retry: false,
             status: None,
             details: None,
         }
     }
 
-    fn response(response: &HttpResponse) -> Self {
+    fn response(response: &HttpResponse, context: RetryContext) -> Self {
         let message = response
             .body
             .get("message")
@@ -165,15 +189,33 @@ impl ApiError {
             .unwrap_or_else(|| "Tori rejected the request".to_owned());
         let mut upstream = response.body.clone();
         diagnostics::redact_value(&mut upstream);
-        let mut error = Self::new("upstream.request_failed", message);
+        let classification = classify(FailureKind::HttpStatus(response.status), context);
+        let (code, message) = if classification.upstream_transient
+            && !classification.safe_to_retry
+            && !context.method.is_read()
+        {
+            (
+                "mutation.uncertain",
+                "The upstream failure may be temporary, but the mutation outcome is unknown"
+                    .to_owned(),
+            )
+        } else {
+            ("upstream.request_failed", message)
+        };
+        let mut error = Self::new(code, message).retry_classification(classification);
         error.status = Some(response.status);
-        error.retryable = response.status >= 500;
         error.details = Some(Box::new(json!({
             "status": response.status,
             "content_type": response.content_type,
             "upstream": upstream
         })));
         error
+    }
+
+    fn retry_classification(mut self, classification: RetryClassification) -> Self {
+        self.upstream_transient = classification.upstream_transient;
+        self.safe_to_retry = classification.safe_to_retry;
+        self
     }
 }
 
@@ -187,7 +229,8 @@ impl fmt::Debug for ApiError {
             .debug_struct("ApiError")
             .field("code", &self.code)
             .field("message", &diagnostics::redact_text(&self.message))
-            .field("retryable", &self.retryable)
+            .field("upstream_transient", &self.upstream_transient)
+            .field("safe_to_retry", &self.safe_to_retry)
             .field("status", &self.status)
             .field("details", &details)
             .finish()
@@ -220,6 +263,7 @@ impl<C> ClientTransport<C> {
 impl<C: ToriClient> HttpTransport for ClientTransport<C> {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
         let service = service_for_path(&request.path);
+        let retry_context = request.retry_context();
         let method = match request.method {
             Method::Get => ReqwestMethod::GET,
             Method::Post => ReqwestMethod::POST,
@@ -265,9 +309,33 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
             })?);
         }
         let response = self.client.execute(spec).await.map_err(|error| {
-            let mut api = ApiError::new("upstream.request_failed", error.to_string());
-            api.retryable = matches!(request.retry, RetryPolicy::BoundedRead);
-            api
+            let failure = match &error {
+                HttpError::Transport(transport)
+                    if matches!(
+                        transport.kind,
+                        TransportErrorKind::Timeout | TransportErrorKind::Connection
+                    ) =>
+                {
+                    FailureKind::Transport
+                }
+                HttpError::InvalidRequest
+                | HttpError::ResponseTooLarge
+                | HttpError::Transport(_) => FailureKind::Local,
+            };
+            let classification = classify(failure, retry_context);
+            let (code, message) = if classification.upstream_transient
+                && !classification.safe_to_retry
+                && !retry_context.method.is_read()
+            {
+                (
+                    "mutation.uncertain",
+                    "The upstream failure may be temporary, but the mutation outcome is unknown"
+                        .to_owned(),
+                )
+            } else {
+                ("upstream.request_failed", error.to_string())
+            };
+            ApiError::new(code, message).retry_classification(classification)
         })?;
         let (body, body_is_unparseable) = if response.body.is_empty() {
             (Value::Null, false)
@@ -559,19 +627,22 @@ impl<T> HttpAdInputApi<T> {
 impl<T: HttpTransport> HttpAdInputApi<T> {
     async fn json(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
         debug_assert!(!request.method.is_mutation() || request.retry == RetryPolicy::Never);
+        let retry_context = request.retry_context();
         let response = self.transport.execute(request).await?;
         if (200..300).contains(&response.status) {
             Ok(response)
         } else {
-            Err(ApiError::response(&response))
+            Err(ApiError::response(&response, retry_context))
         }
     }
 
     async fn draft_request(&self, request: HttpRequest) -> Result<DraftState, ApiError> {
         let is_mutation = request.method.is_mutation();
+        let retry_context = request.retry_context();
         let response = self.json(request).await?;
         if response.body_is_unparseable {
-            let mut error = unexpected_representation("receive_draft_state", &response);
+            let mut error = unexpected_representation("receive_draft_state", &response)
+                .retry_classification(classify(FailureKind::MalformedSuccess, retry_context));
             if is_mutation {
                 error.code = "mutation.uncertain".to_owned();
                 error.message =
@@ -581,6 +652,9 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
             return Err(error);
         }
         normalize_draft_state(response.body, response.etag.as_deref()).map_err(|mut error| {
+            let classification = classify(FailureKind::MalformedSuccess, retry_context);
+            error.upstream_transient = classification.upstream_transient;
+            error.safe_to_retry = classification.safe_to_retry;
             if is_mutation {
                 error.code = "mutation.uncertain".to_owned();
                 error.message =
@@ -619,6 +693,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             "/adinput/ad/withModel/recommerce",
             RequestBody::Empty,
         );
+        let retry_context = request.retry_context();
         let response = self.transport.execute(request).await?;
         if response.status == 303 {
             let draft_id =
@@ -630,7 +705,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
                 .await;
         }
         if !(200..300).contains(&response.status) {
-            return Err(ApiError::response(&response));
+            return Err(ApiError::response(&response, retry_context));
         }
         if response.body_is_unparseable {
             return Err(uncertain_creation(
@@ -850,7 +925,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             )))
             .await?;
         serde_json::from_value(response.body)
-            .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))
+            .map_err(|_| malformed_read_response("category_predictions"))
     }
 
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
@@ -860,8 +935,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
                 "/listings/{listing_id}/draft-source"
             )))
             .await?;
-        serde_json::from_value(response.body)
-            .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))
+        serde_json::from_value(response.body).map_err(|_| malformed_read_response("source_listing"))
     }
 
     async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError> {
@@ -1027,7 +1101,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             )))
             .await?;
         serde_json::from_value(response.body)
-            .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))
+            .map_err(|_| malformed_read_response("product_context"))
     }
 
     async fn publish_basic(
@@ -1048,7 +1122,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             ))
             .await?;
         serde_json::from_value(response.body)
-            .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))
+            .map_err(|_| uncertain_mutation_response("publish_basic"))
     }
 
     async fn confirmation(&self, listing_id: &str) -> Result<Confirmation, ApiError> {
@@ -1058,8 +1132,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
                 "/listings/{listing_id}/confirmation"
             )))
             .await?;
-        serde_json::from_value(response.body)
-            .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))
+        serde_json::from_value(response.body).map_err(|_| malformed_read_response("confirmation"))
     }
 
     async fn track_confirmation(&self, confirmation: &Confirmation) -> Result<(), ApiError> {
@@ -1349,6 +1422,31 @@ fn unexpected_representation(stage: &str, response: &HttpResponse) -> ApiError {
     error
 }
 
+fn malformed_read_response(stage: &str) -> ApiError {
+    let mut error = ApiError::new(
+        "upstream.unexpected_response",
+        "Tori returned an invalid success response",
+    )
+    .retry_classification(classify(
+        FailureKind::MalformedSuccess,
+        RetryContext::read(OperationMethod::Get),
+    ));
+    error.details = Some(Box::new(json!({ "stage": stage })));
+    error
+}
+
+fn uncertain_mutation_response(stage: &str) -> ApiError {
+    let mut error = ApiError::new(
+        "mutation.uncertain",
+        "The mutation may have succeeded, but its resulting state is unknown",
+    );
+    error.details = Some(Box::new(json!({
+        "stage": stage,
+        "recovery_guidance": "Inspect authoritative state before continuing; do not repeat the mutation"
+    })));
+    error
+}
+
 fn uncertain_creation(response: &HttpResponse, reason: &str) -> ApiError {
     let mut error = ApiError::new(
         "mutation.uncertain",
@@ -1554,7 +1652,8 @@ pub struct Recovery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing_id: Option<String>,
     pub completed_steps: Vec<String>,
-    pub retryable: bool,
+    pub upstream_transient: bool,
+    pub safe_to_retry: bool,
     pub next_safe_actions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh_state: Option<DraftState>,
@@ -1595,7 +1694,8 @@ impl WorkflowError {
                 draft_id,
                 listing_id: None,
                 completed_steps,
-                retryable: true,
+                upstream_transient: error.upstream_transient,
+                safe_to_retry: false,
                 fresh_state: None,
             })
         });
@@ -1612,8 +1712,11 @@ impl WorkflowError {
         draft_id: &str,
         completed_steps: &[String],
         error: ApiError,
-        retryable: bool,
+        safe_to_retry: bool,
     ) -> Self {
+        let safe_to_retry =
+            safe_to_retry && error.safe_to_retry && !completed_steps_have_mutation(completed_steps);
+        let upstream_transient = error.upstream_transient;
         Self {
             code: error.code.clone(),
             message: error.message.clone(),
@@ -1622,7 +1725,8 @@ impl WorkflowError {
                 draft_id: draft_id.to_owned(),
                 listing_id: None,
                 completed_steps: completed_steps.to_vec(),
-                retryable,
+                upstream_transient,
+                safe_to_retry,
                 next_safe_actions: vec![format!("flea draft show {draft_id}")],
                 fresh_state: None,
             }),
@@ -1669,7 +1773,8 @@ impl WorkflowError {
                 draft_id: draft_id.to_owned(),
                 listing_id: None,
                 completed_steps: completed_steps.to_vec(),
-                retryable: false,
+                upstream_transient: false,
+                safe_to_retry: false,
                 next_safe_actions: vec![format!("flea draft update {draft_id} --input PATH")],
                 fresh_state: None,
             }),
@@ -1707,7 +1812,8 @@ impl WorkflowError {
                 draft_id: draft_id.to_owned(),
                 listing_id: None,
                 completed_steps: completed_steps.to_vec(),
-                retryable: false,
+                upstream_transient: false,
+                safe_to_retry: false,
                 next_safe_actions,
                 fresh_state: None,
             }),
@@ -1725,6 +1831,27 @@ impl WorkflowError {
             })),
         }
     }
+}
+
+pub(crate) fn completed_steps_have_mutation(completed_steps: &[String]) -> bool {
+    completed_steps.iter().any(|step| {
+        step == "create_draft"
+            || step == "apply_category"
+            || step == "apply_fields"
+            || step == "copy_fields"
+            || step.starts_with("upload_image:")
+            || matches!(
+                step.as_str(),
+                "attach_images"
+                    | "update_item_fields"
+                    | "apply_price"
+                    | "patch_item_fields"
+                    | "submit_adinput"
+                    | "apply_delivery"
+                    | "publish_basic"
+                    | "track_confirmation"
+            )
+    })
 }
 
 impl fmt::Debug for WorkflowError {
@@ -2152,7 +2279,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             state = match self.api.update_item(draft_id, &state.etag, &values).await {
                 Ok(state) => state,
                 Err(error) if error.status == Some(412) => {
-                    return Err(self.update_conflict(draft_id, &completed).await);
+                    return Err(self
+                        .update_conflict(draft_id, &completed, OperationMethod::Put)
+                        .await);
                 }
                 Err(error) => {
                     return Err(WorkflowError::for_draft(draft_id, &completed, error, false));
@@ -2176,7 +2305,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             {
                 Ok(_) => {}
                 Err(error) if error.status == Some(412) => {
-                    return Err(self.update_conflict(draft_id, &completed).await);
+                    return Err(self
+                        .update_conflict(draft_id, &completed, OperationMethod::Patch)
+                        .await);
                 }
                 Err(error) => {
                     return Err(WorkflowError::for_draft(draft_id, &completed, error, false));
@@ -2210,7 +2341,12 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         })
     }
 
-    async fn update_conflict(&self, draft_id: &str, completed: &[String]) -> WorkflowError {
+    async fn update_conflict(
+        &self,
+        draft_id: &str,
+        completed: &[String],
+        method: OperationMethod,
+    ) -> WorkflowError {
         let fresh = match self.api.get_draft(draft_id).await {
             Ok(fresh) => fresh,
             Err(error) => return WorkflowError::for_draft(draft_id, completed, error, true),
@@ -2220,8 +2356,17 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             "The draft changed while the update was being applied",
         );
         conflict.status = Some(412);
+        let mut context = RetryContext::mutation(method)
+            .with_etag()
+            .with_authoritative_observation();
+        if completed_steps_have_mutation(completed) {
+            context = context.with_completed_mutation_steps();
+        }
+        let classification = classify(FailureKind::PreconditionFailed, context);
         let mut workflow = WorkflowError::for_draft(draft_id, completed, conflict, false);
         if let Some(recovery) = &mut workflow.recovery {
+            recovery.upstream_transient = classification.upstream_transient;
+            recovery.safe_to_retry = classification.safe_to_retry;
             recovery.fresh_state = Some(fresh);
             recovery.next_safe_actions = vec![format!("flea draft show {draft_id}")];
         }
@@ -2566,7 +2711,8 @@ fn image_processing_timeout(draft_id: &str, completed: &[String]) -> WorkflowErr
         "draft.image_processing",
         "Images did not finish processing before the bounded timeout",
     );
-    error.retryable = true;
+    error.upstream_transient = true;
+    error.safe_to_retry = true;
     WorkflowError::for_draft(draft_id, completed, error, true)
 }
 

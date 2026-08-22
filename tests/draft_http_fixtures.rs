@@ -328,7 +328,8 @@ async fn uncertain_creation_covers_unparseable_empty_and_missing_identity_succes
         let error = api.create_draft().await.unwrap_err();
 
         assert_eq!(error.code, "mutation.uncertain");
-        assert!(!error.retryable);
+        assert!(!error.upstream_transient);
+        assert!(!error.safe_to_retry);
         let details = error.details.unwrap();
         assert_eq!(details["stage"], "create_draft");
         assert_eq!(details["completed_steps"], json!([]));
@@ -402,7 +403,8 @@ async fn update_conflict_fetches_and_returns_fresh_remote_state() {
     let recovery = error.recovery.unwrap();
     assert_eq!(recovery.draft_id, "draft-1");
     assert_eq!(recovery.completed_steps, ["fetch_draft"]);
-    assert!(!recovery.retryable);
+    assert!(!recovery.upstream_transient);
+    assert!(recovery.safe_to_retry);
     assert_eq!(recovery.fresh_state.unwrap().values["title"], "other agent");
     let requests = transport.requests();
     assert_eq!(requests[1].if_match.as_deref(), Some("one"));
@@ -712,7 +714,7 @@ async fn malformed_source_price_shapes_are_rejected() {
 }
 
 #[tokio::test]
-async fn price_failure_preserves_safe_upstream_and_recovery_details() {
+async fn price_failure_preserves_transience_and_unsafe_recovery_details() {
     let mut failed = response(502, Value::Null);
     failed.content_type = Some("text/html".to_owned());
     failed.body_is_unparseable = true;
@@ -730,9 +732,11 @@ async fn price_failure_preserves_safe_upstream_and_recovery_details() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.code, "upstream.request_failed");
+    assert_eq!(error.code, "mutation.uncertain");
     let source = error.source.unwrap();
     assert_eq!(source.status, Some(502));
+    assert!(source.upstream_transient);
+    assert!(!source.safe_to_retry);
     assert_eq!(source.details.as_deref().unwrap()["stage"], "apply_price");
     assert_eq!(
         source.details.as_deref().unwrap()["content_type"],
@@ -740,7 +744,8 @@ async fn price_failure_preserves_safe_upstream_and_recovery_details() {
     );
     let recovery = error.recovery.unwrap();
     assert_eq!(recovery.completed_steps, ["fetch_draft"]);
-    assert!(!recovery.retryable);
+    assert!(recovery.upstream_transient);
+    assert!(!recovery.safe_to_retry);
     assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
     let requests = transport.requests();
     assert_eq!(requests[1].method, Method::Patch);
@@ -912,7 +917,7 @@ async fn invalid_and_missing_delivery_options_fail_before_mutation() {
 }
 
 #[tokio::test]
-async fn dedicated_delivery_failure_reports_safe_recovery() {
+async fn dedicated_delivery_failure_requires_authoritative_recovery() {
     let transport = FixtureTransport::new([
         response(200, draft("one", json!({}))),
         response(200, delivery_page(None)),
@@ -928,12 +933,14 @@ async fn dedicated_delivery_failure_reports_safe_recovery() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.code, "upstream.request_failed");
+    assert_eq!(error.code, "mutation.uncertain");
     let recovery = error.recovery.unwrap();
     assert_eq!(
         recovery.completed_steps,
         ["fetch_draft", "fetch_delivery_options"]
     );
+    assert!(recovery.upstream_transient);
+    assert!(!recovery.safe_to_retry);
     assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
 }
 
@@ -979,7 +986,8 @@ async fn post_creation_failure_keeps_recovery_context() {
     let recovery = error.recovery.unwrap();
     assert_eq!(recovery.draft_id, "draft-1");
     assert_eq!(recovery.completed_steps, ["create_draft"]);
-    assert!(!recovery.retryable);
+    assert!(recovery.upstream_transient);
+    assert!(!recovery.safe_to_retry);
     assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
 }
 
@@ -1362,7 +1370,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "wait_for_images",
                 "patch_item_fields",
             ][..],
-            true,
+            false,
         ),
         (
             4,
@@ -1401,7 +1409,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "submit_adinput",
                 "apply_delivery",
             ][..],
-            true,
+            false,
         ),
         (
             7,
@@ -1416,7 +1424,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "apply_delivery",
                 "observe_delivery",
             ][..],
-            true,
+            false,
         ),
         (
             8,
@@ -1451,11 +1459,11 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "fetch_confirmation",
                 "track_confirmation",
             ][..],
-            true,
+            false,
         ),
     ];
 
-    for (failure_index, expected_steps, retryable) in cases {
+    for (failure_index, expected_steps, safe_to_retry) in cases {
         let mut responses = successful_publish_responses();
         responses[failure_index] = response(503, json!({ "message": "fixture failure" }));
         let workflow = DraftWorkflow::new(
@@ -1469,8 +1477,9 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             recovery.completed_steps, expected_steps,
             "failure index {failure_index}"
         );
+        assert!(recovery.upstream_transient, "failure index {failure_index}");
         assert_eq!(
-            recovery.retryable, retryable,
+            recovery.safe_to_retry, safe_to_retry,
             "failure index {failure_index}"
         );
         if failure_index == 11 {
@@ -1518,7 +1527,9 @@ async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
     .unwrap();
     assert_eq!(
         result.warnings,
-        ["confirmation tracking failed: tracking unavailable"]
+        [
+            "confirmation tracking failed: The upstream failure may be temporary, but the mutation outcome is unknown"
+        ]
     );
     assert!(
         !result
@@ -1622,7 +1633,9 @@ async fn publish_timeout_bounds_a_hung_poll_request() {
         .unwrap_err();
 
     assert_eq!(error.code, "draft.image_processing");
-    assert!(error.recovery.unwrap().retryable);
+    let recovery = error.recovery.unwrap();
+    assert!(recovery.upstream_transient);
+    assert!(recovery.safe_to_retry);
 }
 
 #[tokio::test]
@@ -1647,7 +1660,8 @@ async fn publish_timeout_is_bounded_and_recoverable() {
 
     assert_eq!(error.code, "draft.image_processing");
     let recovery = error.recovery.unwrap();
-    assert!(recovery.retryable);
+    assert!(recovery.upstream_transient);
+    assert!(recovery.safe_to_retry);
     assert_eq!(
         recovery.completed_steps,
         ["fetch_draft", "fetch_delivery_options", "validate"]

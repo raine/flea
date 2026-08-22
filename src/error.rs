@@ -3,7 +3,10 @@ use std::{error::Error, fmt};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::domain::envelope::{Diagnostics, NextAction};
+use crate::{
+    domain::envelope::{Diagnostics, NextAction},
+    retry::RetryClassification,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExitClass {
@@ -35,7 +38,8 @@ impl ExitClass {
 pub struct AppError {
     pub code: String,
     pub message: String,
-    pub retryable: bool,
+    pub upstream_transient: bool,
+    pub safe_to_retry: bool,
     pub details: Option<Box<Value>>,
     pub partial: Option<Box<Value>>,
     pub next_actions: Vec<NextAction>,
@@ -59,7 +63,8 @@ impl fmt::Debug for AppError {
             .debug_struct("AppError")
             .field("code", &self.code)
             .field("message", &crate::diagnostics::redact_text(&self.message))
-            .field("retryable", &self.retryable)
+            .field("upstream_transient", &self.upstream_transient)
+            .field("safe_to_retry", &self.safe_to_retry)
             .field("details", &details)
             .field("partial", &partial)
             .field("next_actions", &self.next_actions)
@@ -109,7 +114,8 @@ impl AppError {
         Self {
             code: code.into(),
             message: message.into(),
-            retryable: false,
+            upstream_transient: false,
+            safe_to_retry: false,
             details: None,
             partial: None,
             next_actions: Vec::new(),
@@ -135,8 +141,9 @@ impl AppError {
         self
     }
 
-    pub fn retryable(mut self, retryable: bool) -> Self {
-        self.retryable = retryable;
+    pub fn retry_classification(mut self, classification: RetryClassification) -> Self {
+        self.upstream_transient = classification.upstream_transient;
+        self.safe_to_retry = classification.safe_to_retry;
         self
     }
 
@@ -155,9 +162,30 @@ impl AppError {
 pub struct ErrorBody {
     pub code: String,
     pub message: String,
-    pub retryable: bool,
+    pub upstream_transient: bool,
+    pub safe_to_retry: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_guidance: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+}
+
+fn retry_guidance(error: &AppError) -> Option<&'static str> {
+    match (error.upstream_transient, error.safe_to_retry) {
+        (true, true) => {
+            Some("The upstream failure appears temporary, and repeating this operation is safe.")
+        }
+        (true, false) => Some(
+            "The upstream failure appears temporary, but repeating this operation could duplicate a remote mutation. Inspect authoritative state first.",
+        ),
+        (false, true) => Some(
+            "Repeating this operation is safe, but the upstream failure is not classified as temporary.",
+        ),
+        (false, false) if error.code == "mutation.uncertain" => Some(
+            "The remote mutation outcome is uncertain. Do not repeat the operation; inspect authoritative state first.",
+        ),
+        (false, false) => None,
+    }
 }
 
 impl From<&AppError> for ErrorBody {
@@ -169,7 +197,9 @@ impl From<&AppError> for ErrorBody {
         Self {
             code: error.code.clone(),
             message: crate::diagnostics::redact_text(&error.message),
-            retryable: error.retryable,
+            upstream_transient: error.upstream_transient,
+            safe_to_retry: error.safe_to_retry,
+            retry_guidance: retry_guidance(error).map(str::to_owned),
             details,
         }
     }
@@ -212,6 +242,35 @@ mod tests {
         let error =
             AppError::upstream("upstream.failed", "request failed").with_source(Outer(Inner));
         assert_eq!(error.internal_chain(), ["request failed", "outer", "inner"]);
+    }
+
+    #[test]
+    fn public_error_body_distinguishes_transience_from_retry_safety() {
+        let transient_read = AppError::upstream("upstream.failed", "request failed")
+            .retry_classification(RetryClassification {
+                upstream_transient: true,
+                safe_to_retry: true,
+            });
+        let uncertain_write = AppError::upstream("mutation.uncertain", "request failed")
+            .retry_classification(RetryClassification {
+                upstream_transient: true,
+                safe_to_retry: false,
+            });
+
+        let read_body = ErrorBody::from(&transient_read);
+        let write_body = ErrorBody::from(&uncertain_write);
+
+        assert!(read_body.upstream_transient);
+        assert!(read_body.safe_to_retry);
+        assert!(read_body.retry_guidance.unwrap().contains("safe"));
+        assert!(write_body.upstream_transient);
+        assert!(!write_body.safe_to_retry);
+        assert!(
+            write_body
+                .retry_guidance
+                .unwrap()
+                .contains("authoritative state")
+        );
     }
 
     #[test]

@@ -14,7 +14,9 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     api::{
-        adinput::{AdInputApi, DraftWorkflow, WorkflowConfig, WorkflowError},
+        adinput::{
+            AdInputApi, DraftWorkflow, WorkflowConfig, WorkflowError, completed_steps_have_mutation,
+        },
         listings::ListingsApi,
     },
     cli::draft_input,
@@ -567,21 +569,10 @@ fn workflow_error(error: WorkflowError) -> AppError {
             .and_then(Value::as_str)
             == Some("apply_price")
     });
-    let has_remote_mutation = error.recovery.as_ref().is_some_and(|recovery| {
-        recovery.completed_steps.iter().any(|step| {
-            step == "create_draft"
-                || step.starts_with("upload_image:")
-                || matches!(
-                    step.as_str(),
-                    "attach_images"
-                        | "update_item_fields"
-                        | "patch_item_fields"
-                        | "submit_adinput"
-                        | "apply_delivery"
-                        | "publish_basic"
-                )
-        })
-    });
+    let has_remote_mutation = error
+        .recovery
+        .as_ref()
+        .is_some_and(|recovery| completed_steps_have_mutation(&recovery.completed_steps));
     let exit_class = match error.code.as_str() {
         "draft.conflict" => ExitClass::Conflict,
         "draft.validation_failed"
@@ -594,12 +585,17 @@ fn workflow_error(error: WorkflowError) -> AppError {
         _ if has_remote_mutation || mutation_was_attempted => ExitClass::Partial,
         _ => ExitClass::Upstream,
     };
-    let retryable = error
+    let classification = error
         .recovery
         .as_ref()
-        .map(|recovery| recovery.retryable)
-        .or_else(|| error.source.as_ref().map(|source| source.retryable))
-        .unwrap_or(false);
+        .map(|recovery| (recovery.upstream_transient, recovery.safe_to_retry))
+        .or_else(|| {
+            error
+                .source
+                .as_ref()
+                .map(|source| (source.upstream_transient, source.safe_to_retry))
+        })
+        .unwrap_or((false, false));
     let next_actions = error
         .recovery
         .as_ref()
@@ -617,7 +613,8 @@ fn workflow_error(error: WorkflowError) -> AppError {
         .as_ref()
         .and_then(|recovery| serde_json::to_value(recovery).ok());
     let mut app = AppError::new(error.code, error.message, exit_class);
-    app.retryable = retryable;
+    app.upstream_transient = classification.0;
+    app.safe_to_retry = classification.1;
     app.details = error
         .details
         .or_else(|| {

@@ -583,6 +583,7 @@ fn taxonomy_error_kind(error: &ListingsApiError) -> &'static str {
         ListingsApiError::NotFound => "endpoint_unavailable",
         ListingsApiError::Conflict => "unexpected_conflict",
         ListingsApiError::Validation { .. } => "upstream_validation_failed",
+        ListingsApiError::Transport => "transport_failed",
         ListingsApiError::Upstream(_) => "upstream_unavailable",
         ListingsApiError::UnexpectedResponse(_) => "protocol_unrecognized",
     }

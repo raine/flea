@@ -4,12 +4,13 @@ use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::client::{RequestSpec, ToriClient, compatibility},
+    api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
     domain::item::{
         ItemAttribute, ItemImage, ItemLocation, ItemPrice, ItemSeller, ItemShipping,
         PublicItemDetail,
     },
     error::{AppError, ExitClass},
+    retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},
 };
 
 pub trait PublicItemApi: Send + Sync {
@@ -40,12 +41,14 @@ impl PublicItemApi for HttpPublicItemApi {
                     tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .map_err(|error| PublicItemApiError::Transport(error.to_string()))?
+                        .map_err(|_| {
+                            PublicItemApiError::Unexpected("HTTP runtime failed".to_owned())
+                        })?
                         .block_on(client.execute(request))
-                        .map_err(|error| PublicItemApiError::Transport(error.to_string()))
+                        .map_err(item_http_error)
                 })
                 .join()
-                .map_err(|_| PublicItemApiError::Transport("HTTP worker panicked".to_owned()))?
+                .map_err(|_| PublicItemApiError::Unexpected("HTTP worker failed".to_owned()))?
         })?;
 
         if !response.status.is_success() {
@@ -60,6 +63,22 @@ impl PublicItemApi for HttpPublicItemApi {
         }
         serde_json::from_slice(&response.body)
             .map_err(|_| PublicItemApiError::Unexpected("invalid JSON response".to_owned()))
+    }
+}
+
+fn item_http_error(error: HttpError) -> PublicItemApiError {
+    match error {
+        HttpError::Transport(transport)
+            if matches!(
+                transport.kind,
+                TransportErrorKind::Timeout | TransportErrorKind::Connection
+            ) =>
+        {
+            PublicItemApiError::Transport(transport.to_string())
+        }
+        HttpError::InvalidRequest | HttpError::ResponseTooLarge | HttpError::Transport(_) => {
+            PublicItemApiError::Unexpected("HTTP adapter failed".to_owned())
+        }
     }
 }
 
@@ -398,47 +417,48 @@ fn validate_id(listing_id: &str) -> Result<(), AppError> {
 }
 
 fn item_error(error: PublicItemApiError, listing_id: &str) -> AppError {
-    let (code, message, exit_class, retryable) = match error {
+    let read = RetryContext::read(OperationMethod::Get);
+    let (code, message, exit_class, classification) = match error {
         PublicItemApiError::Invalid => (
             "item.invalid_id",
             "Tori rejected the listing ID; use a numeric ID returned by public search",
             ExitClass::Validation,
-            false,
+            RetryClassification::default(),
         ),
         PublicItemApiError::NotFound => (
             "item.not_found",
             "listing was not found; it may have been removed or expired",
             ExitClass::Validation,
-            false,
+            RetryClassification::default(),
         ),
         PublicItemApiError::Expired => (
             "item.expired",
             "listing has expired and its public details are unavailable",
             ExitClass::Validation,
-            false,
+            RetryClassification::default(),
         ),
         PublicItemApiError::Unexpected(_) => (
             "upstream.unexpected_response",
             "Tori returned an unexpected item response",
             ExitClass::Upstream,
-            false,
+            classify(FailureKind::MalformedSuccess, read),
         ),
         PublicItemApiError::Transport(_) => (
             "upstream.request_failed",
             "the Tori item request failed",
             ExitClass::Upstream,
-            true,
+            classify(FailureKind::Transport, read),
         ),
         PublicItemApiError::Upstream(status) => (
             "upstream.request_failed",
             "the Tori item request failed",
             ExitClass::Upstream,
-            status == 429 || status >= 500,
+            classify(FailureKind::HttpStatus(status), read),
         ),
     };
     let mut app_error = AppError::new(code, message, exit_class)
         .with_details(json!({ "listing_id": listing_id }))
-        .retryable(retryable);
+        .retry_classification(classification);
     add_search_action(&mut app_error);
     app_error
 }
@@ -453,4 +473,8 @@ fn add_search_action(error: &mut AppError) {
 
 fn unexpected(message: &str) -> AppError {
     AppError::new("upstream.unexpected_response", message, ExitClass::Upstream)
+        .retry_classification(classify(
+            FailureKind::MalformedSuccess,
+            RetryContext::read(OperationMethod::Get),
+        ))
 }

@@ -323,7 +323,11 @@ fn status_from_failure(failure: CredentialResolutionFailure) -> AuthStatusOutput
         "auth.refresh_malformed"
         | "auth.credentials_malformed"
         | "upstream.unexpected_response" => ("malformed", "unverified", true),
-        _ => ("temporarily_unavailable", "unverified", false),
+        _ => (
+            "temporarily_unavailable",
+            "unverified",
+            !failure.error.safe_to_retry,
+        ),
     };
     unavailable_status(
         health,
@@ -705,7 +709,7 @@ mod tests {
         assert_eq!(status["health"], "temporarily_unavailable");
         assert_eq!(status["validation"], "unverified");
         assert_eq!(status["stored_bearer_state"], "expired");
-        assert_eq!(status["_next_actions"][0]["command"], "flea auth status");
+        assert_eq!(status["_next_actions"][0]["command"], "flea auth login");
     }
 
     #[test]

@@ -427,7 +427,7 @@ fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
 }
 
 #[test]
-fn html_price_failure_is_a_non_retryable_partial_envelope() {
+fn html_price_failure_is_transient_but_unsafe_partial_envelope() {
     let mut headers = HeaderMap::new();
     headers.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
     let client = MockClient::with_responses([
@@ -459,8 +459,9 @@ fn html_price_failure_is_a_non_retryable_partial_envelope() {
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
     assert_eq!(result.exit_code, 50);
-    assert_eq!(value["error"]["code"], "upstream.request_failed");
-    assert_eq!(value["error"]["retryable"], false);
+    assert_eq!(value["error"]["code"], "mutation.uncertain");
+    assert_eq!(value["error"]["upstream_transient"], true);
+    assert_eq!(value["error"]["safe_to_retry"], false);
     assert_eq!(value["error"]["details"]["stage"], "apply_price");
     assert_eq!(value["error"]["details"]["status"], 502);
     assert_eq!(value["error"]["details"]["content_type"], "text/html");
@@ -506,7 +507,7 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
 }
 
 #[test]
-fn uncertain_creation_is_a_non_retryable_partial_error_with_safe_metadata() {
+fn uncertain_creation_separates_transience_from_replay_safety() {
     let mut headers = HeaderMap::new();
     headers.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
     let client = MockClient::with_responses([HttpResponse {
@@ -523,10 +524,95 @@ fn uncertain_creation_is_a_non_retryable_partial_error_with_safe_metadata() {
 
     assert_eq!(result.exit_code, 50);
     assert_eq!(value["error"]["code"], "mutation.uncertain");
-    assert_eq!(value["error"]["retryable"], false);
+    assert_eq!(value["error"]["upstream_transient"], false);
+    assert_eq!(value["error"]["safe_to_retry"], false);
+    assert!(
+        value["error"]["retry_guidance"]
+            .as_str()
+            .unwrap()
+            .contains("Do not repeat")
+    );
     assert_eq!(value["error"]["details"]["stage"], "create_draft");
     assert_eq!(value["error"]["details"]["status"], 200);
     assert_eq!(value["error"]["details"]["content_type"], "text/html");
+}
+
+#[test]
+fn bad_gateway_read_is_transient_and_safe_to_retry() {
+    let client = MockClient::with_responses([response(
+        StatusCode::BAD_GATEWAY,
+        json!({ "message": "gateway unavailable" }),
+    )]);
+    let result = run_with_runtime(
+        ["flea", "--format", "json", "draft", "show", "draft-1"],
+        &TestRuntime { client },
+    );
+    let value: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 40);
+    assert_eq!(value["error"]["code"], "upstream.request_failed");
+    assert_eq!(value["error"]["upstream_transient"], true);
+    assert_eq!(value["error"]["safe_to_retry"], true);
+    assert!(
+        value["error"]["retry_guidance"]
+            .as_str()
+            .unwrap()
+            .contains("repeating this operation is safe")
+    );
+}
+
+#[test]
+fn bad_gateway_after_draft_mutation_is_transient_but_unsafe_to_retry() {
+    let client = MockClient::with_responses([
+        response(StatusCode::OK, draft_state("one")),
+        response(
+            StatusCode::BAD_GATEWAY,
+            json!({ "message": "gateway unavailable" }),
+        ),
+    ]);
+    let result = run_with_runtime(
+        [
+            "flea", "--format", "json", "draft", "update", "draft-1", "--title", "Chair",
+        ],
+        &TestRuntime { client },
+    );
+    let value: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 50);
+    assert_eq!(value["error"]["code"], "mutation.uncertain");
+    assert_eq!(value["error"]["upstream_transient"], true);
+    assert_eq!(value["error"]["safe_to_retry"], false);
+    assert!(
+        value["error"]["retry_guidance"]
+            .as_str()
+            .unwrap()
+            .contains("Inspect authoritative state first")
+    );
+    assert_eq!(
+        value["next_actions"][0]["command"],
+        "flea draft show draft-1"
+    );
+}
+
+#[test]
+fn malformed_read_success_is_safe_to_repeat_but_not_transient() {
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
+    let client = MockClient::with_responses([HttpResponse {
+        status: StatusCode::OK,
+        headers,
+        body: b"<html>unsupported success</html>".to_vec(),
+    }]);
+    let result = run_with_runtime(
+        ["flea", "--format", "json", "draft", "show", "draft-1"],
+        &TestRuntime { client },
+    );
+    let value: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 40);
+    assert_eq!(value["error"]["code"], "upstream.unexpected_response");
+    assert_eq!(value["error"]["upstream_transient"], false);
+    assert_eq!(value["error"]["safe_to_retry"], true);
 }
 
 #[test]

@@ -219,6 +219,46 @@ async fn retries_only_bounded_safe_methods() {
 }
 
 #[tokio::test]
+async fn source_backed_mutation_idempotency_uses_the_shared_retry_classification() {
+    let contract_transport = FixtureTransport::new([
+        fixture_response(StatusCode::BAD_GATEWAY),
+        fixture_response(StatusCode::OK),
+    ]);
+    let contract_client = client(contract_transport.clone());
+    let response = contract_client
+        .send(
+            RequestSpec::new(Method::PUT, "/contract-item", "ITEMS")
+                .with_source_backed_idempotency_contract(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(contract_transport.requests().len(), 2);
+
+    let key_transport = FixtureTransport::new([
+        fixture_response(StatusCode::TOO_MANY_REQUESTS),
+        fixture_response(StatusCode::CREATED),
+    ]);
+    let key_client = client(key_transport.clone());
+    let response = key_client
+        .send(
+            RequestSpec::new(Method::POST, "/keyed-item", "ITEMS")
+                .with_source_backed_idempotency_key(
+                    "idempotency-key".parse().unwrap(),
+                    HeaderValue::from_static("fixture-key"),
+                ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status, StatusCode::CREATED);
+    assert_eq!(key_transport.requests().len(), 2);
+    assert_eq!(
+        key_transport.requests()[0].headers["idempotency-key"],
+        "fixture-key"
+    );
+}
+
+#[tokio::test]
 async fn empty_post_sends_an_explicit_zero_content_length_once() {
     let transport = FixtureTransport::new([fixture_response(StatusCode::OK)]);
     let client = client(transport.clone());

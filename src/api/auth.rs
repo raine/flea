@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::{
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
+    retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},
 };
 
 pub const CLIENT_ID: &str = "6079834b9b0b741812e7e91f";
@@ -792,12 +793,19 @@ fn ensure_refresh_success(status: StatusCode) -> Result<(), AppError> {
 }
 
 fn refresh_transport_error() -> AppError {
-    AppError::upstream(
+    let mut error = AppError::upstream(
         "auth.refresh_transport_failed",
         "the authentication refresh service could not be reached",
     )
-    .retryable(true)
-    .with_details(serde_json::json!({ "stage": "token_refresh" }))
+    .retry_classification(classify(
+        FailureKind::Transport,
+        RetryContext::mutation(OperationMethod::Post),
+    ))
+    .with_details(serde_json::json!({ "stage": "token_refresh" }));
+    error.next_actions.push(NextAction {
+        command: "flea auth login".to_owned(),
+    });
+    error
 }
 
 fn refresh_malformed_error() -> AppError {
@@ -812,14 +820,27 @@ fn refresh_malformed_error() -> AppError {
     error
 }
 
-fn upstream_error(stage: &'static str, retryable: bool) -> AppError {
+fn upstream_error(stage: &'static str, upstream_transient: bool) -> AppError {
+    let classification = if upstream_transient {
+        classify(
+            FailureKind::Transport,
+            RetryContext::mutation(OperationMethod::Post),
+        )
+    } else {
+        RetryClassification::default()
+    };
     let mut error = AppError::new(
         "auth.upstream_unavailable",
         "an authentication service is unavailable",
         ExitClass::Upstream,
-    );
-    error.retryable = retryable;
+    )
+    .retry_classification(classification);
     error.details = Some(Box::new(serde_json::json!({ "stage": stage })));
+    if !error.safe_to_retry {
+        error.next_actions.push(NextAction {
+            command: "flea auth login".to_owned(),
+        });
+    }
     error
 }
 
@@ -830,6 +851,9 @@ fn unexpected_response(stage: &'static str) -> AppError {
         ExitClass::Upstream,
     );
     error.details = Some(Box::new(serde_json::json!({ "stage": stage })));
+    error.next_actions.push(NextAction {
+        command: "flea auth login".to_owned(),
+    });
     error
 }
 
@@ -1268,7 +1292,19 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, "auth.refresh_transport_failed");
-        assert!(error.retryable);
+        assert!(error.upstream_transient);
+        assert!(!error.safe_to_retry);
+    }
+
+    #[test]
+    fn transient_auth_responses_do_not_allow_one_time_exchange_replay() {
+        for status in [StatusCode::TOO_MANY_REQUESTS, StatusCode::BAD_GATEWAY] {
+            let error = ensure_success(status, "token_exchange").unwrap_err();
+
+            assert!(error.upstream_transient);
+            assert!(!error.safe_to_retry);
+            assert_eq!(error.next_actions[0].command, "flea auth login");
+        }
     }
 
     #[test]
