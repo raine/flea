@@ -114,6 +114,7 @@ fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
         Some("37 €")
     );
     assert_eq!(result.results[0].image_urls.len(), 2);
+    assert_eq!(result.results[0].distance, Some(1200.0));
     assert_eq!(
         result.results[1].price.as_ref().unwrap().display.as_deref(),
         Some("Annetaan")
@@ -162,7 +163,27 @@ fn resolves_location_names_case_insensitively_and_deterministically() {
 
     let matches = search.locations("sink").unwrap();
     assert_eq!(matches.returned, 1);
+    assert_eq!(matches.total, 1);
     assert_eq!(matches.locations[0].name, "Helsinki");
+}
+
+#[test]
+fn omits_upstream_placeholder_zero_distance() {
+    let api = FixtureApi::new(json!({
+        "docs": [{"id": "1", "heading": "Nearby chair", "distance": 0.0}],
+        "metadata": {
+            "result_size": {"match_count": 1},
+            "paging": {"current": 1, "last": 1}
+        }
+    }));
+    let request = UpstreamSearchRequest {
+        page: 1,
+        limit: 1,
+        ..Default::default()
+    };
+    let (result, _) = PublicSearch::new(&api).execute(&request, None).unwrap();
+
+    assert_eq!(result.results[0].distance, None);
 }
 
 #[test]
@@ -237,6 +258,7 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
         ],
         vec!["tori", "search", "x", "--page", "51"],
         vec!["tori", "search", "x", "--limit", "301"],
+        vec!["tori", "search", "x", "--condition", ""],
         vec![
             "tori",
             "search",
@@ -302,6 +324,34 @@ fn upstream_failures_are_retryable_bounded_and_redacted() {
     assert!(!rendered.contains("private query"));
     assert!(!rendered.contains("stack trace"));
     assert!(!rendered.contains("secret"));
+}
+
+#[test]
+fn unicode_query_limit_counts_characters_instead_of_bytes() {
+    let api = FixtureApi::new(empty_fixture());
+    let query = "ä".repeat(500);
+    let cli = Cli::parse_from(["tori", "search", &query]);
+    let Command::Search(args) = cli.command else {
+        unreachable!()
+    };
+
+    search::dispatch_with_api(*args, &api).unwrap();
+    assert_eq!(api.requests.lock().unwrap()[0].query, query);
+}
+
+#[test]
+fn page_cap_action_requests_facets_for_executable_refinement() {
+    let api = FixtureApi::new(full_fixture());
+    let cli = Cli::parse_from(["tori", "search", "tuoli", "--page", "50"]);
+    let Command::Search(args) = cli.command else {
+        unreachable!()
+    };
+    let output = search::dispatch_with_api(*args, &api).unwrap();
+
+    assert_eq!(
+        output["_next_actions"][0]["command"],
+        "tori search 'tuoli' --include-facets --page 1 --limit 20"
+    );
 }
 
 #[test]

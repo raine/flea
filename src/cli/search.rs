@@ -79,11 +79,11 @@ pub struct SearchArgs {
     /// Free-text marketplace query. May be omitted to browse filtered listings.
     pub query: Option<String>,
 
-    /// Search category machine value, such as 1.93.3217.
+    /// Search category machine value, such as 1.93.3217. At most 64 characters.
     #[arg(long)]
     pub category: Option<String>,
 
-    /// Tori location ID or an exact place name resolved from Tori metadata.
+    /// Tori location ID or exact place name, at most 256 characters.
     #[arg(long)]
     pub location: Option<String>,
 
@@ -111,7 +111,7 @@ pub struct SearchArgs {
     #[arg(long, value_enum)]
     pub trade_type: Option<TradeType>,
 
-    /// Listing condition machine value. May be repeated.
+    /// Listing condition machine value, 1 through 256 characters. May be repeated.
     #[arg(long)]
     pub condition: Vec<String>,
 
@@ -269,7 +269,9 @@ pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<
     if let Some(next_page) = result.pagination.next_page {
         actions.push(json!({ "command": next_page_command(&request, next_page) }));
     } else if result.pagination.capped {
-        actions.push(json!({ "command": "tori location search QUERY" }));
+        let mut refinement = request.clone();
+        refinement.include_filters = true;
+        actions.push(json!({ "command": next_page_command(&refinement, 1) }));
     }
     if !actions.is_empty() {
         value
@@ -387,9 +389,24 @@ fn collect_input(args: SearchArgs) -> Result<SearchInput, AppError> {
 }
 
 fn validate(input: &SearchInput) -> Result<(), AppError> {
-    if input.query.len() > 500 {
+    if input.query.chars().count() > 500 {
         return Err(AppError::usage(
             "search query must be at most 500 characters",
+        ));
+    }
+    if input
+        .location
+        .as_deref()
+        .is_some_and(|location| location.chars().count() > 256)
+    {
+        return Err(AppError::usage("--location must be at most 256 characters"));
+    }
+    if input.condition.iter().any(|value| {
+        let length = value.chars().count();
+        length == 0 || length > 256
+    }) {
+        return Err(AppError::usage(
+            "--condition values must contain 1 through 256 characters",
         ));
     }
     if let Some(page) = input.page
@@ -446,9 +463,10 @@ fn validate(input: &SearchInput) -> Result<(), AppError> {
     for (name, values) in &input.facets {
         validate_facet_name(name)?;
         if values.is_empty()
-            || values
-                .iter()
-                .any(|value| value.is_empty() || value.len() > 256)
+            || values.iter().any(|value| {
+                let length = value.chars().count();
+                length == 0 || length > 256
+            })
         {
             return Err(AppError::usage(
                 "facet values must contain 1 through 256 characters",
@@ -459,6 +477,9 @@ fn validate(input: &SearchInput) -> Result<(), AppError> {
 }
 
 fn category_parameter(category: &str) -> Result<&'static str, AppError> {
+    if category.len() > 64 {
+        return Err(AppError::usage("--category must be at most 64 characters"));
+    }
     let parts: Vec<&str> = category.split('.').collect();
     if parts
         .iter()
@@ -485,7 +506,8 @@ fn parse_facets(values: &[String]) -> Result<BTreeMap<String, Vec<String>>, AppE
             .split_once('=')
             .ok_or_else(|| AppError::usage("--facet must use NAME=VALUE"))?;
         validate_facet_name(name)?;
-        if value.is_empty() || value.len() > 256 {
+        let length = value.chars().count();
+        if length == 0 || length > 256 {
             return Err(AppError::usage(
                 "facet values must contain 1 through 256 characters",
             ));

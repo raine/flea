@@ -131,5 +131,6 @@ pub struct SearchLocation {
 pub struct LocationCollection {
     pub locations: Vec<SearchLocation>,
     pub returned: usize,
+    pub total: usize,
     pub truncated: bool,
 }

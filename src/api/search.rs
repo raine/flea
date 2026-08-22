@@ -169,12 +169,14 @@ impl<'a> PublicSearch<'a> {
                 .then_with(|| left.depth.cmp(&right.depth))
                 .then_with(|| left.id.cmp(&right.id))
         });
-        let truncated = locations.len() > LOCATION_RESULT_LIMIT;
+        let total = locations.len();
+        let truncated = total > LOCATION_RESULT_LIMIT;
         locations.truncate(LOCATION_RESULT_LIMIT);
         let returned = locations.len();
         Ok(LocationCollection {
             locations,
             returned,
+            total,
             truncated,
         })
     }
@@ -215,16 +217,12 @@ fn normalize_search(
         .get("docs")
         .and_then(Value::as_array)
         .ok_or_else(|| unexpected("search response omitted docs"))?;
+    let requested_category = ["product_category", "sub_category", "category"]
+        .iter()
+        .find_map(|name| request.parameters.get(*name));
     let results = docs
         .iter()
-        .map(|doc| {
-            normalize_listing(
-                doc,
-                ["product_category", "sub_category", "category"]
-                    .iter()
-                    .find_map(|name| request.parameters.get(*name)),
-            )
-        })
+        .map(|doc| normalize_listing(doc, requested_category))
         .collect::<Result<Vec<_>, _>>()?;
     let metadata = object.get("metadata").and_then(Value::as_object);
     let total = metadata
@@ -365,7 +363,7 @@ fn normalize_listing(
         distance: object
             .get("distance")
             .and_then(Value::as_f64)
-            .filter(|distance| distance.is_finite() && *distance >= 0.0),
+            .filter(|distance| distance.is_finite() && *distance > 0.0),
         category,
         trade_type: object
             .get("trade_type")

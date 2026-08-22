@@ -44,7 +44,8 @@ values `RELEVANCE`, `PUBLISHED_DESC`, `PRICE_ASC`, and `PRICE_DESC`.
 
 ## Locations
 
-Discover Tori location identifiers with a bounded, deterministic name search:
+Discover Tori location identifiers with a bounded, deterministic name search. The result reports
+`returned`, `total`, and `truncated` counts for the 100-location output bound:
 
 ```sh
 tori location search Helsinki
@@ -76,9 +77,10 @@ tori search "tuoli" \
 -180 through 180, and radius must be positive and at most 1000 km. A named location cannot be
 combined with coordinate radius arguments.
 
-Normalized listing output omits precise upstream coordinates. It includes textual location and
-`distance` when Tori provides a finite non-negative distance. `--raw` explicitly returns the
-bounded upstream document when protocol inspection requires all upstream fields.
+Normalized listing output omits precise upstream coordinates. It includes textual location and a
+finite positive `distance` when Tori supplies one, while omitting Tori's zero placeholder. `--raw`
+explicitly returns the bounded upstream document when protocol inspection requires all upstream
+fields.
 
 ## Pagination
 
@@ -95,7 +97,8 @@ Normalized pagination includes:
 - `capped: true` when matches exist beyond the accessible range
 
 The envelope provides a next-page action while another upstream page is accessible. At the page
-boundary, refine the query, category, price, facets, or location to reach additional matches.
+boundary, its executable refinement action returns to page 1 and adds `--include-facets`, so the
+query, category, price, facets, or location can be narrowed to reach additional matches.
 
 ## JSON input
 
@@ -125,15 +128,16 @@ by the parser. Repeated `--facet` and `--condition` values are intentional multi
 ## Flag reference
 
 - `QUERY`: optional free-text query, at most 500 characters
-- `--category TAXONOMY`: validated category, subcategory, or product category value
-- `--location ID_OR_NAME`: exact Tori identifier or place name
+- `--category TAXONOMY`: validated category, subcategory, or product category value, at most 64
+  characters
+- `--location ID_OR_NAME`: exact Tori identifier or place name, at most 256 characters
 - `--latitude NUMBER`: decimal latitude, requires longitude and radius
 - `--longitude NUMBER`: decimal longitude, requires latitude and radius
 - `--radius-km NUMBER`, `--distance-km NUMBER`: positive radius up to 1000 km
 - `--price-from INTEGER`: minimum price in euros
 - `--price-to INTEGER`: maximum price in euros
 - `--trade-type VALUE`: `sell`, `give-away`, or `wanted`
-- `--condition VALUE`: repeatable Tori condition machine value
+- `--condition VALUE`: repeatable Tori condition machine value, 1 through 256 characters
 - `--seller VALUE`: `private` or `business`
 - `--shipping`: require listings with Tori shipping
 - `--facet NAME=VALUE`: repeatable dynamic Tori facet
