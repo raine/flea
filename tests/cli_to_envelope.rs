@@ -80,11 +80,24 @@ impl CommandRuntime for TestRuntime {
                 let api = HttpListingsApi::new(Arc::new(self.client.clone()));
                 category::dispatch_with_api(args, &api)
             }
-            Command::Draft(args) => block_on(draft::execute(
-                args.command,
-                HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
-                WorkflowConfig::default(),
-            )),
+            Command::Draft(args) => match args.command {
+                command @ flea::cli::draft::DraftCommand::Preview {
+                    verify_category: false,
+                    ..
+                } => draft::execute_preview(command, None),
+                command @ flea::cli::draft::DraftCommand::Preview {
+                    verify_category: true,
+                    ..
+                } => {
+                    let api = HttpListingsApi::new(Arc::new(self.client.clone()));
+                    draft::execute_preview(command, Some(&api))
+                }
+                command => block_on(draft::execute(
+                    command,
+                    HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
+                    WorkflowConfig::default(),
+                )),
+            },
             Command::Item(args) => {
                 let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
                 item::dispatch_with_api(args, &api)
@@ -202,6 +215,123 @@ fn auth_login_flows_from_parser_to_one_envelope() {
     assert_eq!(value["data"]["authenticated"], true);
     assert!(value.get("warnings").is_none());
     assert!(value.get("next_actions").is_none());
+}
+
+#[test]
+fn draft_preview_is_offline_and_performs_zero_transport_requests() {
+    let client = MockClient::default();
+    let value = invoke(
+        &TestRuntime {
+            client: client.clone(),
+        },
+        [
+            "flea",
+            "--format",
+            "json",
+            "draft",
+            "preview",
+            "--category",
+            "258",
+            "--title",
+            "Koivutuoli",
+            "--description",
+            "Hyväkuntoinen tuoli noudettavaksi Helsingistä.",
+            "--price",
+            "45.50",
+            "--trade-type",
+            "sell",
+            "--postal-code",
+            "00100",
+            "--delivery",
+            "pickup",
+        ],
+    );
+
+    assert_eq!(value["data"]["remote_mutation"], "none");
+    assert_eq!(value["data"]["local_validation"]["status"], "passed");
+    assert_eq!(
+        value["data"]["remote_verification"]["status"],
+        "not_requested"
+    );
+    assert!(client.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn draft_preview_enrichment_uses_only_the_read_only_taxonomy_request() {
+    let client = MockClient::with_responses([response(
+        StatusCode::OK,
+        json!({
+            "categories": [{
+                "id": 258,
+                "label": "Tuolit",
+                "isSelectable": true
+            }]
+        }),
+    )]);
+    let value = invoke(
+        &TestRuntime {
+            client: client.clone(),
+        },
+        [
+            "flea",
+            "--format",
+            "json",
+            "draft",
+            "preview",
+            "--category",
+            "258",
+            "--verify-category",
+        ],
+    );
+
+    assert_eq!(value["data"]["remote_verification"]["status"], "verified");
+    assert_eq!(
+        value["data"]["remote_verification"]["verified_constraints"],
+        json!(["category_exists", "category_selectable"])
+    );
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, reqwest::Method::GET);
+    assert_eq!(requests[0].path_and_query, "/categories/taxonomy");
+}
+
+#[test]
+fn invalid_create_and_update_inputs_fail_before_transport_access() {
+    let client = MockClient::default();
+    let runtime = TestRuntime {
+        client: client.clone(),
+    };
+
+    for arguments in [
+        vec![
+            "flea",
+            "--format",
+            "json",
+            "draft",
+            "create",
+            "--postal-code",
+            "Helsinki",
+        ],
+        vec![
+            "flea",
+            "--format",
+            "json",
+            "draft",
+            "update",
+            "draft-1",
+            "--delivery",
+            "pickup",
+            "--delivery",
+            "pickup",
+        ],
+    ] {
+        let result = run_with_runtime(arguments, &runtime);
+        let value: Value = serde_json::from_str(&result.document).unwrap();
+        assert_eq!(result.exit_code, 20, "{}", result.document);
+        assert_eq!(value["error"]["code"], "draft.input_invalid");
+    }
+
+    assert!(client.requests.lock().unwrap().is_empty());
 }
 
 #[test]

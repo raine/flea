@@ -13,6 +13,7 @@ Use `flea` as an independent interface to Tori.fi. Keep the default TOON output 
 - Follow `next_actions` when present. Empty optional sections are omitted.
 - Treat returned IDs and option values as machine values. Discover them with `category`, `location`, or the relevant `show` command instead of guessing.
 - Inspect remote state after mutations. Draft and listing responses are authoritative.
+- Use `draft preview` before creation when a complete local input needs checking. Preview is not publication readiness.
 - Do not repeat uncertain mutations. Use `partial`, error details, and returned IDs to recover.
 - A field cannot appear in both flags and `--input` JSON.
 - `flea auth status` applies the same 30-second bearer-validity policy as authenticated commands. It refreshes near-expiry or expired credentials through the locked atomic command path. Treat `authenticated: true` as usable under that policy, `temporarily_unavailable` as uncertain and retryable, and `refresh_rejected` or `malformed` as requiring the reported browser-login action.
@@ -54,6 +55,8 @@ flea auth status
 flea auth login                         # Opens browser authentication
 flea auth logout
 
+flea draft preview [fields]                 # Offline and zero-mutation by default
+flea draft preview --input PATH --verify-category
 flea draft create [fields]
 flea draft show DRAFT_ID
 flea draft update DRAFT_ID [fields]
@@ -69,4 +72,4 @@ flea listing dispose LISTING_ID
 flea listing delete LISTING_ID
 ```
 
-Authenticate before account draft or published listing work. Build a draft incrementally, inspect required fields and allowed options with `draft show`, upload images, and inspect again. Publish, dispose, and delete act without confirmation, so run them only when requested.
+Local draft preview works without authentication. Category-enriched preview and account draft or published listing work require authentication. Preview reports local assumptions and unverifiable requirements, while `draft validate DRAFT_ID` authoritatively checks an existing remote draft. Build a draft incrementally, inspect required fields and allowed options with `draft show`, upload images, and inspect again. Publish, dispose, and delete act without confirmation, so run them only when requested.

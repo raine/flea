@@ -2,6 +2,7 @@ pub mod auth;
 mod auth_callback;
 pub mod category;
 pub mod draft;
+mod draft_input;
 pub mod item;
 pub mod listing;
 pub mod location;
@@ -43,8 +44,8 @@ pub enum Command {
     )]
     Category(category::CategoryArgs),
     #[command(
-        about = "Create and manage remote drafts",
-        long_about = "Create, inspect, update, publish, or delete remote drafts and manage their images."
+        about = "Preview input and manage remote drafts",
+        long_about = "Preview draft input locally, or create, inspect, update, publish, delete, and manage images for remote drafts."
     )]
     Draft(Box<draft::DraftArgs>),
     #[command(

@@ -1,15 +1,23 @@
 use std::{
+    fmt,
     fs::File,
     io::{self, Read},
     path::{Path, PathBuf},
 };
 
 use clap::{Args, Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{
+    Deserialize, Serialize,
+    de::{MapAccess, SeqAccess, Visitor},
+};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::adinput::{AdInputApi, DraftWorkflow, WorkflowConfig, WorkflowError},
+    api::{
+        adinput::{AdInputApi, DraftWorkflow, WorkflowConfig, WorkflowError},
+        listings::ListingsApi,
+    },
+    cli::draft_input,
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
 };
@@ -84,6 +92,17 @@ pub enum DraftCommand {
         /// Listing ID to copy into a fresh draft for inspection.
         #[arg(long, conflicts_with_all = ["category", "title", "description", "description_file", "price", "trade_type", "postal_code", "delivery", "image", "input"])]
         from_listing: Option<String>,
+        #[command(flatten)]
+        values: ListingInputArgs,
+    },
+    #[command(
+        about = "Preview and validate draft input locally",
+        long_about = "Normalize fields and preprocess images without creating a remote draft. Optionally verify category existence and selectability through the authenticated read-only taxonomy."
+    )]
+    Preview {
+        /// Query the authenticated category taxonomy without creating a draft.
+        #[arg(long)]
+        verify_category: bool,
         #[command(flatten)]
         values: ListingInputArgs,
     },
@@ -187,9 +206,7 @@ pub fn collect_input_with_reader(
 
     let description = match (args.description, args.description_file) {
         (Some(value), None) => Some(Value::String(value)),
-        (None, Some(path)) => Some(Value::String(std::fs::read_to_string(&path).map_err(
-            |error| input_error(format!("failed to read {}: {error}", path.display())),
-        )?)),
+        (None, Some(path)) => Some(Value::String(read_bounded_text(&path)?)),
         (None, None) => None,
         (Some(_), Some(_)) => {
             return Err(input_error(
@@ -234,18 +251,127 @@ pub fn collect_input_with_reader(
     })
 }
 
+fn read_bounded_text(path: &Path) -> Result<String, AppError> {
+    const MAX_DESCRIPTION_FILE_BYTES: u64 = 64 * 1024;
+
+    let mut text = String::new();
+    File::open(path)
+        .and_then(|file| {
+            file.take(MAX_DESCRIPTION_FILE_BYTES + 1)
+                .read_to_string(&mut text)
+        })
+        .map_err(|error| input_error(format!("failed to read {}: {error}", path.display())))?;
+    if text.len() as u64 > MAX_DESCRIPTION_FILE_BYTES {
+        return Err(input_error("description file exceeds 64 KiB"));
+    }
+    Ok(text)
+}
+
+struct UniqueValue(Value);
+
+impl<'de> Deserialize<'de> for UniqueValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(UniqueValueVisitor)
+    }
+}
+
+struct UniqueValueVisitor;
+
+impl<'de> Visitor<'de> for UniqueValueVisitor {
+    type Value = UniqueValue;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON value without duplicate object fields")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::from(value)))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::from(value)))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .map(UniqueValue)
+            .ok_or_else(|| E::custom("JSON number is not finite"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::String(value.to_owned())))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::String(value)))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Null))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(UniqueValue(Value::Null))
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element::<UniqueValue>()? {
+            values.push(value.0);
+        }
+        Ok(UniqueValue(Value::Array(values)))
+    }
+
+    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = Map::new();
+        while let Some(key) = object.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(serde::de::Error::custom(format!(
+                    "duplicate JSON field `{key}`"
+                )));
+            }
+            let value = object.next_value::<UniqueValue>()?;
+            values.insert(key, value.0);
+        }
+        Ok(UniqueValue(Value::Object(values)))
+    }
+}
+
 fn read_json_object(path: &Path, stdin: &mut impl Read) -> Result<Map<String, Value>, AppError> {
+    const MAX_INPUT_BYTES: u64 = 1024 * 1024;
+
     let mut source = String::new();
     if path == Path::new("-") {
         stdin
+            .take(MAX_INPUT_BYTES + 1)
             .read_to_string(&mut source)
             .map_err(|error| input_error(format!("failed to read JSON from stdin: {error}")))?;
     } else {
         File::open(path)
-            .and_then(|mut file| file.read_to_string(&mut source))
+            .and_then(|file| file.take(MAX_INPUT_BYTES + 1).read_to_string(&mut source))
             .map_err(|error| input_error(format!("failed to read {}: {error}", path.display())))?;
     }
-    match serde_json::from_str(&source) {
+    if source.len() as u64 > MAX_INPUT_BYTES {
+        return Err(input_error("draft JSON input exceeds 1 MiB"));
+    }
+    match serde_json::from_str::<UniqueValue>(&source).map(|value| value.0) {
         Ok(Value::Object(values)) => Ok(values),
         Ok(_) => Err(input_error("--input must contain a JSON object")),
         Err(error) => Err(input_error(format!("invalid JSON input: {error}"))),
@@ -253,7 +379,12 @@ fn read_json_object(path: &Path, stdin: &mut impl Read) -> Result<Map<String, Va
 }
 
 fn take_json_images(values: &mut Map<String, Value>) -> Result<Vec<PathBuf>, AppError> {
-    let Some(images) = values.remove("image") else {
+    let image = values.remove("image");
+    let images = values.remove("images");
+    if image.is_some() && images.is_some() {
+        return Err(duplicate_field("image"));
+    }
+    let Some(images) = image.or(images) else {
         return Ok(Vec::new());
     };
     let strings = match images {
@@ -315,11 +446,28 @@ fn input_error(message: impl Into<String>) -> AppError {
     error
 }
 
+pub fn execute_preview(
+    command: DraftCommand,
+    taxonomy: Option<&dyn ListingsApi>,
+) -> Result<Value, AppError> {
+    let DraftCommand::Preview {
+        verify_category,
+        values,
+    } = command
+    else {
+        return Err(AppError::unexpected("expected a draft preview command"));
+    };
+    draft_input::preview(collect_input(values)?, verify_category, taxonomy)
+}
+
 pub async fn execute<A: AdInputApi>(
     command: DraftCommand,
     api: A,
     config: WorkflowConfig,
 ) -> Result<Value, AppError> {
+    if matches!(&command, DraftCommand::Preview { .. }) {
+        return execute_preview(command, None);
+    }
     let workflow = DraftWorkflow::new(api, config);
     match command {
         DraftCommand::Create {
@@ -336,14 +484,17 @@ pub async fn execute<A: AdInputApi>(
             from_listing: None,
             values,
         } => {
-            let input = collect_input(values)?;
+            let input = draft_input::normalize(collect_input(values)?, true)?;
             serde_json::to_value(
                 workflow
-                    .create(input.values, &input.image_paths)
+                    .create_prepared(input.values, input.images)
                     .await
                     .map_err(workflow_error)?,
             )
             .map_err(|error| AppError::output(error.to_string()))
+        }
+        DraftCommand::Preview { .. } => {
+            unreachable!("preview returns before authenticated workflow construction")
         }
         DraftCommand::Show { draft_id } => {
             serde_json::to_value(workflow.show(&draft_id).await.map_err(workflow_error)?)
@@ -356,6 +507,7 @@ pub async fn execute<A: AdInputApi>(
                     "draft update does not accept images; use `draft image add`",
                 ));
             }
+            let input = draft_input::normalize(input, false)?;
             serde_json::to_value(
                 workflow
                     .update(&draft_id, &input.values)
@@ -559,6 +711,35 @@ mod tests {
         let mut input = Cursor::new(br#"{"image":["json.jpg"]}"#);
 
         let error = collect_input_with_reader(args, &mut input).unwrap_err();
+
+        assert_eq!(
+            error.details.as_deref(),
+            Some(&json!({ "duplicate_field": "image" }))
+        );
+    }
+
+    #[test]
+    fn duplicate_json_fields_are_rejected_at_every_object_depth() {
+        for document in [
+            r#"{"title":"one","title":"two"}"#,
+            r#"{"attributes":{"condition":"good","condition":"poor"}}"#,
+        ] {
+            let error =
+                collect_input_with_reader(empty_args(), &mut Cursor::new(document.as_bytes()))
+                    .unwrap_err();
+
+            assert_eq!(error.code, "cli.invalid_input");
+            assert!(error.message.contains("duplicate JSON field"));
+        }
+    }
+
+    #[test]
+    fn singular_and_plural_json_image_fields_conflict() {
+        let error = collect_input_with_reader(
+            empty_args(),
+            &mut Cursor::new(br#"{"image":"one.jpg","images":["two.jpg"]}"#),
+        )
+        .unwrap_err();
 
         assert_eq!(
             error.details.as_deref(),

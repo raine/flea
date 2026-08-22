@@ -30,22 +30,29 @@ and the live smoke harness must not publish listings.
    without losing its query or hierarchy context. Browse direct children with
    `flea category list` and `flea category list --parent RETURNED_PARENT_ID`.
    A query with no matches succeeds with an empty `categories` collection.
-3. Create a draft with an explicit category, title, description, price, trade
-   type, postal code, and delivery configuration. Add one disposable test image.
-4. Run `flea draft show DRAFT_ID`. Confirm every required field is set, the
+3. Run `flea draft preview` with the explicit category, title, description,
+   price, trade type, postal code, delivery configuration, and one disposable
+   test image. Confirm that local validation passes and review every assumption
+   and unverifiable requirement. Preview creates no remote state and is not an
+   authoritative publication-readiness check.
+4. Create the draft from the previewed input. Run `flea draft show DRAFT_ID`.
+   Confirm every required field is set, the
    image state is `ready`, and the normalized values match the intended test
    listing.
-5. Run `flea draft publish DRAFT_ID` once. Record the trace ID, listing ID,
+5. Run the authoritative read-only `flea draft validate DRAFT_ID` check on the
+   persisted draft. Resolve every remote composer, category, delivery, and image
+   requirement before publication.
+6. Run `flea draft publish DRAFT_ID` once. Record the trace ID, listing ID,
    completed steps, warnings, and returned listing state. Do not repeat the
    command after an ambiguous failure. Inspect the draft and listing first.
-6. Run `flea listing show LISTING_ID` until Tori reports the expected observed
+7. Run `flea listing show LISTING_ID` until Tori reports the expected observed
    state. Verify the title, description, price, category, delivery, image order,
    and available actions in both CLI output and the Tori website.
-7. Exercise one safe field change with `flea listing update`, then verify the
+8. Exercise one safe field change with `flea listing update`, then verify the
    preserved fields and replacement value with `flea listing show`.
-8. Remove the test listing with `flea listing delete LISTING_ID` and verify that
+9. Remove the test listing with `flea listing delete LISTING_ID` and verify that
    `flea listing show LISTING_ID` returns `listing.not_found`.
-9. Inspect the matching JSONL trace. Confirm publication step boundaries,
+10. Inspect the matching JSONL trace. Confirm publication step boundaries,
    correlation fields, HTTP statuses, and the absence of tokens, cookies,
    callback URLs, signing headers, and image bytes.
 

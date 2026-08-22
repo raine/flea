@@ -1,4 +1,13 @@
-use std::{collections::BTreeMap, fmt, io::Cursor, path::Path, time::Duration};
+use std::{
+    collections::BTreeMap,
+    ffi::OsStr,
+    fmt,
+    fs::File,
+    io::{Cursor, Read},
+    path::Path,
+    process::Command,
+    time::Duration,
+};
 
 use reqwest::{
     Method as ReqwestMethod,
@@ -1188,8 +1197,23 @@ impl<A> DraftWorkflow<A> {
 impl<A: AdInputApi> DraftWorkflow<A> {
     pub async fn create(
         &self,
-        mut values: Map<String, Value>,
+        values: Map<String, Value>,
         image_paths: &[impl AsRef<Path>],
+    ) -> Result<CreateResult, WorkflowError> {
+        let mut images = Vec::with_capacity(image_paths.len());
+        for path in image_paths {
+            match prepare_image(path.as_ref()) {
+                Ok(image) => images.push(image),
+                Err(error) => return Err(WorkflowError::before_creation(error)),
+            }
+        }
+        self.create_prepared(values, images).await
+    }
+
+    pub async fn create_prepared(
+        &self,
+        mut values: Map<String, Value>,
+        images: Vec<PreparedImage>,
     ) -> Result<CreateResult, WorkflowError> {
         let mut draft = self
             .api
@@ -1199,15 +1223,8 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         let mut completed = vec!["create_draft".to_owned()];
 
         if let Some(category) = values.remove("category") {
-            let category = match category {
-                Value::String(id) => id
-                    .parse::<u64>()
-                    .map(Value::from)
-                    .unwrap_or(Value::String(id)),
-                category => category,
-            };
             let mut category_values = draft.values.clone();
-            category_values.insert("category".to_owned(), category);
+            category_values.insert("category".to_owned(), normalize_category(category));
             draft = self
                 .api
                 .update_item(&draft.draft_id, &draft.etag, &category_values)
@@ -1229,9 +1246,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 })?;
             completed.push("apply_fields".to_owned());
         }
-        if !image_paths.is_empty() {
+        if !images.is_empty() {
             draft = self
-                .add_images_from_paths(&draft, image_paths, &mut completed)
+                .add_prepared_images(&draft, images, &mut completed)
                 .await?;
         }
         Ok(CreateResult {
@@ -1277,7 +1294,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .api
                 .upload_image(
                     &draft.draft_id,
-                    image.file_name,
+                    &image.file_name,
                     image.bytes,
                     image.width,
                     image.height,
@@ -1395,31 +1412,10 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .map(uploaded_from_draft_image)
             .collect();
         for path in paths {
-            let path = path.as_ref();
-            let bytes = std::fs::read(path).map_err(|error| {
-                WorkflowError::for_draft(
-                    &state.draft_id,
-                    completed,
-                    ApiError::new("draft.image_read_failed", error.to_string()),
-                    false,
-                )
-            })?;
-            let image = sanitize_image(&bytes).map_err(|error| {
+            let image = prepare_image(path.as_ref()).map_err(|error| {
                 WorkflowError::for_draft(&state.draft_id, completed, error, false)
             })?;
-            let uploaded = self
-                .api
-                .upload_image(
-                    &state.draft_id,
-                    image.file_name,
-                    image.bytes,
-                    image.width,
-                    image.height,
-                )
-                .await
-                .map_err(|error| {
-                    WorkflowError::for_draft(&state.draft_id, completed, error, false)
-                })?;
+            let uploaded = self.upload_prepared_image(state, image, completed).await?;
             ordered.push(uploaded);
             completed.push(format!("upload_image:{}", ordered.len() - 1));
         }
@@ -1430,6 +1426,50 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .map_err(|error| WorkflowError::for_draft(&state.draft_id, completed, error, false))?;
         completed.push("attach_images".to_owned());
         Ok(updated)
+    }
+
+    async fn add_prepared_images(
+        &self,
+        state: &DraftState,
+        images: Vec<PreparedImage>,
+        completed: &mut Vec<String>,
+    ) -> Result<DraftState, WorkflowError> {
+        let mut existing = state.images.iter().collect::<Vec<_>>();
+        existing.sort_by_key(|image| image.position);
+        let mut ordered: Vec<UploadedImage> = existing
+            .into_iter()
+            .map(uploaded_from_draft_image)
+            .collect();
+        for image in images {
+            let uploaded = self.upload_prepared_image(state, image, completed).await?;
+            ordered.push(uploaded);
+            completed.push(format!("upload_image:{}", ordered.len() - 1));
+        }
+        let updated = self
+            .api
+            .set_images(&state.draft_id, &state.etag, &state.values, &ordered)
+            .await
+            .map_err(|error| WorkflowError::for_draft(&state.draft_id, completed, error, false))?;
+        completed.push("attach_images".to_owned());
+        Ok(updated)
+    }
+
+    async fn upload_prepared_image(
+        &self,
+        state: &DraftState,
+        image: PreparedImage,
+        completed: &[String],
+    ) -> Result<UploadedImage, WorkflowError> {
+        self.api
+            .upload_image(
+                &state.draft_id,
+                &image.file_name,
+                image.bytes,
+                image.width,
+                image.height,
+            )
+            .await
+            .map_err(|error| WorkflowError::for_draft(&state.draft_id, completed, error, false))
     }
 
     pub async fn remove_images(
@@ -1650,39 +1690,294 @@ fn image_processing_timeout(draft_id: &str, completed: &[String]) -> WorkflowErr
     WorkflowError::for_draft(draft_id, completed, error, true)
 }
 
-struct SanitizedImage {
+const MAX_IMAGE_INPUT_BYTES: u64 = 25 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION: u32 = 12_000;
+const MAX_IMAGE_PIXELS: u64 = 40_000_000;
+
+pub struct PreparedImage {
     bytes: Vec<u8>,
-    file_name: &'static str,
+    file_name: String,
     width: u32,
     height: u32,
+    source_format: &'static str,
+    metadata_stripped: bool,
 }
 
-fn sanitize_image(bytes: &[u8]) -> Result<SanitizedImage, ApiError> {
+impl PreparedImage {
+    pub const fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub const fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub const fn source_format(&self) -> &'static str {
+        self.source_format
+    }
+
+    pub fn output_format(&self) -> &'static str {
+        if self.file_name.ends_with(".png") {
+            "png"
+        } else {
+            "jpeg"
+        }
+    }
+
+    pub fn byte_len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    pub const fn metadata_stripped(&self) -> bool {
+        self.metadata_stripped
+    }
+}
+
+impl fmt::Debug for PreparedImage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedImage")
+            .field("byte_len", &self.bytes.len())
+            .field("file_name", &self.file_name)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("source_format", &self.source_format)
+            .field("metadata_stripped", &self.metadata_stripped)
+            .finish()
+    }
+}
+
+pub fn normalize_category(category: Value) -> Value {
+    match category {
+        Value::String(id) => id
+            .parse::<u64>()
+            .map(Value::from)
+            .unwrap_or(Value::String(id)),
+        category => category,
+    }
+}
+
+pub fn prepare_image(path: &Path) -> Result<PreparedImage, ApiError> {
+    let metadata = path.metadata().map_err(|_| {
+        ApiError::new(
+            "draft.image_read_failed",
+            "Image file does not exist or cannot be read",
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(ApiError::new(
+            "draft.image_read_failed",
+            "Image path must identify a regular file",
+        ));
+    }
+    if metadata.len() > MAX_IMAGE_INPUT_BYTES {
+        return Err(ApiError::new(
+            "draft.invalid_image",
+            "Image file exceeds the 25 MiB local processing limit",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or_default());
+    File::open(path)
+        .and_then(|file| file.take(MAX_IMAGE_INPUT_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|_| {
+            ApiError::new(
+                "draft.image_read_failed",
+                "Image file does not exist or cannot be read",
+            )
+        })?;
+    if bytes.len() as u64 > MAX_IMAGE_INPUT_BYTES {
+        return Err(ApiError::new(
+            "draft.invalid_image",
+            "Image file exceeds the 25 MiB local processing limit",
+        ));
+    }
+
+    if is_heif(&bytes) {
+        let converted = convert_heif(path)?;
+        return sanitize_raster(&converted, image::ImageFormat::Jpeg, "heic");
+    }
+    let format = image::guess_format(&bytes).map_err(|_| {
+        ApiError::new(
+            "draft.invalid_image",
+            "Image must be JPEG, PNG, HEIC, or HEIF",
+        )
+    })?;
+    match format {
+        image::ImageFormat::Jpeg => sanitize_raster(&bytes, format, "jpeg"),
+        image::ImageFormat::Png => sanitize_raster(&bytes, format, "png"),
+        _ => Err(ApiError::new(
+            "draft.invalid_image",
+            "Image must be JPEG, PNG, HEIC, or HEIF",
+        )),
+    }
+}
+
+fn sanitize_image(bytes: &[u8]) -> Result<PreparedImage, ApiError> {
     let format = image::guess_format(bytes)
         .map_err(|_| ApiError::new("draft.invalid_image", "Image must be JPEG or PNG"))?;
-    let (output_format, file_name) = match format {
-        image::ImageFormat::Jpeg => (image::ImageFormat::Jpeg, "image.jpg"),
-        image::ImageFormat::Png => (image::ImageFormat::Png, "image.png"),
-        _ => {
-            return Err(ApiError::new(
-                "draft.invalid_image",
-                "Image must be JPEG or PNG",
-            ));
-        }
-    };
-    let image = image::load_from_memory_with_format(bytes, format)
+    match format {
+        image::ImageFormat::Jpeg => sanitize_raster(bytes, format, "jpeg"),
+        image::ImageFormat::Png => sanitize_raster(bytes, format, "png"),
+        _ => Err(ApiError::new(
+            "draft.invalid_image",
+            "Image must be JPEG or PNG",
+        )),
+    }
+}
+
+fn sanitize_raster(
+    bytes: &[u8],
+    format: image::ImageFormat,
+    source_format: &'static str,
+) -> Result<PreparedImage, ApiError> {
+    let dimensions = image::ImageReader::with_format(Cursor::new(bytes), format)
+        .into_dimensions()
         .map_err(|_| ApiError::new("draft.invalid_image", "Image data is invalid"))?;
-    let (width, height) = (image.width(), image.height());
+    validate_image_dimensions(dimensions.0, dimensions.1)?;
+    let decoded = image::load_from_memory_with_format(bytes, format)
+        .map_err(|_| ApiError::new("draft.invalid_image", "Image data is invalid"))?;
+    let (output_format, file_name) = if format == image::ImageFormat::Png {
+        (image::ImageFormat::Png, "image.png")
+    } else {
+        (image::ImageFormat::Jpeg, "image.jpg")
+    };
     let mut output = Cursor::new(Vec::new());
-    image
+    decoded
         .write_to(&mut output, output_format)
         .map_err(|_| ApiError::new("draft.invalid_image", "Image conversion failed"))?;
-    Ok(SanitizedImage {
+    Ok(PreparedImage {
         bytes: output.into_inner(),
-        file_name,
-        width,
-        height,
+        file_name: file_name.to_owned(),
+        width: dimensions.0,
+        height: dimensions.1,
+        source_format,
+        metadata_stripped: true,
     })
+}
+
+fn validate_image_dimensions(width: u32, height: u32) -> Result<(), ApiError> {
+    let pixels = u64::from(width) * u64::from(height);
+    if width == 0
+        || height == 0
+        || width > MAX_IMAGE_DIMENSION
+        || height > MAX_IMAGE_DIMENSION
+        || pixels > MAX_IMAGE_PIXELS
+    {
+        return Err(ApiError::new(
+            "draft.invalid_image",
+            "Image dimensions exceed the local 12000 pixel or 40 megapixel limit",
+        ));
+    }
+    Ok(())
+}
+
+fn is_heif(bytes: &[u8]) -> bool {
+    if bytes.len() < 16 || &bytes[4..8] != b"ftyp" {
+        return false;
+    }
+    bytes[8..bytes.len().min(64)].chunks_exact(4).any(|brand| {
+        matches!(
+            brand,
+            b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1"
+        )
+    })
+}
+
+fn convert_heif(path: &Path) -> Result<Vec<u8>, ApiError> {
+    convert_heif_in(path, None)
+}
+
+fn convert_heif_in(path: &Path, temporary_parent: Option<&Path>) -> Result<Vec<u8>, ApiError> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix("flea-image-");
+    let temporary = match temporary_parent {
+        Some(parent) => builder.tempdir_in(parent),
+        None => builder.tempdir(),
+    }
+    .map_err(|_| image_processing_unavailable())?;
+    let output_path = temporary.path().join("converted.jpg");
+    let mut failures = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        match run_converter(
+            OsStr::new("sips"),
+            [
+                OsStr::new("-s"),
+                OsStr::new("format"),
+                OsStr::new("jpeg"),
+                path.as_os_str(),
+                OsStr::new("--out"),
+                output_path.as_os_str(),
+            ],
+            temporary.path(),
+        ) {
+            Ok(()) => return read_converted_image(&output_path),
+            Err(error) => failures.push(error),
+        }
+    }
+
+    match run_converter(
+        OsStr::new("heif-convert"),
+        [path.as_os_str(), output_path.as_os_str()],
+        temporary.path(),
+    ) {
+        Ok(()) => read_converted_image(&output_path),
+        Err(error) => {
+            failures.push(error);
+            if failures
+                .iter()
+                .all(|failure| failure.kind() == std::io::ErrorKind::NotFound)
+            {
+                Err(image_processing_unavailable())
+            } else {
+                Err(ApiError::new(
+                    "draft.invalid_image",
+                    "HEIC or HEIF image conversion failed",
+                ))
+            }
+        }
+    }
+}
+
+fn run_converter<'a>(
+    program: &OsStr,
+    arguments: impl IntoIterator<Item = &'a OsStr>,
+    temporary_path: &Path,
+) -> Result<(), std::io::Error> {
+    let status = Command::new(program)
+        .args(arguments)
+        .env("MAGICK_TEMPORARY_PATH", temporary_path)
+        .env("TMPDIR", temporary_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other("image converter failed"))
+    }
+}
+
+fn read_converted_image(path: &Path) -> Result<Vec<u8>, ApiError> {
+    let metadata = path
+        .metadata()
+        .map_err(|_| ApiError::new("draft.invalid_image", "HEIC or HEIF conversion failed"))?;
+    if metadata.len() > MAX_IMAGE_INPUT_BYTES {
+        return Err(ApiError::new(
+            "draft.invalid_image",
+            "Converted image exceeds the 25 MiB local processing limit",
+        ));
+    }
+    std::fs::read(path)
+        .map_err(|_| ApiError::new("draft.invalid_image", "HEIC or HEIF conversion failed"))
+}
+
+fn image_processing_unavailable() -> ApiError {
+    ApiError::new(
+        "draft.heif_decoder_unavailable",
+        "HEIC and HEIF preview requires macOS ImageIO or the `heif-convert` command",
+    )
 }
 
 fn uploaded_from_draft_image(image: &DraftImage) -> UploadedImage {
@@ -1726,4 +2021,55 @@ pub fn ordered_image_states(images: &[DraftImage]) -> BTreeMap<usize, (&str, &Im
         .iter()
         .map(|image| (image.position, (image.image_id.as_str(), &image.state)))
         .collect()
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_heic_and_heif_file_type_brands() {
+        for brand in [b"heic", b"heix", b"mif1"] {
+            let mut bytes = b"\0\0\0\x18ftyp".to_vec();
+            bytes.extend_from_slice(brand);
+            bytes.extend_from_slice(b"\0\0\0\0");
+            assert!(is_heif(&bytes));
+        }
+        assert!(!is_heif(b"not an ISO media file"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn heic_preview_converts_strips_metadata_and_cleans_artifacts() {
+        let source = tempfile::tempdir().unwrap();
+        let png_path = source.path().join("source.png");
+        let heic_path = source.path().join("source.heic");
+        image::DynamicImage::new_rgb8(4, 6).save(&png_path).unwrap();
+        let status = Command::new("sips")
+            .args([OsStr::new("-s"), OsStr::new("format"), OsStr::new("heic")])
+            .arg(&png_path)
+            .arg(OsStr::new("--out"))
+            .arg(&heic_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "macOS ImageIO must encode the HEIC fixture"
+        );
+        let original = std::fs::read(&heic_path).unwrap();
+        let artifacts = tempfile::tempdir().unwrap();
+
+        let converted = convert_heif_in(&heic_path, Some(artifacts.path())).unwrap();
+        let prepared = sanitize_raster(&converted, image::ImageFormat::Jpeg, "heic").unwrap();
+
+        assert_eq!(prepared.width(), 4);
+        assert_eq!(prepared.height(), 6);
+        assert_eq!(prepared.output_format(), "jpeg");
+        assert!(prepared.metadata_stripped());
+        assert!(!prepared.bytes.windows(4).any(|window| window == b"Exif"));
+        assert_eq!(std::fs::read(&heic_path).unwrap(), original);
+        assert_eq!(artifacts.path().read_dir().unwrap().count(), 0);
+    }
 }

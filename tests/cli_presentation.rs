@@ -118,7 +118,7 @@ fn help_tables_include_agent_oriented_summaries() {
     let top = stdout(&invoke(&["--help"]));
     assert!(top.contains("auth      Manage browser authentication"));
     assert!(top.contains("category  Discover Tori category machine values"));
-    assert!(top.contains("draft     Create and manage remote drafts"));
+    assert!(top.contains("draft     Preview input and manage remote drafts"));
     assert!(top.contains("item      Inspect public marketplace listings"));
     assert!(top.contains("listing   Manage published listings"));
     assert!(top.contains("skill     Print or install the coding-agent skill"));
@@ -130,6 +130,7 @@ fn help_tables_include_agent_oriented_summaries() {
 
     let draft = stdout(&invoke(&["draft", "--help"]));
     assert!(draft.contains("create   Create a remote draft"));
+    assert!(draft.contains("preview  Preview and validate draft input locally"));
     assert!(draft.contains("image    Manage draft images"));
     assert!(draft.contains("publish  Publish a remote draft"));
 

@@ -37,11 +37,25 @@ impl CommandRuntime for ProductionRuntime {
                 let api = HttpListingsApi::new(Arc::new(client));
                 category::dispatch_with_api(args, &api)
             }
-            Command::Draft(args) => {
-                let client = authenticated_client()?;
-                let api = HttpAdInputApi::new(ClientTransport::new(client));
-                block_on(draft::execute(args.command, api, WorkflowConfig::default()))
-            }
+            Command::Draft(args) => match args.command {
+                command @ super::draft::DraftCommand::Preview {
+                    verify_category: false,
+                    ..
+                } => draft::execute_preview(command, None),
+                command @ super::draft::DraftCommand::Preview {
+                    verify_category: true,
+                    ..
+                } => {
+                    let client = authenticated_client()?;
+                    let api = HttpListingsApi::new(Arc::new(client));
+                    draft::execute_preview(command, Some(&api))
+                }
+                command => {
+                    let client = authenticated_client()?;
+                    let api = HttpAdInputApi::new(ClientTransport::new(client));
+                    block_on(draft::execute(command, api, WorkflowConfig::default()))
+                }
+            },
             Command::Item(args) => {
                 let api = HttpPublicItemApi::new(Arc::new(public_client()));
                 super::item::dispatch_with_api(args, &api)
