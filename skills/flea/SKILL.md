@@ -25,6 +25,23 @@ Use `flea` as an independent interface to Tori.fi. Keep the default TOON output 
 4. Separate exact matches from plausible matches. Require the title or public details to confirm the requested model or identifying attributes before calling a match exact. For a generic title or a result matched through hidden text, run `flea item show LISTING_ID` and use its description and attributes when available. Keep uncertain candidates plausible and discard clear noise.
 5. Return concise linked entries, typically title, price, location, and canonical URL. State the ordering, such as relevance within one query, distance, recency, or price. For merged queries, choose a useful deterministic ordering rather than implying one global relevance rank.
 
+## Category discovery
+
+Category search returns at most 20 ranked matches by default, with `returned`, `total`, and `truncated` metadata. Use the exact `category_id` from a result as the machine value. Querying an exact ID or label puts that category first.
+
+Refine broad terms with a returned parent ID or path instead of increasing the limit until the full taxonomy is printed. For example:
+
+```sh
+flea category search tarvikkeet
+flea category search tarvikkeet --path 'Urheilu ja ulkoilu > Pyöräily'
+PARENT="$(flea --format json category search tarvikkeet \
+  --path 'Urheilu ja ulkoilu > Pyöräily' \
+  | jq -er '.data.context.category_id')"
+flea category search tarvikkeet --parent "$PARENT"
+```
+
+Both refined searches cover descendants and rank `Pyöräilyvarusteet` prominently. Follow `next_actions` when a page is truncated because those commands retain the query, hierarchy context, offset, and limit. Use an explicit `--limit` from 1 through 100 only when a larger page is useful.
+
 ## Commands
 
 ```sh

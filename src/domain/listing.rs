@@ -19,6 +19,26 @@ pub struct CategoryList {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CategorySearchContext {
+    pub category_id: String,
+    pub label: String,
+    pub path: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CategorySearchResult {
+    pub categories: Vec<Category>,
+    pub query: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<CategorySearchContext>,
+    pub offset: usize,
+    pub limit: usize,
+    pub returned: usize,
+    pub total: usize,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ListingState {
     All,

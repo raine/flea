@@ -1,6 +1,9 @@
 use clap::Parser;
 use flea::{
-    cli::{Cli, Command, draft::DraftCommand, listing::ListingCommand, search::SearchSort},
+    cli::{
+        Cli, Command, category::CategoryCommand, draft::DraftCommand, listing::ListingCommand,
+        search::SearchSort,
+    },
     output::OutputFormat,
 };
 
@@ -37,6 +40,61 @@ fn every_command_leaf_parses() {
     for arguments in cases {
         Cli::try_parse_from(&arguments)
             .unwrap_or_else(|error| panic!("failed to parse {arguments:?}: {error}"));
+    }
+}
+
+#[test]
+fn parses_category_search_hierarchy_and_pagination_options() {
+    let cli = Cli::parse_from([
+        "flea",
+        "category",
+        "search",
+        "tarvikkeet",
+        "--path",
+        "Urheilu ja ulkoilu > Pyöräily",
+        "--offset",
+        "20",
+        "--limit",
+        "10",
+    ]);
+    let Command::Category(category) = cli.command else {
+        panic!("expected category command");
+    };
+    let CategoryCommand::Search {
+        query,
+        parent,
+        path,
+        offset,
+        limit,
+    } = category.command
+    else {
+        panic!("expected category search command");
+    };
+    assert_eq!(query, "tarvikkeet");
+    assert!(parent.is_none());
+    assert_eq!(path.as_deref(), Some("Urheilu ja ulkoilu > Pyöräily"));
+    assert_eq!(offset, 20);
+    assert_eq!(limit, 10);
+}
+
+#[test]
+fn category_search_rejects_malformed_limits_and_conflicting_context() {
+    for arguments in [
+        vec!["flea", "category", "search", "chair", "--limit", "0"],
+        vec!["flea", "category", "search", "chair", "--limit", "101"],
+        vec!["flea", "category", "search", "chair", "--limit", "many"],
+        vec![
+            "flea",
+            "category",
+            "search",
+            "chair",
+            "--parent",
+            "100",
+            "--path",
+            "Furniture",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
     }
 }
 

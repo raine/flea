@@ -518,6 +518,71 @@ fn category_and_listing_commands_flow_through_http_normalization() {
 }
 
 #[test]
+fn truncated_category_search_actions_preserve_query_and_hierarchy_context() {
+    let taxonomy = json!({
+        "categories": [{
+            "id": 100,
+            "label": "Root",
+            "isSelectable": false,
+            "children": [
+                { "id": 101, "label": "Tarvikkeet A", "isSelectable": true },
+                { "id": 102, "label": "Tarvikkeet B", "isSelectable": true },
+                { "id": 103, "label": "Tarvikkeet C", "isSelectable": true }
+            ]
+        }]
+    });
+    let client = MockClient::with_responses([
+        response(StatusCode::OK, taxonomy.clone()),
+        response(StatusCode::OK, taxonomy),
+    ]);
+    let runtime = TestRuntime { client };
+
+    let by_parent = invoke(
+        &runtime,
+        [
+            "flea",
+            "--format",
+            "json",
+            "category",
+            "search",
+            "tarvikkeet",
+            "--parent",
+            "100",
+            "--limit",
+            "2",
+        ],
+    );
+    assert_eq!(by_parent["data"]["returned"], 2);
+    assert_eq!(by_parent["data"]["total"], 3);
+    assert_eq!(by_parent["data"]["truncated"], true);
+    assert_eq!(
+        by_parent["next_actions"][0]["command"],
+        "flea category search 'tarvikkeet' --parent '100' --offset 2 --limit 2"
+    );
+
+    let by_path = invoke(
+        &runtime,
+        [
+            "flea",
+            "--format",
+            "json",
+            "category",
+            "search",
+            "tarvikkeet",
+            "--path",
+            "Root",
+            "--limit",
+            "2",
+        ],
+    );
+    assert_eq!(by_path["data"]["context"]["category_id"], "100");
+    assert_eq!(
+        by_path["next_actions"][0]["command"],
+        "flea category search 'tarvikkeet' --path 'Root' --offset 2 --limit 2"
+    );
+}
+
+#[test]
 fn category_http_failures_have_specific_structured_errors() {
     let endpoint = invoke_error(
         &TestRuntime {

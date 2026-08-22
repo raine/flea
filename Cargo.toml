@@ -24,6 +24,7 @@ toon-format = { version = "0.5", default-features = false }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+unicode-normalization = "0.1"
 url = { version = "2.5", features = ["serde"] }
 uuid = { version = "1.18", features = ["serde", "v4"] }
 

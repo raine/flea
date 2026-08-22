@@ -6,6 +6,7 @@ use std::{
 use clap::Parser;
 use flea::{
     api::listings::{
+        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions,
         LISTING_PAGE_SIZE, Listings, ListingsApi, ListingsApiError, UpstreamCategory,
         UpstreamListing, UpstreamListingPage,
     },
@@ -138,10 +139,10 @@ fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
 
     let cycling = listings.search_categories("polkupyörä").unwrap();
     assert_eq!(cycling.categories.len(), 2);
-    assert_eq!(cycling.categories[0].category_id, "8375");
-    assert_eq!(cycling.categories[1].category_id, "257");
+    assert_eq!(cycling.categories[0].category_id, "257");
+    assert_eq!(cycling.categories[1].category_id, "8375");
     assert_eq!(
-        cycling.categories[1].path,
+        cycling.categories[0].path,
         "Urheilu ja ulkoilu > Pyöräily > Polkupyörät"
     );
 
@@ -156,6 +157,225 @@ fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
 
     let no_matches = listings.search_categories("lukko").unwrap();
     assert!(no_matches.categories.is_empty());
+    assert_eq!(no_matches.returned, 0);
+    assert_eq!(no_matches.total, 0);
+    assert!(!no_matches.truncated);
+}
+
+#[test]
+fn category_search_bounds_broad_results_and_reports_pagination() {
+    let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
+        include_str!("fixtures/listings/category-taxonomy-live.json"),
+    )
+    .unwrap();
+    let mut api = MockListingsApi::fixtures();
+    api.categories = Ok(taxonomy.categories);
+    let listings = Listings::new(&api);
+
+    let first = listings.search_categories("tarvikkeet").unwrap();
+    assert_eq!(first.limit, CATEGORY_SEARCH_LIMIT_DEFAULT);
+    assert_eq!(first.offset, 0);
+    assert_eq!(first.returned, CATEGORY_SEARCH_LIMIT_DEFAULT);
+    assert!(first.total > first.returned);
+    assert!(first.truncated);
+
+    let second = listings
+        .search_categories_with_options(
+            "tarvikkeet",
+            CategorySearchOptions {
+                offset: first.returned,
+                limit: 7,
+                ..CategorySearchOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(second.offset, CATEGORY_SEARCH_LIMIT_DEFAULT);
+    assert_eq!(second.limit, 7);
+    assert_eq!(second.returned, 7);
+    assert_eq!(second.total, first.total);
+    assert_ne!(second.categories[0], first.categories[0]);
+}
+
+#[test]
+fn category_search_resolves_ids_labels_and_finnish_unicode_deterministically() {
+    let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
+        include_str!("fixtures/listings/category-taxonomy-live.json"),
+    )
+    .unwrap();
+    let mut api = MockListingsApi::fixtures();
+    api.categories = Ok(taxonomy.categories);
+    let listings = Listings::new(&api);
+
+    let id = listings.search_categories("258").unwrap();
+    assert_eq!(id.categories.len(), 1);
+    assert_eq!(id.categories[0].label, "Pyöräilyvarusteet");
+
+    let label = listings.search_categories("PYÖRÄILYVARUSTEET").unwrap();
+    assert_eq!(label.categories[0].category_id, "258");
+
+    let decomposed = listings
+        .search_categories("PYO\u{308}RA\u{308}ILYVARUSTEET")
+        .unwrap();
+    assert_eq!(decomposed.categories[0].category_id, "258");
+
+    let finnish = listings.search_categories("ÖLJYVÄRIMAALAUKSET").unwrap();
+    assert_eq!(finnish.categories[0].category_id, "390");
+}
+
+#[test]
+fn category_search_filters_bicycle_accessories_by_parent_or_path() {
+    let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
+        include_str!("fixtures/listings/category-taxonomy-live.json"),
+    )
+    .unwrap();
+    let mut api = MockListingsApi::fixtures();
+    api.categories = Ok(taxonomy.categories);
+    let listings = Listings::new(&api);
+
+    let by_parent = listings
+        .search_categories_with_options(
+            "tarvikkeet",
+            CategorySearchOptions {
+                parent: Some("3963"),
+                ..CategorySearchOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(by_parent.context.as_ref().unwrap().category_id, "3963");
+    assert_eq!(by_parent.categories[0].category_id, "258");
+    assert_eq!(by_parent.categories[0].label, "Pyöräilyvarusteet");
+
+    let by_path = listings
+        .search_categories_with_options(
+            "TARVIKKEET",
+            CategorySearchOptions {
+                path: Some("Urheilu ja ulkoilu > PYÖRÄILY"),
+                ..CategorySearchOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(by_path.context.as_ref().unwrap().category_id, "3963");
+    assert_eq!(by_path.categories, by_parent.categories);
+}
+
+#[test]
+fn category_ranking_orders_exact_prefix_token_context_and_substring_matches() {
+    let mut api = MockListingsApi::fixtures();
+    api.categories = Ok(vec![
+        UpstreamCategory {
+            id: "10".to_owned(),
+            label: "Pyöräily".to_owned(),
+            parent_id: None,
+            selectable: Some(true),
+            children: vec![
+                UpstreamCategory {
+                    id: "11".to_owned(),
+                    label: "Pyöräilyvarusteet".to_owned(),
+                    parent_id: None,
+                    selectable: Some(true),
+                    children: Vec::new(),
+                },
+                UpstreamCategory {
+                    id: "12".to_owned(),
+                    label: "Hauska pyöräily opas".to_owned(),
+                    parent_id: None,
+                    selectable: Some(true),
+                    children: Vec::new(),
+                },
+                UpstreamCategory {
+                    id: "13".to_owned(),
+                    label: "Kengät".to_owned(),
+                    parent_id: None,
+                    selectable: Some(true),
+                    children: Vec::new(),
+                },
+            ],
+        },
+        UpstreamCategory {
+            id: "20".to_owned(),
+            label: "Retkipyöräilyoppaat".to_owned(),
+            parent_id: None,
+            selectable: Some(true),
+            children: Vec::new(),
+        },
+    ]);
+    let results = Listings::new(&api).search_categories("pyöräily").unwrap();
+    let ids = results
+        .categories
+        .iter()
+        .map(|category| category.category_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(ids, ["10", "11", "12", "13", "20"]);
+}
+
+#[test]
+fn category_search_breaks_equal_relevance_ties_by_path_and_id() {
+    let mut api = MockListingsApi::fixtures();
+    api.categories = Ok(vec![
+        UpstreamCategory {
+            id: "20".to_owned(),
+            label: "B".to_owned(),
+            parent_id: None,
+            selectable: Some(false),
+            children: vec![UpstreamCategory {
+                id: "22".to_owned(),
+                label: "Tarvikkeet".to_owned(),
+                parent_id: None,
+                selectable: Some(true),
+                children: Vec::new(),
+            }],
+        },
+        UpstreamCategory {
+            id: "10".to_owned(),
+            label: "A".to_owned(),
+            parent_id: None,
+            selectable: Some(false),
+            children: vec![
+                UpstreamCategory {
+                    id: "12".to_owned(),
+                    label: "Tarvikkeet".to_owned(),
+                    parent_id: None,
+                    selectable: Some(true),
+                    children: Vec::new(),
+                },
+                UpstreamCategory {
+                    id: "11".to_owned(),
+                    label: "Tarvikkeet".to_owned(),
+                    parent_id: None,
+                    selectable: Some(true),
+                    children: Vec::new(),
+                },
+            ],
+        },
+    ]);
+    let results = Listings::new(&api).search_categories("tarvikkeet").unwrap();
+    let ids = results
+        .categories
+        .iter()
+        .map(|category| category.category_id.as_str())
+        .collect::<Vec<_>>();
+
+    assert_eq!(ids, ["11", "12", "22"]);
+}
+
+#[test]
+fn category_search_rejects_limits_outside_the_documented_bound() {
+    let api = MockListingsApi::fixtures();
+    let listings = Listings::new(&api);
+    for limit in [0, CATEGORY_SEARCH_LIMIT_MAX + 1] {
+        let error = listings
+            .search_categories_with_options(
+                "tuolit",
+                CategorySearchOptions {
+                    limit,
+                    ..CategorySearchOptions::default()
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "cli.invalid_usage");
+        assert!(error.message.contains("between 1 and 100"));
+    }
 }
 
 #[test]

@@ -1,9 +1,12 @@
 use clap::{Args, Subcommand};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
-    api::listings::{Listings, ListingsApi},
+    api::listings::{
+        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions, Listings,
+        ListingsApi,
+    },
     error::AppError,
 };
 
@@ -18,11 +21,32 @@ pub struct CategoryArgs {
 pub enum CategoryCommand {
     #[command(
         about = "Search categories by text",
-        long_about = "Search Tori categories by text and return matching category machine values."
+        long_about = "Search and rank Tori categories by ID, label, and hierarchy context. Results default to 20 and --limit accepts 1 through 100.",
+        after_long_help = "Broad-query refinement:\n  flea category search tarvikkeet\n  flea category search tarvikkeet --path 'Urheilu ja ulkoilu > Pyöräily'\n\nUse --parent with a category_id or --path with a returned category path to search its descendants. Follow next_actions to continue a truncated search."
     )]
     Search {
-        /// Text used to match category names.
+        /// Category ID or text used to match category labels and paths.
         query: String,
+
+        /// Restrict matches to descendants of this category machine value.
+        #[arg(long, conflicts_with = "path")]
+        parent: Option<String>,
+
+        /// Restrict matches to descendants of this exact label or category path.
+        #[arg(long, conflicts_with = "parent")]
+        path: Option<String>,
+
+        /// Results to return, from 1 through 100.
+        #[arg(
+            long,
+            default_value_t = CATEGORY_SEARCH_LIMIT_DEFAULT,
+            value_parser = parse_category_search_limit
+        )]
+        limit: usize,
+
+        /// Zero-based result offset. Follow next_actions to preserve search context.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
     },
     #[command(
         about = "List categories",
@@ -37,9 +61,76 @@ pub enum CategoryCommand {
 
 pub fn dispatch_with_api(command: CategoryArgs, api: &dyn ListingsApi) -> Result<Value, AppError> {
     let listings = Listings::new(api);
-    let result = match command.command {
-        CategoryCommand::Search { query } => listings.search_categories(&query)?,
-        CategoryCommand::List { parent } => listings.categories(parent.as_deref())?,
-    };
-    serde_json::to_value(result).map_err(|error| AppError::output(error.to_string()))
+    match command.command {
+        CategoryCommand::Search {
+            query,
+            parent,
+            path,
+            limit,
+            offset,
+        } => {
+            let result = listings.search_categories_with_options(
+                &query,
+                CategorySearchOptions {
+                    parent: parent.as_deref(),
+                    path: path.as_deref(),
+                    offset,
+                    limit,
+                },
+            )?;
+            let mut value = serde_json::to_value(&result)
+                .map_err(|error| AppError::output(error.to_string()))?;
+            if result.truncated {
+                let command = next_page_command(
+                    &query,
+                    parent.as_deref(),
+                    path.as_deref(),
+                    offset.saturating_add(result.returned),
+                    limit,
+                );
+                value
+                    .as_object_mut()
+                    .expect("category search output is an object")
+                    .insert("_next_actions".to_owned(), json!([{ "command": command }]));
+            }
+            Ok(value)
+        }
+        CategoryCommand::List { parent } => {
+            serde_json::to_value(listings.categories(parent.as_deref())?)
+                .map_err(|error| AppError::output(error.to_string()))
+        }
+    }
+}
+
+fn parse_category_search_limit(value: &str) -> Result<usize, String> {
+    let limit = value
+        .parse::<usize>()
+        .map_err(|_| "limit must be a whole number".to_owned())?;
+    (1..=CATEGORY_SEARCH_LIMIT_MAX)
+        .contains(&limit)
+        .then_some(limit)
+        .ok_or_else(|| format!("limit must be between 1 and {CATEGORY_SEARCH_LIMIT_MAX}"))
+}
+
+fn next_page_command(
+    query: &str,
+    parent: Option<&str>,
+    path: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> String {
+    let mut parts = vec!["flea category search".to_owned(), shell_quote(query)];
+    if let Some(parent) = parent {
+        parts.push(format!("--parent {}", shell_quote(parent)));
+    }
+    if let Some(path) = path {
+        parts.push(format!("--path {}", shell_quote(path)));
+    }
+    parts.push(format!("--offset {offset}"));
+    parts.push(format!("--limit {limit}"));
+    parts.join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
