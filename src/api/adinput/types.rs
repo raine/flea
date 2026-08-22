@@ -108,7 +108,24 @@ pub struct PublicationDraftState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PublicationCategory {
     pub category_id: String,
+    pub label: String,
     pub selectable: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CategoryValidation {
+    pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    pub exists: Option<bool>,
+    pub selectable: Option<bool>,
+    pub compatible: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existence_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selectability_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compatibility_source: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -133,6 +150,8 @@ pub struct ValidationEvidenceFailure {
 pub struct PublicationValidation {
     pub draft_id: String,
     pub ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_validation: Option<CategoryValidation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub missing: Vec<PublicationRequirement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

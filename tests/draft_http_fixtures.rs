@@ -2918,6 +2918,24 @@ fn composer_fixture() -> Value {
     .unwrap()
 }
 
+fn composer_with_category_options(selected: &str, option_ids: &[String]) -> Value {
+    let mut fixture = composer_fixture();
+    fixture["ad"]["values"]["category"] = json!(selected);
+    fixture["model"]["sections"][1]["content"][1]["value-nodes"] = Value::Array(
+        option_ids
+            .iter()
+            .map(|id| {
+                json!({
+                    "id": id,
+                    "label": format!("Category {id}"),
+                    "persistable": true
+                })
+            })
+            .collect(),
+    );
+    fixture
+}
+
 fn delivery_fixture() -> Value {
     serde_json::from_str(include_str!(
         "fixtures/adinput/bicycle-accessory-delivery-live.json"
@@ -3068,6 +3086,136 @@ async fn composer_bounds_options_and_reports_truncation() {
             .count(),
         50
     );
+}
+
+#[tokio::test]
+async fn composer_keeps_a_selected_category_outside_the_option_bound() {
+    let option_ids = (0..60).map(|index| index.to_string()).collect::<Vec<_>>();
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(
+        200,
+        composer_with_category_options("59", &option_ids),
+    )]));
+
+    let state = api.get_draft("46000000").await.unwrap();
+    let category = state
+        .fields
+        .iter()
+        .find(|field| field.key == "category")
+        .unwrap();
+    let options = state
+        .options
+        .iter()
+        .filter(|option| option.field == "category")
+        .collect::<Vec<_>>();
+
+    assert_eq!(category.option_count, 60);
+    assert_eq!(category.options_returned, 50);
+    assert!(category.options_truncated);
+    assert_eq!(options.len(), 50);
+    assert!(options.iter().any(|option| option.value == json!("59")));
+    assert_eq!(options.last().unwrap().label, "Category 59");
+}
+
+#[tokio::test]
+async fn validate_uses_exact_taxonomy_lookup_inside_and_outside_the_option_bound() {
+    for selected in ["1", "59"] {
+        let option_ids = (0..60).map(|index| index.to_string()).collect::<Vec<_>>();
+        let report = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new([
+                response(200, composer_with_category_options(selected, &option_ids)),
+                response(200, delivery_fixture()),
+                category_taxonomy(selected, true),
+            ])),
+            config(),
+        )
+        .validate("46000000")
+        .await
+        .unwrap();
+
+        let category = report.category_validation.as_ref().unwrap();
+        assert_eq!(category.value, selected);
+        assert_eq!(category.label.as_deref(), Some("Fixture category"));
+        assert_eq!(category.exists, Some(true));
+        assert_eq!(category.selectable, Some(true));
+        assert_eq!(category.compatible, Some(true));
+        assert_eq!(
+            category.existence_source.as_deref(),
+            Some("category_taxonomy")
+        );
+        assert_eq!(
+            category.selectability_source.as_deref(),
+            Some("category_taxonomy")
+        );
+        assert_eq!(
+            category.compatibility_source.as_deref(),
+            Some("listing_composer")
+        );
+        assert!(report.invalid.iter().all(|issue| issue.field != "category"));
+        assert!(
+            report
+                .unverifiable
+                .iter()
+                .all(|issue| issue.field != "category")
+        );
+    }
+}
+
+#[tokio::test]
+async fn validate_rejects_removed_categories_with_an_exact_recovery_lookup() {
+    let report = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(
+                200,
+                composer_with_category_options("258", &["258".to_owned()]),
+            ),
+            response(200, delivery_fixture()),
+            category_taxonomy("999", true),
+        ])),
+        config(),
+    )
+    .validate("46000000")
+    .await
+    .unwrap();
+
+    let category = report.category_validation.as_ref().unwrap();
+    assert_eq!(category.exists, Some(false));
+    assert_eq!(category.selectable, None);
+    assert_eq!(category.compatible, Some(true));
+    let issue = report
+        .invalid
+        .iter()
+        .find(|issue| issue.field == "category")
+        .unwrap();
+    assert!(issue.reason.contains("absent from or inaccessible"));
+    assert_eq!(issue.command, "flea category search 258");
+}
+
+#[tokio::test]
+async fn validate_rejects_category_schema_disagreement() {
+    let report = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(
+                200,
+                composer_with_category_options("258", &["257".to_owned()]),
+            ),
+            response(200, delivery_fixture()),
+            category_taxonomy("258", true),
+        ])),
+        config(),
+    )
+    .validate("46000000")
+    .await
+    .unwrap();
+
+    let category = report.category_validation.as_ref().unwrap();
+    assert_eq!(category.exists, Some(true));
+    assert_eq!(category.selectable, Some(true));
+    assert_eq!(category.compatible, Some(false));
+    assert!(report.invalid.iter().any(|issue| {
+        issue.field == "category"
+            && issue.source == "listing_composer"
+            && issue.reason.contains("incompatible")
+    }));
 }
 
 #[tokio::test]

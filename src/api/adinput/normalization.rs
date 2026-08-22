@@ -423,6 +423,8 @@ fn normalize_widget(
     };
     let field_type = normalize_field_type(widget, &upstream_type, path)?;
     let value = model_field_value(values, &id);
+    let option_result =
+        normalize_widget_options(widget, &upstream_type, &id, value.as_ref(), path)?;
     let mut field = Field::new(
         id.clone(),
         label,
@@ -431,7 +433,6 @@ fn normalize_widget(
         value,
         section,
     );
-    let option_result = normalize_widget_options(widget, &upstream_type, &id, path)?;
     field.option_count = option_result.total;
     field.options_returned = option_result.options.len();
     field.options_truncated = option_result.total > option_result.options.len();
@@ -631,17 +632,27 @@ fn normalize_field_type(
 struct NormalizedOptions {
     options: Vec<FieldOption>,
     total: usize,
+    selected: Vec<Value>,
+    selected_options: Vec<FieldOption>,
 }
 
 fn normalize_widget_options(
     widget: &Map<String, Value>,
     upstream_type: &str,
     field: &str,
+    selected: Option<&Value>,
     path: &str,
 ) -> Result<NormalizedOptions, ApiError> {
+    let selected = match selected {
+        Some(Value::Array(values)) => values.clone(),
+        Some(value) => vec![value.clone()],
+        None => Vec::new(),
+    };
     let mut result = NormalizedOptions {
         options: Vec::new(),
         total: 0,
+        selected,
+        selected_options: Vec::new(),
     };
     match upstream_type {
         "select" | "multi-select" => {
@@ -692,6 +703,19 @@ fn normalize_widget_options(
             normalize_option_node(root, field, &format!("{path}.value"), &mut result)?;
         }
         _ => {}
+    }
+    for selected in std::mem::take(&mut result.selected_options) {
+        if result
+            .options
+            .iter()
+            .any(|option| values_semantically_equal(&option.value, &selected.value))
+        {
+            continue;
+        }
+        if result.options.len() == MAX_OPTIONS_PER_FIELD {
+            result.options.pop();
+        }
+        result.options.push(selected);
     }
     Ok(result)
 }
@@ -790,12 +814,20 @@ fn normalize_option_node(
 
 fn push_option(result: &mut NormalizedOptions, field: &str, value: Value, label: &str) {
     result.total += 1;
+    let option = FieldOption {
+        field: field.to_owned(),
+        value,
+        label: label.to_owned(),
+    };
+    if result
+        .selected
+        .iter()
+        .any(|selected| values_semantically_equal(selected, &option.value))
+    {
+        result.selected_options.push(option.clone());
+    }
     if result.options.len() < MAX_OPTIONS_PER_FIELD {
-        result.options.push(FieldOption {
-            field: field.to_owned(),
-            value,
-            label: label.to_owned(),
-        });
+        result.options.push(option);
     }
 }
 
@@ -1092,6 +1124,12 @@ fn normalize_publication_category(
     if !seen.insert(category_id.clone()) {
         return Err(category_model_error());
     }
+    let label = category
+        .get("label")
+        .and_then(Value::as_str)
+        .filter(|label| safe_display_string(label))
+        .ok_or_else(category_model_error)?
+        .to_owned();
     let children: &[Value] = match category.get("children") {
         Some(children) => children.as_array().ok_or_else(category_model_error)?,
         None => &[],
@@ -1106,6 +1144,7 @@ fn normalize_publication_category(
     };
     output.push(PublicationCategory {
         category_id,
+        label,
         selectable,
     });
     for child in children {

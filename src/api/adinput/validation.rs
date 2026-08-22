@@ -9,13 +9,20 @@ pub fn evaluate_publication(
     let mut report = PublicationValidation {
         draft_id: state.draft_id.clone(),
         ready: false,
+        category_validation: None,
         missing: Vec::new(),
         invalid: Vec::new(),
         pending: Vec::new(),
         unverifiable: Vec::new(),
         evidence_failures: Vec::new(),
     };
-    validate_publication_core(state, categories, delivery_verifiable, &mut report);
+    validate_publication_core(
+        state,
+        categories,
+        composer_model,
+        delivery_verifiable,
+        &mut report,
+    );
     validate_publication_composer(state, composer_model, &mut report);
     validate_publication_images(state, &mut report);
     for requirements in [
@@ -37,54 +44,11 @@ pub fn evaluate_publication(
 fn validate_publication_core(
     state: &DraftState,
     categories: Option<&[PublicationCategory]>,
+    composer_model: ComposerModelStatus,
     delivery_verifiable: bool,
     report: &mut PublicationValidation,
 ) {
-    let category = publication_field_value(state, "category").and_then(publication_scalar_string);
-    match category {
-        None if publication_field_value(state, "category")
-            .is_none_or(publication_value_missing) =>
-        {
-            report.missing.push(publication_issue(
-                "category",
-                "a category is required for publication",
-                "publication_invariant",
-                format!("flea draft update {} --category VALUE", state.draft_id),
-            ));
-        }
-        None => report.invalid.push(publication_issue(
-            "category",
-            "the category must be a non-empty machine value",
-            "publication_invariant",
-            format!("flea draft update {} --category VALUE", state.draft_id),
-        )),
-        Some(category_id) => match categories {
-            Some(categories) => match categories
-                .iter()
-                .find(|category| category.category_id == category_id)
-            {
-                Some(category) if category.selectable => {}
-                Some(_) => report.invalid.push(publication_issue(
-                    "category",
-                    "the selected category cannot contain listings",
-                    "category_taxonomy",
-                    "flea category list".to_owned(),
-                )),
-                None => report.invalid.push(publication_issue(
-                    "category",
-                    "the selected category is absent from the current taxonomy",
-                    "category_taxonomy",
-                    "flea category list".to_owned(),
-                )),
-            },
-            None => report.unverifiable.push(publication_issue(
-                "category",
-                "category selectability could not be verified",
-                "category_taxonomy",
-                "flea category list".to_owned(),
-            )),
-        },
-    }
+    validate_publication_category(state, categories, composer_model, report);
 
     validate_publication_text(state, "title", report);
     validate_publication_text(state, "description", report);
@@ -198,6 +162,115 @@ fn validate_publication_core(
     }
 }
 
+fn validate_publication_category(
+    state: &DraftState,
+    categories: Option<&[PublicationCategory]>,
+    composer_model: ComposerModelStatus,
+    report: &mut PublicationValidation,
+) {
+    let category_value = publication_field_value(state, "category");
+    let Some(category_id) = category_value.and_then(publication_scalar_string) else {
+        if category_value.is_none_or(publication_value_missing) {
+            report.missing.push(publication_issue(
+                "category",
+                "a category is required for publication",
+                "publication_invariant",
+                format!("flea draft update {} --category VALUE", state.draft_id),
+            ));
+        } else {
+            report.invalid.push(publication_issue(
+                "category",
+                "the category must be a non-empty machine value",
+                "publication_invariant",
+                format!("flea draft update {} --category VALUE", state.draft_id),
+            ));
+        }
+        return;
+    };
+
+    let taxonomy_category = categories.and_then(|categories| {
+        categories
+            .iter()
+            .find(|category| category.category_id == category_id)
+    });
+    let taxonomy_available = categories.is_some();
+    let category_field = state
+        .fields
+        .iter()
+        .find(|field| publication_field_name(&field.key) == "category");
+    let composer_option = state.options.iter().find(|option| {
+        publication_field_name(&option.field) == "category"
+            && values_semantically_equal(category_value.expect("category value"), &option.value)
+    });
+    let compatible = match (composer_model, category_field) {
+        (ComposerModelStatus::Available, Some(field)) if field.status == FieldStatus::Invalid => {
+            Some(false)
+        }
+        (ComposerModelStatus::Available, Some(_)) if composer_option.is_some() => Some(true),
+        (ComposerModelStatus::Available, Some(field))
+            if field.option_count > 0 && !field.options_truncated =>
+        {
+            Some(false)
+        }
+        (ComposerModelStatus::Available, None) => Some(true),
+        _ => None,
+    };
+
+    report.category_validation = Some(CategoryValidation {
+        value: category_id.clone(),
+        label: taxonomy_category
+            .map(|category| category.label.clone())
+            .or_else(|| composer_option.map(|option| option.label.clone())),
+        exists: taxonomy_available.then_some(taxonomy_category.is_some()),
+        selectable: taxonomy_category.map(|category| category.selectable),
+        compatible,
+        existence_source: taxonomy_available.then(|| "category_taxonomy".to_owned()),
+        selectability_source: taxonomy_category.map(|_| "category_taxonomy".to_owned()),
+        compatibility_source: compatible.map(|_| "listing_composer".to_owned()),
+    });
+
+    match (taxonomy_available, taxonomy_category) {
+        (false, _) => report.unverifiable.push(publication_issue(
+            "category",
+            "category existence and selectability could not be verified",
+            "category_taxonomy",
+            "flea category list".to_owned(),
+        )),
+        (true, None) => report.invalid.push(publication_issue(
+            "category",
+            "the selected category is absent from or inaccessible in the current taxonomy",
+            "category_taxonomy",
+            format!("flea category search {category_id}"),
+        )),
+        (true, Some(category)) if !category.selectable => report.invalid.push(publication_issue(
+            "category",
+            "the selected category cannot contain listings",
+            "category_taxonomy",
+            format!("flea category search {category_id}"),
+        )),
+        _ => {}
+    }
+
+    match compatible {
+        Some(true) => {}
+        Some(false) => report.invalid.push(publication_issue(
+            "category",
+            "the selected category is incompatible with the current listing-composer schema",
+            "listing_composer",
+            format!("flea draft show {}", state.draft_id),
+        )),
+        None if composer_model == ComposerModelStatus::Available => {
+            report.unverifiable.push(publication_issue(
+                "category",
+                "category compatibility could not be verified from the listing composer",
+                "listing_composer",
+                format!("flea draft show {}", state.draft_id),
+            ));
+        }
+        None => {}
+    }
+}
+
 fn validate_publication_text(state: &DraftState, field: &str, report: &mut PublicationValidation) {
     match publication_field_value(state, field) {
         None => report.missing.push(publication_core_issue(
@@ -241,6 +314,9 @@ fn validate_publication_composer(
 
     for field in &state.fields {
         let publication_field = publication_field_name(&field.key);
+        if publication_field == "category" {
+            continue;
+        }
         if field.requirement == Requirement::Required
             && !publication_report_contains(report, publication_field)
             && publication_field_value(state, publication_field)
@@ -283,7 +359,8 @@ fn validate_publication_composer(
 
     for field in &state.fields {
         let publication_field = publication_field_name(&field.key);
-        if publication_report_contains(report, publication_field) {
+        if publication_field == "category" || publication_report_contains(report, publication_field)
+        {
             continue;
         }
         let options = state

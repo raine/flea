@@ -406,7 +406,20 @@ fn draft_validate_is_compact_deterministic_and_read_only_in_json_and_toon() {
 
     assert_eq!(
         value["data"],
-        json!({ "draft_id": "draft-1", "ready": true })
+        json!({
+            "draft_id": "draft-1",
+            "ready": true,
+            "category_validation": {
+                "value": "furniture/chairs",
+                "label": "Chairs",
+                "exists": true,
+                "selectable": true,
+                "compatible": true,
+                "existence_source": "category_taxonomy",
+                "selectability_source": "category_taxonomy",
+                "compatibility_source": "listing_composer"
+            }
+        })
     );
     let requests = json_client.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
