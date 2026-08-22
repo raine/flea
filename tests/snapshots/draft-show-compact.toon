@@ -37,5 +37,12 @@ data:
   option_sets[2]{field,option_count,options_returned,options_truncated}:
     category,3,3,false
     delivery,2,2,false
+observation:
+  state: confirmed_present
+  source: draft_detail
+  observed_at: "<observed-at>"
+  status_evidence:
+    response_received: true
+    model_parsed: true
 next_actions[1]{command}:
   "flea draft publish draft-1 --if-revision revision-7"

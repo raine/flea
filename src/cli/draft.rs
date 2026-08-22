@@ -26,6 +26,7 @@ use crate::{
     domain::{
         envelope::NextAction,
         field::{Field, FieldStatus},
+        observation::Observation,
     },
     error::{AppError, ExitClass},
 };
@@ -694,6 +695,17 @@ pub async fn execute<A: AdInputApi>(
     if matches!(&command, DraftCommand::Preview { .. }) {
         return execute_preview(command, None);
     }
+    let confirms_absence = matches!(&command, DraftCommand::Delete { .. });
+    let observation_source = match &command {
+        DraftCommand::Show { .. } => "draft_detail",
+        DraftCommand::Validate { .. } => "draft_validation",
+        DraftCommand::Publish { .. } => "listing_detail",
+        DraftCommand::Image(_) => "draft_images",
+        DraftCommand::Create { .. } => "draft_creation_response",
+        DraftCommand::Update { .. } => "draft_update_response",
+        DraftCommand::Delete { .. } => "draft_delete_response",
+        DraftCommand::Preview { .. } => unreachable!(),
+    };
     let workflow = DraftWorkflow::new(api, config);
     let result = match command {
         DraftCommand::Create {
@@ -799,6 +811,17 @@ pub async fn execute<A: AdInputApi>(
     result.map(|mut value| {
         crate::domain::commerce::normalize_values_output(&mut value);
         normalize_observed_listing_output(&mut value);
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "_observation".to_owned(),
+                serde_json::to_value(if confirms_absence {
+                    Observation::confirmed_absent(observation_source, None)
+                } else {
+                    Observation::confirmed_present(observation_source, None)
+                })
+                .expect("observation is serializable"),
+            );
+        }
         value
     })
 }
@@ -904,6 +927,22 @@ fn workflow_error(error: WorkflowError) -> AppError {
     let mut app = AppError::new(error.code, error.message, exit_class);
     app.upstream_transient = classification.0;
     app.safe_to_retry = classification.1;
+    app.observation = error
+        .source
+        .as_ref()
+        .and_then(|source| source.observation.clone())
+        .or_else(|| {
+            error.recovery.as_ref().map(|recovery| Observation {
+                state: recovery.observation.state,
+                source: recovery.observation.source.clone(),
+                observed_at: recovery
+                    .observation
+                    .observed_at
+                    .clone()
+                    .unwrap_or_else(crate::domain::observation::observation_timestamp),
+                status_evidence: recovery.observation.status_evidence.clone(),
+            })
+        });
     app.details = error
         .details
         .or_else(|| {

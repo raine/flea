@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use crate::{
     api::item::{PublicItemApi, PublicItems},
+    domain::observation::Observation,
     error::AppError,
 };
 
@@ -33,12 +34,22 @@ pub fn dispatch_with_api(args: ItemArgs, api: &dyn PublicItemApi) -> Result<Valu
         ItemCommand::Show { listing_id, raw } => {
             let (detail, upstream) = PublicItems::new(api).show(&listing_id)?;
             if raw {
-                Ok(upstream)
-            } else {
-                serde_json::to_value(detail).map_err(|error| {
-                    AppError::output("failed to serialize public item output").with_source(error)
-                })
+                return Ok(upstream);
             }
+            let mut value = serde_json::to_value(detail).map_err(|error| {
+                AppError::output("failed to serialize public item output").with_source(error)
+            })?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "_observation".to_owned(),
+                    serde_json::to_value(Observation::confirmed_present(
+                        "public_listing_detail",
+                        None,
+                    ))
+                    .expect("observation is serializable"),
+                );
+            }
+            Ok(value)
         }
     }
 }

@@ -179,11 +179,8 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 }
             }
             Err(observation_error) => {
-                recovery.observation = RecoveryObservation {
-                    status: ObservationStatus::Unavailable,
-                    observed_at: None,
-                    error_code: Some(observation_error.code),
-                };
+                recovery.observation =
+                    RecoveryObservation::from_error(&observation_error, "draft_detail");
                 recovery.fresh_state = None;
                 recovery.destructive_actions.clear();
                 recovery.next_safe_actions = vec![format!("flea draft show {draft_id}")];
@@ -1470,7 +1467,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         elapsed: Duration,
         error: ApiError,
     ) -> WorkflowError {
-        let observation_error_code = error.code.clone();
+        let listing_observation = RecoveryObservation::from_error(&error, "listing_detail");
         let upstream_transient = error.upstream_transient;
         let observation_details = error.details.as_deref().cloned();
         let mut workflow = WorkflowError::for_draft(draft_id, completed, error, true);
@@ -1488,8 +1485,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             recovery.listing_id = Some(publication.listing_id.clone());
             recovery.failed_stage = Some("fetch_observed_listing".to_owned());
             recovery.observe(state, ObservationStatus::Observed);
-            recovery.observation.status = ObservationStatus::Unavailable;
-            recovery.observation.error_code = Some(observation_error_code);
+            recovery.observation = listing_observation;
             recovery.delivery = Some(RecoveryStatus::Persisted);
             recovery.publication = Some(RecoveryStatus::Persisted);
             recovery.safe_to_retry = false;
@@ -2018,11 +2014,12 @@ pub(super) fn image_processing_timeout(
                 .as_deref()
                 .map(bounded_recovery_text)
                 .or_else(|| state.values.get("revision").and_then(recovery_scalar));
-            recovery.observation = RecoveryObservation {
-                status: ObservationStatus::Unavailable,
-                observed_at: Some(observation_timestamp()),
-                error_code: observation_error.or_else(|| Some("draft.image_processing".to_owned())),
-            };
+            recovery.observation = RecoveryObservation::temporarily_unavailable(
+                "draft_images",
+                observation_error
+                    .as_deref()
+                    .or(Some("draft.image_processing")),
+            );
             recovery.fresh_state = Some(state.clone());
             recovery.destructive_actions.clear();
             recovery.next_safe_actions = vec![format!("flea draft show {}", state.draft_id)];

@@ -1,0 +1,22 @@
+{
+  "detail": {
+    "state": "confirmed_absent",
+    "source": "listing_detail",
+    "observed_at": "2026-08-22T17:28:17Z",
+    "status_evidence": {
+      "http_status": 404,
+      "response_received": true,
+      "model_parsed": true
+    }
+  },
+  "collection": {
+    "state": "confirmed_present",
+    "source": "listing_collection",
+    "observed_at": "2026-08-22T17:28:18Z",
+    "status_evidence": {
+      "http_status": 200,
+      "response_received": true,
+      "model_parsed": true
+    }
+  }
+}

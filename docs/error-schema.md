@@ -1,9 +1,12 @@
 # Error retry semantics
 
-Flea error envelopes answer two independent questions:
+Flea error envelopes record an `observation` and answer two independent questions:
 
-- `upstream_transient` reports whether the observed upstream failure is likely temporary.
+- `observation.state` distinguishes `confirmed_present`, `confirmed_absent`, `temporarily_unavailable`, `unrecognized_response`, and `conflicting_sources`.
+- `upstream_transient` reports whether the observation failure is likely temporary.
 - `safe_to_retry` reports whether repeating the complete, unchanged command can make progress without duplicate or conflicting remote mutations.
+
+Every observation names its stable `source`, records `observed_at`, and includes bounded `status_evidence`. Evidence contains only HTTP status, response and parser booleans, and source-state classifications. It never contains response bodies, URLs, credentials, or listing text. `not_found` codes are reserved for `confirmed_absent`. Parser and model failures use `unrecognized_response`, transient transport and upstream failures use `temporarily_unavailable`, and authoritative disagreements use `conflicting_sources`.
 
 A temporary upstream failure does not make a mutation safe to repeat. For example, a `502` response from `draft show` produces `upstream_transient: true` and `safe_to_retry: true`. The same response after a draft update request produces `upstream_transient: true` and `safe_to_retry: false` because the remote mutation outcome is uncertain.
 
@@ -54,6 +57,16 @@ JSON errors use this shape:
     "message": "The upstream failure may be temporary, but the mutation outcome is unknown",
     "upstream_transient": true,
     "safe_to_retry": false,
+    "observation": {
+      "state": "temporarily_unavailable",
+      "source": "listing_detail",
+      "observed_at": "2026-08-22T17:28:17Z",
+      "status_evidence": {
+        "http_status": 502,
+        "response_received": true,
+        "model_parsed": false
+      }
+    },
     "retry_guidance": "The upstream failure appears temporary, but repeating this operation could duplicate a remote mutation. Inspect authoritative state first.",
     "details": {
       "status": 502

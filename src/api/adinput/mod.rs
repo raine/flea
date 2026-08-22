@@ -18,9 +18,12 @@ use crate::{
         HttpError, MultipartPart, RequestSpec, ToriClient, TransportErrorKind, compatibility,
     },
     diagnostics,
-    domain::field::{
-        Field, FieldStatus, FieldType, Requirement, UpstreamValidationError, ValidationIssue,
-        map_validation_errors, stable_field_key,
+    domain::{
+        field::{
+            Field, FieldStatus, FieldType, Requirement, UpstreamValidationError, ValidationIssue,
+            map_validation_errors, stable_field_key,
+        },
+        observation::{Observation, ObservationOperation, ObservationState, StatusEvidence},
     },
     image_processing::{self, ImageProcessingReport, ProcessedImage, ProcessingError},
     retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},

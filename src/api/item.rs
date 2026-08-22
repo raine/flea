@@ -10,9 +10,9 @@ use crate::{
         item::{
             ItemAttribute, ItemImage, ItemLocation, ItemSeller, ItemShipping, PublicItemDetail,
         },
+        observation::{Observation, ObservationOperation},
     },
     error::{AppError, ExitClass},
-    retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},
 };
 
 pub trait PublicItemApi: Send + Sync {
@@ -410,48 +410,53 @@ fn validate_id(listing_id: &str) -> Result<(), AppError> {
 }
 
 fn item_error(error: PublicItemApiError, listing_id: &str) -> AppError {
-    let read = RetryContext::read(OperationMethod::Get);
-    let (code, message, exit_class, classification) = match error {
+    let (code, message, exit_class, observation) = match error {
         PublicItemApiError::Invalid => (
             "item.invalid_id",
             "Tori rejected the listing ID; use a numeric ID returned by public search",
             ExitClass::Validation,
-            RetryClassification::default(),
+            Observation::unrecognized_response("public_listing_detail", Some(400)),
         ),
         PublicItemApiError::NotFound => (
             "item.not_found",
             "listing was not found; it may have been removed or expired",
             ExitClass::Validation,
-            RetryClassification::default(),
+            Observation::confirmed_absent("public_listing_detail", Some(404)),
         ),
         PublicItemApiError::Expired => (
             "item.expired",
             "listing has expired and its public details are unavailable",
             ExitClass::Validation,
-            RetryClassification::default(),
+            Observation::confirmed_absent("public_listing_detail", Some(410)),
         ),
         PublicItemApiError::Unexpected(_) => (
             "upstream.unexpected_response",
             "Tori returned an unexpected item response",
             ExitClass::Upstream,
-            classify(FailureKind::MalformedSuccess, read),
+            Observation::unrecognized_response("public_listing_detail", Some(200)),
         ),
         PublicItemApiError::Transport(_) => (
             "upstream.request_failed",
             "the Tori item request failed",
             ExitClass::Upstream,
-            classify(FailureKind::Transport, read),
+            Observation::temporarily_unavailable("public_listing_detail", None, false),
+        ),
+        PublicItemApiError::Upstream(status) if crate::retry::is_transient_status(status) => (
+            "upstream.request_failed",
+            "the Tori item request failed",
+            ExitClass::Upstream,
+            Observation::temporarily_unavailable("public_listing_detail", Some(status), true),
         ),
         PublicItemApiError::Upstream(status) => (
             "upstream.request_failed",
             "the Tori item request failed",
             ExitClass::Upstream,
-            classify(FailureKind::HttpStatus(status), read),
+            Observation::unrecognized_response("public_listing_detail", Some(status)),
         ),
     };
     let mut app_error = AppError::new(code, message, exit_class)
         .with_details(json!({ "listing_id": listing_id }))
-        .retry_classification(classification);
+        .with_observation(observation, ObservationOperation::Read);
     add_search_action(&mut app_error);
     app_error
 }
@@ -465,9 +470,8 @@ fn add_search_action(error: &mut AppError) {
 }
 
 fn unexpected(message: &str) -> AppError {
-    AppError::new("upstream.unexpected_response", message, ExitClass::Upstream)
-        .retry_classification(classify(
-            FailureKind::MalformedSuccess,
-            RetryContext::read(OperationMethod::Get),
-        ))
+    AppError::new("upstream.unexpected_response", message, ExitClass::Upstream).with_observation(
+        Observation::unrecognized_response("public_listing_detail", Some(200)),
+        ObservationOperation::Read,
+    )
 }

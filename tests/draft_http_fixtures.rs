@@ -3097,6 +3097,10 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             assert_eq!(details["observation_attempts"], 1);
             assert!(details["observation_elapsed_ms"].is_number());
             assert_eq!(recovery.publication, Some(RecoveryStatus::Persisted));
+            assert_eq!(
+                recovery.observation.state,
+                flea::domain::observation::ObservationState::TemporarilyUnavailable
+            );
             assert_eq!(recovery.next_safe_actions, ["flea listing show draft-1"]);
         } else {
             assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
@@ -3156,7 +3160,7 @@ async fn uncertain_publication_observes_before_recommending_any_continuation() {
             assert_eq!(recovery.observed_revision.as_deref(), Some("revision-7"));
         } else {
             assert_eq!(recovery.observation.status, ObservationStatus::Unavailable);
-            assert!(recovery.observation.observed_at.is_none());
+            assert!(recovery.observation.observed_at.is_some());
         }
     }
 }

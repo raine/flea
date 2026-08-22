@@ -15,8 +15,10 @@ Use `flea` as an independent interface to Tori.fi. Keep the default TOON output 
 - Read commerce data from `trade_type`, `price.kind`, `price.amount`, and `price.currency`. `price.amount` is a JSON number when `price.kind` is `fixed`. Never parse `price.display`.
 - Inspect remote state after mutations. Draft and listing responses are authoritative.
 - Use `draft preview` before creation when a complete local input needs checking. Preview is not publication readiness.
-- Read `upstream_transient` and `safe_to_retry` independently. A temporary upstream failure can leave a mutation unsafe to repeat.
-- Do not repeat uncertain mutations. Use `partial`, error details, returned IDs, and the authoritative command in `next_actions` to recover.
+- Read `observation.state`, `upstream_transient`, and `safe_to_retry` together. A temporary upstream failure can leave a mutation unsafe to repeat.
+- `confirmed_present` permits decisions based on the named source. `confirmed_absent` permits absence-dependent work only when the command is explicitly requested and no other authoritative source disagrees.
+- Retry a read when `temporarily_unavailable` has `safe_to_retry: true`. Use only the read-only commands in `next_actions` after `unrecognized_response`. Escalate `conflicting_sources` without destructive, duplicate, or cleanup mutations.
+- Do not repeat uncertain mutations. Use `partial`, error details, returned IDs, observation evidence, and the authoritative read-only command in `next_actions` to recover.
 - Draft field failures report persisted, absent, indeterminate, and unattempted fields. Retry only fields proven absent. Inspect the draft before acting on an indeterminate field.
 - Draft recovery summaries include bounded field and image lifecycle classifications, the failed stage, completed steps, observation status and time, and the latest ETag or revision. Treat indeterminate work as observation-only. Destructive cleanup commands require explicit intent.
 - Image recovery reports upload, attachment, and processing independently. A completed upload can remain unattached, and an attached image can remain processing or fail.

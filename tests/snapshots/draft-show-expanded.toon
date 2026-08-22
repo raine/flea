@@ -62,5 +62,12 @@ data:
     category,"1",Tables
     category,"2",Chairs
     category,"3",Sofas
+observation:
+  state: confirmed_present
+  source: draft_detail
+  observed_at: "<observed-at>"
+  status_evidence:
+    response_received: true
+    model_parsed: true
 next_actions[1]{command}:
   "flea draft publish draft-1 --if-revision revision-7"

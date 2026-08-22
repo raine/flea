@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::{
     api::listings::{Listings, ListingsApi},
     cli::draft::{ListingInputArgs, TradeType, parse_price},
+    domain::observation::Observation,
     error::AppError,
 };
 
@@ -68,22 +69,43 @@ pub enum ListingCommand {
 
 pub fn dispatch_with_api(command: ListingArgs, api: &dyn ListingsApi) -> Result<Value, AppError> {
     let listings = Listings::new(api);
-    let value = match command.command {
-        ListingCommand::List => serde_json::to_value(listings.list()?),
-        ListingCommand::Show { listing_id } => serde_json::to_value(listings.show(&listing_id)?),
+    let (value, source) = match command.command {
+        ListingCommand::List => (serde_json::to_value(listings.list()?), "listing_collection"),
+        ListingCommand::Show { listing_id } => (
+            serde_json::to_value(listings.show(&listing_id)?),
+            "listing_detail",
+        ),
         ListingCommand::Update { listing_id, values } => {
             let changes = listing_changes(*values)?;
-            serde_json::to_value(listings.update(&listing_id, changes)?)
+            (
+                serde_json::to_value(listings.update(&listing_id, changes)?),
+                "listing_update_response",
+            )
         }
-        ListingCommand::Dispose { listing_id } => {
-            serde_json::to_value(listings.dispose(&listing_id)?)
-        }
+        ListingCommand::Dispose { listing_id } => (
+            serde_json::to_value(listings.dispose(&listing_id)?),
+            "listing_dispose_response",
+        ),
         ListingCommand::Delete { listing_id } => {
             let deleted = listings.delete(&listing_id)?;
-            Ok(json!({ "listing_id": deleted.listing_id, "deleted": true }))
+            (
+                Ok(json!({ "listing_id": deleted.listing_id, "deleted": true })),
+                "listing_delete_response",
+            )
         }
     };
-    value.map_err(|error| AppError::output(error.to_string()))
+    value
+        .map(|mut value| {
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "_observation".to_owned(),
+                    serde_json::to_value(Observation::confirmed_present(source, None))
+                        .expect("observation is serializable"),
+                );
+            }
+            value
+        })
+        .map_err(|error| AppError::output(error.to_string()))
 }
 
 pub fn listing_changes(values: ListingInputArgs) -> Result<BTreeMap<String, Value>, AppError> {

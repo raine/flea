@@ -144,6 +144,7 @@ pub struct ApiError {
     pub message: String,
     pub upstream_transient: bool,
     pub safe_to_retry: bool,
+    pub observation: Option<Observation>,
     pub status: Option<u16>,
     pub details: Option<Box<Value>>,
 }
@@ -155,12 +156,13 @@ impl ApiError {
             message: message.into(),
             upstream_transient: false,
             safe_to_retry: false,
+            observation: None,
             status: None,
             details: None,
         }
     }
 
-    pub(super) fn response(response: &HttpResponse, context: RetryContext) -> Self {
+    pub(super) fn response(response: &HttpResponse, context: RetryContext, source: &str) -> Self {
         let message = response
             .body
             .get("message")
@@ -182,7 +184,27 @@ impl ApiError {
         } else {
             ("upstream.request_failed", message)
         };
-        let mut error = Self::new(code, message).retry_classification(classification);
+        let operation = if context.method.is_read() {
+            ObservationOperation::Read
+        } else {
+            ObservationOperation::Mutation
+        };
+        let observation = if response.status == 404 && context.method.is_read() {
+            Observation::confirmed_absent(source, Some(response.status))
+        } else if classification.upstream_transient {
+            Observation::temporarily_unavailable(source, Some(response.status), true)
+        } else {
+            Observation::unrecognized_response(source, Some(response.status))
+        };
+        let mut error = Self::new(code, message).with_observation(observation, operation);
+        if response.status == 404 && context.method.is_read() {
+            error.code = if source == "draft_detail" {
+                "draft.not_found".to_owned()
+            } else {
+                "remote.not_found".to_owned()
+            };
+            error.message = "The remote resource was not found".to_owned();
+        }
         error.status = Some(response.status);
         error.details = Some(Box::new(json!({
             "status": response.status,
@@ -196,6 +218,18 @@ impl ApiError {
     pub(super) fn retry_classification(mut self, classification: RetryClassification) -> Self {
         self.upstream_transient = classification.upstream_transient;
         self.safe_to_retry = classification.safe_to_retry;
+        self
+    }
+
+    pub(super) fn with_observation(
+        mut self,
+        observation: Observation,
+        operation: ObservationOperation,
+    ) -> Self {
+        let classification = observation.retry_classification(operation);
+        self.upstream_transient = classification.upstream_transient;
+        self.safe_to_retry = classification.safe_to_retry;
+        self.observation = Some(observation);
         self
     }
 }
@@ -215,6 +249,7 @@ impl fmt::Debug for ApiError {
             )
             .field("upstream_transient", &self.upstream_transient)
             .field("safe_to_retry", &self.safe_to_retry)
+            .field("observation", &self.observation)
             .field("status", &self.status)
             .field("details", &details)
             .finish()
@@ -247,6 +282,7 @@ impl<C> ClientTransport<C> {
 impl<C: ToriClient> HttpTransport for ClientTransport<C> {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
         let service = service_for_path(&request.path);
+        let observation_source = super::adapter::observation_source(&request.path);
         let retry_context = request.retry_context();
         let method = match request.method {
             Method::Get => ReqwestMethod::GET,
@@ -329,7 +365,17 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
             } else {
                 ("upstream.request_failed", error.to_string())
             };
-            ApiError::new(code, message).retry_classification(classification)
+            let operation = if retry_context.method.is_read() {
+                ObservationOperation::Read
+            } else {
+                ObservationOperation::Mutation
+            };
+            let observation = if classification.upstream_transient {
+                Observation::temporarily_unavailable(observation_source, None, false)
+            } else {
+                Observation::unrecognized_response(observation_source, None)
+            };
+            ApiError::new(code, message).with_observation(observation, operation)
         })?;
         let (body, body_is_unparseable) = if response.body.is_empty() {
             (Value::Null, false)

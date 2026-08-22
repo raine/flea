@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    domain::envelope::{Diagnostics, NextAction},
+    domain::{
+        envelope::{Diagnostics, NextAction},
+        observation::{Observation, ObservationOperation},
+    },
     retry::RetryClassification,
 };
 
@@ -40,6 +43,7 @@ pub struct AppError {
     pub message: String,
     pub upstream_transient: bool,
     pub safe_to_retry: bool,
+    pub observation: Option<Observation>,
     pub details: Option<Box<Value>>,
     pub partial: Option<Box<Value>>,
     pub next_actions: Vec<NextAction>,
@@ -68,6 +72,7 @@ impl fmt::Debug for AppError {
             )
             .field("upstream_transient", &self.upstream_transient)
             .field("safe_to_retry", &self.safe_to_retry)
+            .field("observation", &self.observation)
             .field("details", &details)
             .field("partial", &partial)
             .field("next_actions", &self.next_actions)
@@ -119,6 +124,7 @@ impl AppError {
             message: message.into(),
             upstream_transient: false,
             safe_to_retry: false,
+            observation: None,
             details: None,
             partial: None,
             next_actions: Vec::new(),
@@ -150,6 +156,18 @@ impl AppError {
         self
     }
 
+    pub fn with_observation(
+        mut self,
+        observation: Observation,
+        operation: ObservationOperation,
+    ) -> Self {
+        let classification = observation.retry_classification(operation);
+        self.upstream_transient = classification.upstream_transient;
+        self.safe_to_retry = classification.safe_to_retry;
+        self.observation = Some(observation);
+        self
+    }
+
     pub fn internal_chain(&self) -> Vec<String> {
         let mut chain = vec![self.to_string()];
         let mut source = self.source();
@@ -167,6 +185,8 @@ pub struct ErrorBody {
     pub message: String,
     pub upstream_transient: bool,
     pub safe_to_retry: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation: Option<Observation>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_guidance: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -264,6 +284,7 @@ impl From<&AppError> for ErrorBody {
             message: crate::diagnostics::redact_text(&error.message),
             upstream_transient: error.upstream_transient,
             safe_to_retry: error.safe_to_retry,
+            observation: error.observation.clone(),
             retry_guidance: retry_guidance(error)
                 .map(|guidance| crate::diagnostics::redact_text(&guidance)),
             details,

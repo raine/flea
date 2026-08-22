@@ -173,8 +173,13 @@ fn finish(
                 .and_then(|object| object.remove("_next_actions"))
                 .and_then(|value| serde_json::from_value(value).ok())
                 .unwrap_or_default();
+            let observation = data
+                .as_object_mut()
+                .and_then(|object| object.remove("_observation"))
+                .and_then(|value| serde_json::from_value(value).ok());
             let mut envelope = Envelope::success(data);
             envelope.next_actions = next_actions;
+            envelope.observation = observation;
             if let Some(warnings) = envelope
                 .data
                 .as_ref()

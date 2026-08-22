@@ -45,10 +45,72 @@ pub enum ObservationStatus {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RecoveryObservation {
     pub status: ObservationStatus,
+    pub state: ObservationState,
+    pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<String>,
+    pub status_evidence: StatusEvidence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
+}
+
+impl RecoveryObservation {
+    pub(super) fn unavailable(source: &str, error_code: Option<&str>) -> Self {
+        Self {
+            status: ObservationStatus::Unavailable,
+            state: ObservationState::UnrecognizedResponse,
+            source: source.to_owned(),
+            observed_at: Some(observation_timestamp()),
+            status_evidence: StatusEvidence::default(),
+            error_code: error_code.map(str::to_owned),
+        }
+    }
+
+    pub(super) fn temporarily_unavailable(source: &str, error_code: Option<&str>) -> Self {
+        let mut observation = Self::unavailable(source, error_code);
+        observation.state = ObservationState::TemporarilyUnavailable;
+        observation
+    }
+
+    pub(super) fn observed(source: &str, changed: bool) -> Self {
+        Self {
+            status: if changed {
+                ObservationStatus::ChangedByAnotherClient
+            } else {
+                ObservationStatus::Observed
+            },
+            state: ObservationState::ConfirmedPresent,
+            source: source.to_owned(),
+            observed_at: Some(observation_timestamp()),
+            status_evidence: StatusEvidence {
+                http_status: None,
+                response_received: true,
+                model_parsed: true,
+                source_states: Vec::new(),
+            },
+            error_code: None,
+        }
+    }
+
+    pub(super) fn from_error(error: &ApiError, fallback_source: &str) -> Self {
+        let observation = error.observation.as_ref();
+        Self {
+            status: ObservationStatus::Unavailable,
+            state: observation
+                .map(|observation| observation.state)
+                .unwrap_or(ObservationState::UnrecognizedResponse),
+            source: observation
+                .map(|observation| observation.source.clone())
+                .unwrap_or_else(|| fallback_source.to_owned()),
+            observed_at: observation
+                .map(|observation| observation.observed_at.clone())
+                .or_else(|| Some(observation_timestamp())),
+            status_evidence: observation
+                .map(|observation| observation.status_evidence.clone())
+                .unwrap_or_default(),
+            error_code: Some(error.code.clone()),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -270,11 +332,7 @@ impl Recovery {
             completed_steps,
             completed_steps_omitted,
             failed_stage: None,
-            observation: RecoveryObservation {
-                status: ObservationStatus::Unavailable,
-                observed_at: None,
-                error_code: error_code.map(str::to_owned),
-            },
+            observation: RecoveryObservation::unavailable("draft_detail", error_code),
             active_step: None,
             fields: Vec::new(),
             persisted_fields: Vec::new(),
@@ -307,11 +365,10 @@ impl Recovery {
             .as_deref()
             .map(bounded_recovery_text)
             .or_else(|| state.values.get("revision").and_then(recovery_scalar));
-        self.observation = RecoveryObservation {
-            status,
-            observed_at: Some(observation_timestamp()),
-            error_code: None,
-        };
+        self.observation = RecoveryObservation::observed(
+            "draft_detail",
+            status == ObservationStatus::ChangedByAnotherClient,
+        );
         self.fresh_state = Some(state.clone());
         if status == ObservationStatus::Observed && self.listing_id.is_none() {
             self.destructive_actions = vec![format!("flea draft delete {}", self.draft_id)];
@@ -395,6 +452,7 @@ impl WorkflowError {
                 .collect::<Vec<_>>();
             Some(Recovery {
                 upstream_transient: error.upstream_transient,
+                observation: RecoveryObservation::from_error(&error, "draft_creation"),
                 ..Recovery::base(&draft_id, &completed_steps, Some(&error.code))
             })
         });
@@ -417,6 +475,7 @@ impl WorkflowError {
             safe_to_retry && error.safe_to_retry && !completed_steps_have_mutation(completed_steps);
         let upstream_transient = error.upstream_transient;
         let error_code = error.code.clone();
+        let observation = RecoveryObservation::from_error(&error, "draft_detail");
         Self {
             code: error.code.clone(),
             message: error.message.clone(),
@@ -424,6 +483,7 @@ impl WorkflowError {
             recovery: Some(Recovery {
                 upstream_transient,
                 safe_to_retry,
+                observation,
                 ..Recovery::base(draft_id, completed_steps, Some(&error_code))
             }),
             details: None,
@@ -590,11 +650,7 @@ impl WorkflowError {
                 indeterminate_fields,
                 field_summary,
                 fields_omitted,
-                observation: RecoveryObservation {
-                    status: ObservationStatus::Observed,
-                    observed_at: Some(observation_timestamp()),
-                    error_code: None,
-                },
+                observation: RecoveryObservation::observed("draft_validation", false),
                 ..Recovery::base(&report.draft_id, completed_steps, None)
             }),
             details,
@@ -638,11 +694,7 @@ impl WorkflowError {
                     safe_text: None,
                 }],
                 delivery: Some(RecoveryStatus::Absent),
-                observation: RecoveryObservation {
-                    status: ObservationStatus::Observed,
-                    observed_at: Some(observation_timestamp()),
-                    error_code: None,
-                },
+                observation: RecoveryObservation::observed("delivery_composer", false),
                 next_safe_actions,
                 ..Recovery::base(draft_id, completed_steps, None)
             }),

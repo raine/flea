@@ -490,13 +490,15 @@ fn draft_show_compact_and_expanded_output_matches_json_and_toon_snapshots() {
         if expanded {
             args.extend(["--include-fields", "--include-options", "category"]);
         }
-        run_with_runtime(
-            args,
-            &TestRuntime {
-                client: draft_show_snapshot_client(),
-            },
+        normalize_observation_timestamp(
+            run_with_runtime(
+                args,
+                &TestRuntime {
+                    client: draft_show_snapshot_client(),
+                },
+            )
+            .document,
         )
-        .document
     };
 
     let compact_json = run("json", false);
@@ -831,6 +833,10 @@ fn bad_gateway_read_is_transient_and_safe_to_retry() {
 
     assert_eq!(result.exit_code, 40);
     assert_eq!(value["error"]["code"], "upstream.request_failed");
+    assert_eq!(
+        value["error"]["observation"]["state"],
+        "temporarily_unavailable"
+    );
     assert_eq!(value["error"]["upstream_transient"], true);
     assert_eq!(value["error"]["safe_to_retry"], true);
     assert!(
@@ -896,8 +902,33 @@ fn malformed_read_success_is_safe_to_repeat_but_not_transient() {
 
     assert_eq!(result.exit_code, 40);
     assert_eq!(value["error"]["code"], "upstream.unexpected_response");
+    assert_eq!(
+        value["error"]["observation"]["state"],
+        "unrecognized_response"
+    );
     assert_eq!(value["error"]["upstream_transient"], false);
     assert_eq!(value["error"]["safe_to_retry"], true);
+}
+
+#[test]
+fn draft_http_absence_is_the_only_draft_not_found_outcome() {
+    let result = run_with_runtime(
+        ["flea", "--format", "json", "draft", "show", "draft-1"],
+        &TestRuntime {
+            client: MockClient::with_responses([response(StatusCode::NOT_FOUND, Value::Null)]),
+        },
+    );
+    let value: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(value["error"]["code"], "draft.not_found");
+    assert_eq!(value["error"]["observation"]["state"], "confirmed_absent");
+    assert_eq!(value["error"]["observation"]["source"], "draft_detail");
+    assert!(value["error"]["observation"]["observed_at"].is_string());
+    assert_eq!(
+        value["error"]["observation"]["status_evidence"]["http_status"],
+        404
+    );
+    assert_eq!(value["error"]["safe_to_retry"], false);
 }
 
 #[test]
@@ -1344,6 +1375,8 @@ fn category_and_listing_commands_flow_through_http_normalization() {
     assert_eq!(listing["data"]["listing_id"], "listing-1");
     assert_eq!(listing["data"]["state"], "pending");
     assert_eq!(listing["data"]["fields"]["title"], "Chair");
+    assert_eq!(listing["observation"]["state"], "confirmed_present");
+    assert_eq!(listing["observation"]["source"], "listing_detail");
     let requests = listings.requests.lock().unwrap();
     assert_eq!(requests[0].path_and_query, "/listing-1");
     assert_eq!(requests[0].service, "AD-SUMMARIES");
@@ -1448,6 +1481,27 @@ fn category_http_failures_have_specific_structured_errors() {
 }
 
 #[test]
+fn changed_listing_detail_model_is_unrecognized_instead_of_not_found() {
+    let value = invoke_error(
+        &TestRuntime {
+            client: MockClient::with_responses([
+                response(StatusCode::OK, json!({ "model": 2 })),
+                response(StatusCode::OK, json!({ "summaries": [], "total": 0 })),
+            ]),
+        },
+        ["flea", "--format", "json", "listing", "show", "listing-1"],
+    );
+
+    assert_eq!(value["error"]["code"], "upstream.unexpected_response");
+    assert_ne!(value["error"]["code"], "listing.not_found");
+    assert_eq!(
+        value["error"]["observation"]["state"],
+        "unrecognized_response"
+    );
+    assert_eq!(value["error"]["safe_to_retry"], true);
+}
+
+#[test]
 fn listing_list_uses_the_published_listing_search_endpoint_and_paginates() {
     let first_page: Value =
         serde_json::from_str(include_str!("fixtures/listings/page-1.json")).unwrap();
@@ -1526,6 +1580,17 @@ fn response(status: StatusCode, body: Value) -> HttpResponse {
         headers: HeaderMap::new(),
         body: serde_json::to_vec(&body).unwrap(),
     }
+}
+
+fn normalize_observation_timestamp(mut document: String) -> String {
+    for marker in ["observed_at\": \"", "observed_at: \""] {
+        if let Some(start) = document.find(marker).map(|index| index + marker.len())
+            && let Some(end) = document[start..].find('\"').map(|index| start + index)
+        {
+            document.replace_range(start..end, "<observed-at>");
+        }
+    }
+    document
 }
 
 fn draft_show_snapshot_client() -> MockClient {

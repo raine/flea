@@ -70,6 +70,15 @@
       }
     ]
   },
+  "observation": {
+    "state": "confirmed_present",
+    "source": "draft_detail",
+    "observed_at": "<observed-at>",
+    "status_evidence": {
+      "response_received": true,
+      "model_parsed": true
+    }
+  },
   "next_actions": [
     {
       "command": "flea draft publish draft-1 --if-revision revision-7"

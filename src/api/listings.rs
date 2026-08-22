@@ -19,6 +19,7 @@ use crate::{
             ListingMutation, ListingRef, ListingSnapshot, ListingState, ListingStatistics,
             ListingSummary,
         },
+        observation::{Observation, ObservationOperation},
     },
     error::{AppError, ExitClass},
     retry::{FailureKind, OperationMethod, RetryContext, classify},
@@ -615,14 +616,20 @@ impl<'a> Listings<'a> {
                             Some(listing_id),
                             RetryContext::read(OperationMethod::Get),
                         );
+                        let observation = if classification.upstream_transient {
+                            Observation::temporarily_unavailable(
+                                "listing_reconciliation",
+                                None,
+                                false,
+                            )
+                        } else {
+                            Observation::unrecognized_response("listing_reconciliation", None)
+                        };
                         let mut error = AppError::upstream(
                             "listing.observation_delayed",
                             "listing identity could not be reconciled between detail and collection observations",
                         )
-                        .retry_classification(crate::retry::RetryClassification {
-                            upstream_transient: classification.upstream_transient,
-                            safe_to_retry: true,
-                        });
+                        .with_observation(observation, ObservationOperation::Read);
                         error.details = Some(Box::new(json!({
                             "listing_id": listing_id,
                             "detail_status": detail_observation_status(&detail_error),
@@ -1431,7 +1438,10 @@ fn category_error(error: ListingsApiError) -> AppError {
             "category.endpoint_unavailable",
             "Tori's category taxonomy endpoint is unavailable",
         )
-        .retry_classification(classify(FailureKind::HttpStatus(404), read)),
+        .with_observation(
+            Observation::unrecognized_response("category_taxonomy", Some(404)),
+            ObservationOperation::Read,
+        ),
         ListingsApiError::UnexpectedResponse(message) => category_protocol_error(message),
         other => upstream_error(other, read),
     }
@@ -1442,10 +1452,10 @@ fn category_protocol_error(_message: String) -> AppError {
         "category.protocol_drift",
         "Tori returned an unexpected category taxonomy response",
     )
-    .retry_classification(classify(
-        FailureKind::MalformedSuccess,
-        RetryContext::read(OperationMethod::Get),
-    ))
+    .with_observation(
+        Observation::unrecognized_response("category_taxonomy", Some(200)),
+        ObservationOperation::Read,
+    )
 }
 
 fn listing_error(
@@ -1453,7 +1463,7 @@ fn listing_error(
     listing_id: Option<&str>,
     context: RetryContext,
 ) -> AppError {
-    match error {
+    let mut app_error = match error {
         ListingsApiError::Authentication => AppError::authentication(
             "auth.rejected",
             "Tori rejected authentication for the listing request",
@@ -1481,17 +1491,43 @@ fn listing_error(
             error
         }
         other => upstream_error(other, context),
+    };
+    if let Some(listing_id) = listing_id
+        && app_error.observation.is_some()
+    {
+        let command = match app_error
+            .observation
+            .as_ref()
+            .map(|observation| observation.state)
+        {
+            Some(crate::domain::observation::ObservationState::TemporarilyUnavailable) => {
+                format!("flea listing show {listing_id}")
+            }
+            _ => "flea listing list".to_owned(),
+        };
+        app_error
+            .next_actions
+            .push(crate::domain::envelope::NextAction { command });
     }
+    app_error
 }
 
 fn resource_not_found(code: &str, resource: &str, id: &str) -> AppError {
-    let mut error = AppError::new(
+    let source = match resource {
+        "listing" => "listing_detail",
+        "category" => "category_taxonomy",
+        _ => "remote_resource",
+    };
+    AppError::new(
         code,
         format!("{resource} was not found"),
         ExitClass::Validation,
-    );
-    error.details = Some(Box::new(json!({ format!("{resource}_id"): id })));
-    error
+    )
+    .with_details(json!({ format!("{resource}_id"): id }))
+    .with_observation(
+        Observation::confirmed_absent(source, Some(404)),
+        ObservationOperation::Read,
+    )
 }
 
 fn listing_mutation_error(error: ListingsApiError, listing_id: &str, operation: &str) -> AppError {
@@ -1537,30 +1573,40 @@ fn listing_mutation_error(error: ListingsApiError, listing_id: &str, operation: 
 
 fn upstream_error(error: ListingsApiError, context: RetryContext) -> AppError {
     let unrecognized_model = matches!(error, ListingsApiError::UnexpectedResponse(_));
-    let (code, message, failure) = match error {
+    let operation = if context.method.is_read() {
+        ObservationOperation::Read
+    } else {
+        ObservationOperation::Mutation
+    };
+    let (code, message, observation) = match error {
         ListingsApiError::Transport => (
             "upstream.request_failed",
             "the Tori listing request failed",
-            FailureKind::Transport,
+            Observation::temporarily_unavailable("listing_service", None, false),
+        ),
+        ListingsApiError::Upstream(status) if crate::retry::is_transient_status(status) => (
+            "upstream.request_failed",
+            "the Tori listing request failed",
+            Observation::temporarily_unavailable("listing_service", Some(status), true),
         ),
         ListingsApiError::Upstream(status) => (
             "upstream.request_failed",
             "the Tori listing request failed",
-            FailureKind::HttpStatus(status),
+            Observation::unrecognized_response("listing_service", Some(status)),
         ),
         ListingsApiError::UnexpectedResponse(_) => (
             "upstream.unexpected_response",
             "Tori returned an unexpected listing response",
-            FailureKind::MalformedSuccess,
+            Observation::unrecognized_response("listing_service", Some(200)),
         ),
         _ => (
             "upstream.request_failed",
             "the Tori listing request failed",
-            FailureKind::Local,
+            Observation::unrecognized_response("listing_service", None),
         ),
     };
-    let mut error = AppError::new(code, message, ExitClass::Upstream)
-        .retry_classification(classify(failure, context));
+    let mut error =
+        AppError::new(code, message, ExitClass::Upstream).with_observation(observation, operation);
     if unrecognized_model {
         error.details = Some(Box::new(json!({
             "response_model": "unrecognized",

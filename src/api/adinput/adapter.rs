@@ -105,15 +105,48 @@ impl<T> HttpAdInputApi<T> {
     }
 }
 
+fn unrecognized_read(mut error: ApiError, source: &str, status: u16) -> ApiError {
+    error = error.with_observation(
+        Observation::unrecognized_response(source, Some(status)),
+        ObservationOperation::Read,
+    );
+    error
+}
+
+pub(super) fn observation_source(path: &str) -> &'static str {
+    if path.starts_with("/adinput/ad/withModel/") {
+        "draft_detail"
+    } else if path.starts_with("/ui/addelivery") || path.contains("/delivery") {
+        "delivery_composer"
+    } else if path == "/categories/taxonomy" {
+        "category_taxonomy"
+    } else if path.starts_with("/my/listings/")
+        || path.starts_with("/listings/")
+        || path.strip_prefix('/').is_some_and(|id| {
+            !id.is_empty()
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+    {
+        "listing_detail"
+    } else if path.starts_with("/orders/") || path.starts_with("/tracking/") {
+        "publication_confirmation"
+    } else {
+        "draft_service"
+    }
+}
+
 impl<T: HttpTransport> HttpAdInputApi<T> {
     async fn json(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
         debug_assert!(!request.method.is_mutation() || request.retry == RetryPolicy::Never);
         let retry_context = request.retry_context();
+        let source = observation_source(&request.path);
         let response = self.transport.execute(request).await?;
         if (200..300).contains(&response.status) {
             Ok(response)
         } else {
-            Err(ApiError::response(&response, retry_context))
+            Err(ApiError::response(&response, retry_context, source))
         }
     }
 
@@ -123,11 +156,19 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
         require_authoritative_model: bool,
     ) -> Result<DraftState, ApiError> {
         let is_mutation = request.method.is_mutation();
-        let retry_context = request.retry_context();
+        let source = observation_source(&request.path);
         let response = self.json(request).await?;
         if response.body_is_unparseable {
+            let operation = if is_mutation {
+                ObservationOperation::Mutation
+            } else {
+                ObservationOperation::Read
+            };
             let mut error = unexpected_representation("receive_draft_state", &response)
-                .retry_classification(classify(FailureKind::MalformedSuccess, retry_context));
+                .with_observation(
+                    Observation::unrecognized_response(source, Some(response.status)),
+                    operation,
+                );
             if is_mutation {
                 error.code = "mutation.uncertain".to_owned();
                 error.message =
@@ -142,9 +183,16 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
             normalize_draft_state(response.body, response.etag.as_deref())
         };
         normalized.map_err(|mut error| {
-            let classification = classify(FailureKind::MalformedSuccess, retry_context);
+            let operation = if is_mutation {
+                ObservationOperation::Mutation
+            } else {
+                ObservationOperation::Read
+            };
+            let observation = Observation::unrecognized_response(source, Some(response.status));
+            let classification = observation.retry_classification(operation);
             error.upstream_transient = classification.upstream_transient;
             error.safe_to_retry = classification.safe_to_retry;
+            error.observation = Some(observation);
             if is_mutation {
                 error.code = "mutation.uncertain".to_owned();
                 error.message =
@@ -257,7 +305,11 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
                 .await;
         }
         if !(200..300).contains(&response.status) {
-            return Err(ApiError::response(&response, retry_context));
+            return Err(ApiError::response(
+                &response,
+                retry_context,
+                "draft_creation",
+            ));
         }
         if response.body_is_unparseable {
             return Err(uncertain_creation(
@@ -312,7 +364,8 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         if response.body_is_unparseable {
             return Err(malformed_read_response("publication_draft"));
         }
-        if include_all_options {
+        let status = response.status;
+        let parsed = if include_all_options {
             normalize_publication_draft_with_limit(
                 response.body,
                 response.etag.as_deref(),
@@ -320,7 +373,8 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             )
         } else {
             normalize_publication_draft(response.body, response.etag.as_deref())
-        }
+        };
+        parsed.map_err(|error| unrecognized_read(error, "draft_detail", status))
     }
 
     async fn update_item(
@@ -535,6 +589,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     async fn publication_categories(&self) -> Result<Vec<PublicationCategory>, ApiError> {
         let response = self.json(HttpRequest::read("/categories/taxonomy")).await?;
         normalize_publication_categories(&response.body)
+            .map_err(|error| unrecognized_read(error, "category_taxonomy", response.status))
     }
 
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
@@ -564,11 +619,13 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
                 "/ui/addelivery?adId={draft_id_query}&editMode=false"
             )))
             .await?;
-        if include_all_options {
+        let status = response.status;
+        let parsed = if include_all_options {
             normalize_delivery_composer_with_limit(response.body, draft_id, usize::MAX)
         } else {
             normalize_delivery_composer(response.body, draft_id)
-        }
+        };
+        parsed.map_err(|error| unrecognized_read(error, "delivery_composer", status))
     }
 
     async fn apply_delivery(
@@ -722,7 +779,9 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
                 "/adinput/product/recommerce/{draft_id}/productcontext?adRevision={encoded_revision}"
             )))
             .await?;
+        let status = response.status;
         normalize_product_context(response.body, draft_id, revision)
+            .map_err(|error| unrecognized_read(error, "publication_product_context", status))
     }
 
     async fn publish_basic(
@@ -807,30 +866,39 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         if let Some(summary) = self.find_listing_summary(listing_id).await? {
             return Ok(summary);
         }
-        let (detail_status, upstream_transient) = match detail {
-            Ok(response) => (
-                if response.body_is_unparseable {
+        let (detail_status, observation) = match detail {
+            Ok(response) => {
+                let status = if response.body_is_unparseable {
                     "unparseable"
                 } else {
                     "unrecognized_model"
-                },
-                false,
-            ),
-            Err(error) => (
-                if error.status == Some(404) {
+                };
+                (
+                    status,
+                    Observation::unrecognized_response("listing_detail", Some(response.status)),
+                )
+            }
+            Err(error) => {
+                let status = if error.status == Some(404) {
                     "not_found"
                 } else {
                     "unavailable"
-                },
-                error.upstream_transient,
-            ),
+                };
+                let observation = error.observation.unwrap_or_else(|| {
+                    Observation::temporarily_unavailable(
+                        "listing_detail",
+                        error.status,
+                        error.status.is_some(),
+                    )
+                });
+                (status, observation)
+            }
         };
         let mut error = ApiError::new(
             "listing.observation_pending",
             "published listing is not visible through an authoritative observation path yet",
-        );
-        error.upstream_transient = upstream_transient;
-        error.safe_to_retry = true;
+        )
+        .with_observation(observation, ObservationOperation::PostMutationVerification);
         error.details = Some(Box::new(json!({
             "listing_id": listing_id,
             "detail_status": detail_status,
@@ -899,9 +967,12 @@ fn listing_observation_model_error(status: u16, model: &str) -> ApiError {
     let mut error = ApiError::new(
         "upstream.unrecognized_model",
         "Tori returned an unrecognized listing collection model",
+    )
+    .with_observation(
+        Observation::unrecognized_response("listing_collection", Some(status)),
+        ObservationOperation::Read,
     );
     error.status = Some(status);
-    error.safe_to_retry = true;
     error.details = Some(Box::new(json!({
         "status": status,
         "response_model": model,
@@ -1259,14 +1330,23 @@ fn unexpected_representation(stage: &str, response: &HttpResponse) -> ApiError {
 }
 
 pub(super) fn malformed_read_response(stage: &str) -> ApiError {
+    let source = match stage {
+        "publication_draft" => "draft_detail",
+        "delivery_composer" => "delivery_composer",
+        "observed_listing" => "listing_detail",
+        "confirmation" => "publication_confirmation",
+        "category_predictions" => "draft_category_predictions",
+        "source_listing" => "listing_detail",
+        _ => "draft_service",
+    };
     let mut error = ApiError::new(
         "upstream.unexpected_response",
         "Tori returned an invalid success response",
     )
-    .retry_classification(classify(
-        FailureKind::MalformedSuccess,
-        RetryContext::read(OperationMethod::Get),
-    ));
+    .with_observation(
+        Observation::unrecognized_response(source, Some(200)),
+        ObservationOperation::Read,
+    );
     error.details = Some(Box::new(json!({ "stage": stage })));
     error
 }

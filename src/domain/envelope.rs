@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::error::{AppError, ErrorBody};
+use crate::{
+    domain::observation::Observation,
+    error::{AppError, ErrorBody},
+};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Envelope<T = Value> {
@@ -12,6 +15,8 @@ pub struct Envelope<T = Value> {
     pub error: Option<ErrorBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub partial: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation: Option<Observation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<Warning>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -27,6 +32,7 @@ impl<T> Envelope<T> {
             data: Some(data),
             error: None,
             partial: None,
+            observation: None,
             warnings: Vec::new(),
             next_actions: Vec::new(),
             diagnostics: None,
@@ -42,6 +48,7 @@ impl Envelope<Value> {
             data: None,
             error: Some(body),
             partial: error.partial.map(|partial| *partial),
+            observation: None,
             warnings: Vec::new(),
             next_actions: error.next_actions,
             diagnostics: error.diagnostics.map(|diagnostics| *diagnostics),
