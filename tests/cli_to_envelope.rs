@@ -741,6 +741,14 @@ fn image_add_flows_through_upload_and_ordering() {
         value["data"]["images"][0]["image_id"],
         "https://img.tori.net/dynamic/default/image-1.png"
     );
+    let processing = &value["data"]["image_processing"][0];
+    assert_eq!(processing["source_format"], "png");
+    assert_eq!(processing["uploaded_format"], "png");
+    assert_eq!(processing["final_width"], 4);
+    assert_eq!(processing["final_height"], 6);
+    assert!(processing["final_byte_size"].as_u64().unwrap() > 0);
+    assert_eq!(processing["metadata_stripped"], true);
+    assert_eq!(processing["recompressed"], false);
     assert_eq!(client.requests.lock().unwrap().len(), 3);
 }
 

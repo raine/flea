@@ -75,7 +75,7 @@ pub struct ListingInputArgs {
     /// Delivery machine value returned by draft inspection.
     #[arg(long, value_name = "VALUE")]
     pub delivery: Vec<String>,
-    /// Image file path. Repeat to preserve image order.
+    /// JPEG, PNG, HEIC, or HEIF path. Images are bounded and stripped of private metadata.
     #[arg(long, value_name = "PATH")]
     pub image: Vec<PathBuf>,
     /// Read listing fields from a JSON object at this path, or `-` for stdin.
@@ -168,7 +168,7 @@ pub struct ImageArgs {
 pub enum ImageCommand {
     #[command(
         about = "Add images to a draft",
-        long_about = "Upload and attach one or more image files to a remote draft in argument order."
+        long_about = "Privately normalize, bound, upload, and attach JPEG, PNG, HEIC, or HEIF files to a remote draft in argument order."
     )]
     Add {
         /// Tori draft identifier.
@@ -597,6 +597,9 @@ fn workflow_error(error: WorkflowError) -> AppError {
         | "draft.price_trade_type_conflict" => ExitClass::Validation,
         "draft.image_processing" | "mutation.uncertain" => ExitClass::Partial,
         _ if has_remote_mutation || mutation_was_attempted => ExitClass::Partial,
+        code if code.starts_with("draft.image_") || code.starts_with("draft.heic_") => {
+            ExitClass::Validation
+        }
         _ => ExitClass::Upstream,
     };
     let classification = error

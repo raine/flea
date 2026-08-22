@@ -3,6 +3,7 @@ pub mod cli;
 pub mod diagnostics;
 pub mod domain;
 pub mod error;
+mod image_processing;
 pub mod output;
 pub mod retry;
 pub mod storage;

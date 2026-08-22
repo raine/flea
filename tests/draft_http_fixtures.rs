@@ -1590,6 +1590,13 @@ async fn image_upload_reads_dimensions_and_preserves_order() {
     let state = workflow.add_images("draft-1", &[path]).await.unwrap();
 
     assert_eq!(state.images[1].state, ImageState::Processing);
+    assert_eq!(state.image_processing.len(), 1);
+    assert_eq!(state.image_processing[0].source_format, "png");
+    assert_eq!(state.image_processing[0].uploaded_format, "png");
+    assert_eq!(state.image_processing[0].final_width, 7);
+    assert_eq!(state.image_processing[0].final_height, 11);
+    assert!(state.image_processing[0].metadata_stripped);
+    assert!(state.image_processing[0].recompressed);
     let requests = transport.requests();
     let RequestBody::Image {
         bytes,

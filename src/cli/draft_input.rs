@@ -89,8 +89,10 @@ pub fn preview(
                 "width": image.width(),
                 "height": image.height(),
                 "byte_size": image.byte_len(),
-                "processing": if image.source_format() == "heic" {
-                    "convert_to_jpeg_and_reencode_pixels"
+                "processing": if !image.recompressed() {
+                    "verified_passthrough"
+                } else if matches!(image.source_format(), "heic" | "heif") {
+                    "convert_and_reencode_pixels"
                 } else {
                     "reencode_pixels"
                 },
