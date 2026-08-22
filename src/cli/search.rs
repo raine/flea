@@ -317,7 +317,7 @@ pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<
 fn next_page_command(
     request: &UpstreamSearchRequest,
     page: usize,
-    resolved_area: Option<&crate::domain::search::SearchArea>,
+    resolved_area: Option<&crate::domain::search::SearchAreaContext>,
 ) -> String {
     let mut parts = vec!["tori search".to_owned()];
     if !request.query.is_empty() {

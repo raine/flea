@@ -2,14 +2,15 @@ use std::{collections::BTreeMap, fmt, sync::Arc};
 
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use url::form_urlencoded;
 
 use crate::{
     api::client::{RequestSpec, ToriClient, compatibility},
     domain::search::{
-        AppliedFilter, LocationCollection, MachineLabel, SearchArea, SearchCollection, SearchFacet,
-        SearchFacetOption, SearchFacetRange, SearchListing, SearchLocation, SearchPagination,
-        SearchPrice,
+        AppliedFilter, LocationCollection, SearchArea, SearchAreaContext, SearchCollection,
+        SearchFacet, SearchFacetOption, SearchFacetRange, SearchListing, SearchLocation,
+        SearchLocationContext, SearchPagination, SearchPrice,
     },
     error::{AppError, ExitClass},
 };
@@ -276,12 +277,9 @@ fn normalize_search(
         .get("docs")
         .and_then(Value::as_array)
         .ok_or_else(|| unexpected("search response omitted docs"))?;
-    let requested_category = ["product_category", "sub_category", "category"]
-        .iter()
-        .find_map(|name| request.parameters.get(*name));
     let results = docs
         .iter()
-        .map(|doc| normalize_listing(doc, requested_category))
+        .map(normalize_listing)
         .collect::<Result<Vec<_>, _>>()?;
     let metadata = object.get("metadata").and_then(Value::as_object);
     let total = metadata
@@ -304,21 +302,24 @@ fn normalize_search(
     };
     let accessible_pages = upstream_last.min(total_pages.max(1));
     let next_page = (request.page < accessible_pages).then_some(request.page + 1);
-    let previous_page = (request.page > 1).then_some(request.page - 1);
     let facets = request
         .include_filters
         .then(|| object.get("filters").and_then(Value::as_array))
         .flatten()
         .map(|filters| filters.iter().map(normalize_facet).collect())
         .unwrap_or_default();
+    let has_location_context = resolved_location.is_some() || resolved_area.is_some();
     let applied_filters = metadata
         .and_then(|value| value.get("params"))
         .and_then(Value::as_object)
-        .map(normalize_applied_filters)
+        .map(|params| normalize_applied_filters(params, has_location_context))
         .unwrap_or_else(|| {
             request
                 .parameters
                 .iter()
+                .filter(|(name, values)| {
+                    !values.is_empty() && (!has_location_context || name.as_str() != "location")
+                })
                 .map(|(name, values)| AppliedFilter {
                     name: name.clone(),
                     values: values.clone(),
@@ -328,32 +329,38 @@ fn normalize_search(
 
     Ok(SearchCollection {
         query: request.query.clone(),
+        location: resolved_location.map(|location| SearchLocationContext {
+            id: location.id,
+            name: location.name,
+            parent: location.parent,
+        }),
         pagination: SearchPagination {
             page: request.page,
             limit: request.limit,
             returned: results.len(),
             total,
-            total_pages,
-            accessible_pages,
-            upstream_page_limit: SEARCH_PAGE_MAX,
-            capped: total_pages > SEARCH_PAGE_MAX,
-            has_previous: previous_page.is_some(),
             has_next: next_page.is_some(),
-            previous_page,
             next_page,
+            capped: total_pages > SEARCH_PAGE_MAX,
         },
         results,
         applied_filters,
         facets,
-        resolved_location,
-        resolved_area,
+        resolved_area: resolved_area.map(|area| SearchAreaContext {
+            locations: area
+                .locations
+                .into_iter()
+                .map(|location| SearchLocationContext {
+                    id: location.id,
+                    name: location.name,
+                    parent: location.parent,
+                })
+                .collect(),
+        }),
     })
 }
 
-fn normalize_listing(
-    doc: &Value,
-    requested_category: Option<&Vec<String>>,
-) -> Result<SearchListing, AppError> {
+fn normalize_listing(doc: &Value) -> Result<SearchListing, AppError> {
     let object = doc
         .as_object()
         .ok_or_else(|| unexpected("search document must be an object"))?;
@@ -368,50 +375,77 @@ fn normalize_listing(
         .get("price")
         .and_then(Value::as_object)
         .and_then(|price| {
-            price.get("amount").map(|amount| {
-                let display = price
-                    .get("value")
+            price.get("amount").map(|amount| SearchPrice {
+                amount: amount.clone(),
+                currency: price
+                    .get("currency_code")
                     .and_then(Value::as_str)
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        price
-                            .get("price_unit")
-                            .and_then(Value::as_str)
-                            .map(|unit| format!("{amount} {unit}"))
-                    });
-                SearchPrice {
-                    amount: amount.clone(),
-                    currency: price
-                        .get("currency_code")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned),
-                    display,
-                }
+                    .map(str::to_owned),
             })
         });
-    let mut image_urls = string_array(object.get("image_urls"));
-    if let Some(url) = object
-        .get("image")
-        .and_then(Value::as_object)
-        .and_then(|image| image.get("url"))
-        .and_then(Value::as_str)
-        && !image_urls.iter().any(|existing| existing == url)
-    {
-        image_urls.insert(0, url.to_owned());
-    }
-    let extras = machine_labels(object.get("extras"));
-    let category = extras
-        .iter()
-        .find(|item| item.value.contains("category"))
+    let image_count = if object.contains_key("image_urls") || object.contains_key("image") {
+        let mut image_urls = string_array(object.get("image_urls"));
+        if let Some(url) = object
+            .get("image")
+            .and_then(Value::as_object)
+            .and_then(|image| image.get("url"))
+            .and_then(Value::as_str)
+            && !image_urls.iter().any(|existing| existing == url)
+        {
+            image_urls.push(url.to_owned());
+        }
+        Some(image_urls.len())
+    } else {
+        None
+    };
+    let annotations: Vec<Value> = ["labels", "extras"]
+        .into_iter()
+        .filter_map(|key| object.get(key).and_then(Value::as_array))
+        .flatten()
         .cloned()
+        .collect();
+    let flags = string_array(object.get("flags"));
+    let seller = semantic_value(object.get("seller"))
+        .or_else(|| semantic_value(object.get("seller_type")))
+        .or_else(|| seller_from_segment(object.get("dealer_segment")))
         .or_else(|| {
-            requested_category
-                .and_then(|values| values.first())
-                .map(|value| MachineLabel {
-                    value: value.clone(),
-                    label: value.clone(),
-                })
+            flags
+                .iter()
+                .find(|flag| matches!(flag.as_str(), "private" | "business" | "dealer"))
+                .cloned()
+        })
+        .or_else(|| label_value(&annotations, &["seller", "private", "business", "dealer"]));
+    let shipping = ["shipping", "shipping_available", "shipping_exists"]
+        .iter()
+        .find_map(|key| {
+            let value = object.get(*key)?;
+            value.as_bool().or_else(|| {
+                value
+                    .as_object()
+                    .and_then(|value| value.get("available"))
+                    .and_then(Value::as_bool)
+            })
+        })
+        .or_else(|| {
+            labels_or_flags_contain(
+                &annotations,
+                &flags,
+                &["shipping", "tori_diili", "fiksudiili"],
+            )
+            .then_some(true)
         });
+    let condition = semantic_value(object.get("condition"))
+        .or_else(|| label_value(&annotations, &["condition"]));
+    let published_at = object
+        .get("timestamp")
+        .and_then(Value::as_i64)
+        .and_then(format_timestamp);
+    let url = object
+        .get("canonical_url")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("https://www.tori.fi/recommerce/forsale/item/{listing_id}"));
+
     Ok(SearchListing {
         listing_id,
         title,
@@ -419,29 +453,19 @@ fn normalize_listing(
         location: object
             .get("location")
             .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .map(str::to_owned),
+        url,
+        published_at,
+        image_count,
         distance: object
             .get("distance")
             .and_then(Value::as_f64)
             .filter(|distance| distance.is_finite() && *distance > 0.0),
-        category,
-        trade_type: object
-            .get("trade_type")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        listing_type: object
-            .get("type")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        url: object
-            .get("canonical_url")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        image_urls,
-        published_at_ms: object.get("timestamp").and_then(Value::as_i64),
-        labels: machine_labels(object.get("labels")),
-        flags: string_array(object.get("flags")),
-        extras,
+        condition,
+        shipping,
+        seller,
     })
 }
 
@@ -586,43 +610,106 @@ fn flatten_locations(
     }
 }
 
-fn normalize_applied_filters(params: &Map<String, Value>) -> Vec<AppliedFilter> {
+fn normalize_applied_filters(
+    params: &Map<String, Value>,
+    has_resolved_location: bool,
+) -> Vec<AppliedFilter> {
     params
         .iter()
-        .map(|(name, value)| AppliedFilter {
-            name: name.clone(),
-            values: match value {
+        .filter(|(name, _)| name.as_str() != "q")
+        .filter(|(name, _)| !has_resolved_location || name.as_str() != "location")
+        .filter_map(|(name, value)| {
+            let values: Vec<String> = match value {
                 Value::Array(values) => values
                     .iter()
                     .filter_map(|value| string_value(Some(value)))
                     .collect(),
                 other => string_value(Some(other)).into_iter().collect(),
-            },
+            };
+            (!values.is_empty()).then(|| AppliedFilter {
+                name: name.clone(),
+                values,
+            })
         })
         .collect()
 }
 
-fn machine_labels(value: Option<&Value>) -> Vec<MachineLabel> {
-    value
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|value| {
-            let object = value.as_object()?;
-            let label = object
-                .get("text")
-                .or_else(|| object.get("display_name"))
-                .or_else(|| object.get("label"))?
-                .as_str()?
-                .to_owned();
-            let machine = string_value(object.get("id").or_else(|| object.get("value")))
-                .unwrap_or_else(|| label.clone());
-            Some(MachineLabel {
-                value: machine,
-                label,
+fn format_timestamp(timestamp: i64) -> Option<String> {
+    let nanoseconds = if timestamp.unsigned_abs() >= 100_000_000_000 {
+        i128::from(timestamp) * 1_000_000
+    } else {
+        i128::from(timestamp) * 1_000_000_000
+    };
+    OffsetDateTime::from_unix_timestamp_nanos(nanoseconds)
+        .ok()?
+        .format(&Rfc3339)
+        .ok()
+}
+
+fn semantic_value(value: Option<&Value>) -> Option<String> {
+    match value? {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Object(value) => value
+            .get("label")
+            .or_else(|| value.get("text"))
+            .or_else(|| value.get("display_name"))
+            .or_else(|| value.get("value"))
+            .and_then(|value| semantic_value(Some(value))),
+        _ => None,
+    }
+}
+
+fn seller_from_segment(value: Option<&Value>) -> Option<String> {
+    match string_value(value).as_deref() {
+        Some("1") => Some("private".to_owned()),
+        Some("3") => Some("business".to_owned()),
+        _ => None,
+    }
+}
+
+fn label_value(labels: &[Value], identifiers: &[&str]) -> Option<String> {
+    labels.iter().find_map(|label| {
+        let object = label.as_object()?;
+        let id = object
+            .get("id")
+            .or_else(|| object.get("value"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        identifiers
+            .iter()
+            .any(|identifier| id.contains(identifier))
+            .then(|| {
+                object
+                    .get("text")
+                    .or_else(|| object.get("display_name"))
+                    .or_else(|| object.get("label"))
+                    .and_then(Value::as_str)
+                    .unwrap_or(&id)
+                    .to_owned()
             })
-        })
-        .collect()
+    })
+}
+
+fn labels_or_flags_contain(labels: &[Value], flags: &[String], identifiers: &[&str]) -> bool {
+    flags.iter().any(|flag| {
+        let flag = flag.to_ascii_lowercase();
+        identifiers
+            .iter()
+            .any(|identifier| flag.contains(identifier))
+    }) || labels.iter().any(|label| {
+        let Some(object) = label.as_object() else {
+            return false;
+        };
+        let id = object
+            .get("id")
+            .or_else(|| object.get("value"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        identifiers.iter().any(|identifier| id.contains(identifier))
+    })
 }
 
 fn string_array(value: Option<&Value>) -> Vec<String> {

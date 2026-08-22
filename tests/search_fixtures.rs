@@ -106,23 +106,39 @@ fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
         include_filters: true,
         parameters: Default::default(),
     };
-    let (result, _) = PublicSearch::new(&api).execute(&request, None).unwrap();
+    let (result, _) = PublicSearch::new(&api)
+        .execute(
+            &request,
+            Some(tori::domain::search::SearchLocation {
+                id: "1.100018.110091".to_owned(),
+                name: "Helsinki".to_owned(),
+                parent: Some("Uusimaa".to_owned()),
+                depth: 1,
+            }),
+        )
+        .unwrap();
 
-    assert_eq!(result.results[0].listing_id, "42346404");
+    let listing = &result.results[0];
+    assert_eq!(listing.listing_id, "42346404");
+    assert_eq!(listing.price.as_ref().unwrap().amount, 37);
     assert_eq!(
-        result.results[0].price.as_ref().unwrap().display.as_deref(),
-        Some("37 €")
+        listing.price.as_ref().unwrap().currency.as_deref(),
+        Some("EUR")
     );
-    assert_eq!(result.results[0].image_urls.len(), 2);
-    assert_eq!(result.results[0].distance, Some(1200.0));
+    assert_eq!(listing.image_count, Some(2));
+    assert_eq!(listing.distance, Some(1200.0));
     assert_eq!(
-        result.results[1].price.as_ref().unwrap().display.as_deref(),
-        Some("Annetaan")
+        listing.published_at.as_deref(),
+        Some("2026-08-22T10:23:36Z")
     );
-    assert!(result.results[1].image_urls.is_empty());
+    assert_eq!(listing.condition.as_deref(), Some("Hyvä"));
+    assert_eq!(listing.shipping, Some(true));
+    assert_eq!(listing.seller.as_deref(), Some("private"));
+    assert_eq!(result.results[1].price.as_ref().unwrap().amount, 0);
+    assert_eq!(result.results[1].image_count, None);
     assert_eq!(result.pagination.total, 1_200);
-    assert_eq!(result.pagination.total_pages, 60);
-    assert_eq!(result.pagination.accessible_pages, 50);
+    assert!(result.pagination.has_next);
+    assert_eq!(result.pagination.next_page, Some(2));
     assert!(result.pagination.capped);
     assert_eq!(
         result.facets[0].options[1].parent_value.as_deref(),
@@ -139,12 +155,24 @@ fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
     );
 
     let serialized = serde_json::to_string(&result).unwrap();
+    assert_eq!(result.location.as_ref().unwrap().name, "Helsinki");
+    assert!(!serialized.contains("applied_filters"));
     for private in [
         "coordinates",
         "tracking",
         "guided_search",
         "quest_time",
         "uuid-fixture",
+        "image_urls",
+        "published_at_ms",
+        "listing_type",
+        "display",
+        "total_pages",
+        "accessible_pages",
+        "upstream_page_limit",
+        "has_previous",
+        "previous_page",
+        "resolved_location",
     ] {
         assert!(
             !serialized.contains(private),
@@ -412,6 +440,41 @@ fn page_cap_action_requests_facets_for_executable_refinement() {
 }
 
 #[test]
+fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
+    let api = FixtureApi::new(full_fixture());
+    let cli = Cli::parse_from(["tori", "search", "tuoli"]);
+    let Command::Search(args) = cli.command else {
+        unreachable!()
+    };
+    let output = search::dispatch_with_api(*args, &api).unwrap();
+    let listing = output["results"][0].as_object().unwrap();
+
+    assert_eq!(
+        listing.keys().cloned().collect::<Vec<_>>(),
+        [
+            "listing_id",
+            "title",
+            "price",
+            "location",
+            "url",
+            "published_at",
+            "image_count",
+            "distance",
+            "condition",
+            "shipping",
+            "seller",
+        ]
+    );
+    assert_eq!(output["pagination"]["page"], 1);
+    assert_eq!(output["pagination"]["returned"], 2);
+    assert_eq!(output["pagination"]["total"], 1_200);
+    assert_eq!(output["pagination"]["has_next"], true);
+    assert_eq!(output["pagination"]["next_page"], 2);
+    assert!(output.get("applied_filters").is_none());
+    assert!(output.get("facets").is_none());
+}
+
+#[test]
 fn raw_mode_preserves_the_upstream_document() {
     let raw = full_fixture();
     let api = FixtureApi::new(raw.clone());
@@ -480,7 +543,8 @@ fn full_fixture() -> Value {
                 "labels":[{"id":"private","text":"Yksityinen","type":"SECONDARY"}],
                 "canonical_url":"https://www.tori.fi/recommerce/forsale/item/42346404",
                 "extras":[], "price":{"amount":37,"currency_code":"EUR","price_unit":"€"},
-                "distance":1200.0, "trade_type":"Myydään"
+                "distance":1200.0, "trade_type":"Myydään", "condition":"Hyvä",
+                "shipping_available":true, "seller_type":"private"
             },
             {
                 "type":"bap", "id":"42346405", "heading":"Ilmainen tuoli",

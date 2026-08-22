@@ -92,24 +92,27 @@ tori search "tuoli" \
 -180 through 180, and radius must be positive and at most 1000 km. `--area`, `--location`, and
 coordinate radius arguments are mutually exclusive.
 
-Normalized listing output omits precise upstream coordinates. It includes textual location and a
-finite positive `distance` when Tori supplies one, while omitting Tori's zero placeholder. `--raw`
-explicitly returns the bounded upstream document when protocol inspection requires all upstream
-fields.
+Default listing output is a compact discovery projection. Every result provides its listing ID,
+title, structured price, concise textual location, canonical listing URL, ISO 8601 publication
+time, and image count when Tori supplies the corresponding data. Distance, condition, shipping,
+and seller information appear when available. Precise coordinates, image URL arrays, internal
+listing types, duplicate display prices, millisecond timestamps, empty collections, labels, flags,
+and other protocol fields are omitted.
+
+The top-level `query` and optional resolved `location` describe search context once. Resolved
+location context contains its machine ID, name, and parent when available. `applied_filters`
+contains remaining active filters only when present, without repeating the query or resolved
+location. `facets` appears only when `--include-facets` returns facet data. `--raw` returns the
+bounded upstream document when protocol inspection requires all upstream fields.
 
 ## Pagination
 
 Pages are one-indexed. Tori accepts pages 1 through 50 and page sizes 1 through 300. The CLI
 default is 20 results and never fetches all matches implicitly.
 
-Normalized pagination includes:
-
-- The explicit `page` and `limit`
-- Returned and total counts
-- Calculated total pages
-- Accessible pages under Tori's page 50 boundary
-- Previous and next page numbers when accessible
-- `capped: true` when matches exist beyond the accessible range
+Normalized pagination contains `page`, `limit`, `returned`, `total`, `has_next`, and `next_page`
+when another accessible page exists. Upstream boundaries and calculated implementation fields stay
+out of default output.
 
 The envelope provides a next-page action while another upstream page is accessible. At the page
 boundary, its executable refinement action returns to page 1 and adds `--include-facets`, so the

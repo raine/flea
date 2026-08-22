@@ -4,14 +4,16 @@ use serde_json::Value;
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SearchCollection {
     pub query: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<SearchLocationContext>,
     pub results: Vec<SearchListing>,
     pub pagination: SearchPagination,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub applied_filters: Vec<AppliedFilter>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub facets: Vec<SearchFacet>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolved_location: Option<SearchLocation>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolved_area: Option<SearchArea>,
+    pub resolved_area: Option<SearchAreaContext>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -22,22 +24,19 @@ pub struct SearchListing {
     pub price: Option<SearchPrice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distance: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub category: Option<MachineLabel>,
+    pub condition: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub trade_type: Option<String>,
+    pub shipping: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub listing_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
-    pub image_urls: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub published_at_ms: Option<i64>,
-    pub labels: Vec<MachineLabel>,
-    pub flags: Vec<String>,
-    pub extras: Vec<MachineLabel>,
+    pub seller: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -45,14 +44,6 @@ pub struct SearchPrice {
     pub amount: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MachineLabel {
-    pub value: String,
-    pub label: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -108,16 +99,19 @@ pub struct SearchPagination {
     pub limit: usize,
     pub returned: usize,
     pub total: usize,
-    pub total_pages: usize,
-    pub accessible_pages: usize,
-    pub upstream_page_limit: usize,
-    pub capped: bool,
-    pub has_previous: bool,
     pub has_next: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_page: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_page: Option<usize>,
+    #[serde(skip)]
+    pub capped: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchLocationContext {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,6 +126,11 @@ pub struct SearchLocation {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SearchArea {
     pub locations: Vec<SearchLocation>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchAreaContext {
+    pub locations: Vec<SearchLocationContext>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
