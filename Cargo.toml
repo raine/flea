@@ -3,7 +3,7 @@ name = "flea"
 version = "0.1.0"
 edition = "2024"
 authors = ["Raine Virta"]
-description = "Flea, a deterministic CLI for Tori.fi listing workflows"
+description = "Search, create, and manage Tori.fi listings with coding agents"
 repository = "https://github.com/raine/flea"
 license = "MIT"
 

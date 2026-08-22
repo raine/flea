@@ -1,5 +1,5 @@
 {
-  description = "Flea, a deterministic CLI for Tori.fi listing workflows";
+  description = "Search, create, and manage Tori.fi listings with coding agents";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

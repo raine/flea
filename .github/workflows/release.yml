@@ -111,7 +111,7 @@ jobs:
 
           cat > tap/Formula/flea.rb << EOF
           class Flea < Formula
-            desc "Deterministic CLI for Tori.fi listing workflows"
+            desc "Search, create, and manage Tori.fi listings with coding agents"
             homepage "https://github.com/raine/flea"
             version "${VERSION}"
             license "MIT"
