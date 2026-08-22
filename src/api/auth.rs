@@ -780,23 +780,27 @@ mod tests {
     }
 
     #[test]
-    fn callback_requires_exact_scheme_target_state_and_single_code() {
-        let state = "expected";
-        let valid = format!("{CALLBACK_SCHEME}://login?code=ok&state={state}");
-        assert_eq!(validate_callback(&valid, state).unwrap().expose(), "ok");
+    fn callback_fixture_requires_exact_scheme_target_state_and_single_code() {
+        #[derive(serde::Deserialize)]
+        struct CallbackCase {
+            callback: String,
+            valid: bool,
+        }
 
-        for callback in [
-            format!("https://login?code=ok&state={state}"),
-            format!("{CALLBACK_SCHEME}://other?code=ok&state={state}"),
-            format!("{CALLBACK_SCHEME}://login/path?code=ok&state={state}"),
-            format!("{CALLBACK_SCHEME}://login?code=ok&state=wrong"),
-            format!("{CALLBACK_SCHEME}://login?state={state}"),
-            format!("{CALLBACK_SCHEME}://login?code=one&code=two&state={state}"),
-        ] {
-            assert!(
-                validate_callback(&callback, state).is_err(),
-                "accepted invalid callback shape"
+        let cases: Vec<CallbackCase> =
+            serde_json::from_str(include_str!("../../tests/fixtures/oauth/callbacks.json"))
+                .unwrap();
+        for case in cases {
+            let result = validate_callback(&case.callback, "expected");
+            assert_eq!(
+                result.is_ok(),
+                case.valid,
+                "unexpected callback fixture result for {}",
+                case.callback
             );
+            if case.valid {
+                assert_eq!(result.unwrap().expose(), "ok");
+            }
         }
     }
 

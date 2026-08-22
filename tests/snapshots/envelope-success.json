@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "data": {
+    "draft_id": "36443414",
+    "state": "draft",
+    "fields": [
+      {
+        "key": "title",
+        "status": "set",
+        "value": "Chair"
+      }
+    ]
+  },
+  "warnings": [],
+  "next_actions": [
+    {
+      "command": "tori draft show 36443414"
+    }
+  ]
+}

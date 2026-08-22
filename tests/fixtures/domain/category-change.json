@@ -1,0 +1,25 @@
+{
+  "values": {
+    "category": "old/category",
+    "title": "Birch chair",
+    "attributes": {
+      "color": "red",
+      "material": "10",
+      "obsolete": true,
+      "style": ["modern", "invalid"]
+    }
+  },
+  "schema": {
+    "fields": [
+      {"key":"color","label":"Colour","type":"string","requirement":"optional","status":"missing","value":null,"section":"attributes"},
+      {"key":"material","label":"Material","type":"select","requirement":"unknown","status":"missing","value":null,"section":"attributes"},
+      {"key":"style","label":"Style","type":"multi_select","requirement":"unknown","status":"missing","value":null,"section":"attributes"}
+    ],
+    "options": [
+      {"field":"material","value":"11","label":"Metal"},
+      {"field":"style","value":"modern","label":"Modern"}
+    ]
+  },
+  "replacement_category": "furniture/chairs",
+  "cleared_fields": ["material", "obsolete", "style"]
+}

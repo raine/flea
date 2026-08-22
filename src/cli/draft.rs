@@ -457,6 +457,51 @@ mod tests {
     }
 
     #[test]
+    fn every_common_flag_rejects_the_same_json_field() {
+        let cases = [
+            ("category", json!("furniture/chairs")),
+            ("title", json!("Chair")),
+            ("description", json!("Description")),
+            ("price", json!(45)),
+            ("trade_type", json!("sell")),
+            ("postal_code", json!("00100")),
+            ("delivery", json!(["pickup"])),
+        ];
+
+        for (field, value) in cases {
+            let mut args = empty_args();
+            match field {
+                "category" => args.category = Some("furniture/chairs".to_owned()),
+                "title" => args.title = Some("Chair".to_owned()),
+                "description" => args.description = Some("Description".to_owned()),
+                "price" => args.price = Some("45".to_owned()),
+                "trade_type" => args.trade_type = Some(TradeType::Sell),
+                "postal_code" => args.postal_code = Some("00100".to_owned()),
+                "delivery" => args.delivery = vec!["pickup".to_owned()],
+                _ => unreachable!(),
+            }
+            let mut input = Cursor::new(serde_json::to_vec(&json!({ (field): value })).unwrap());
+
+            let error = collect_input_with_reader(args, &mut input).unwrap_err();
+            assert_eq!(
+                error.details.as_deref(),
+                Some(&json!({ "duplicate_field": field }))
+            );
+        }
+    }
+
+    #[test]
+    fn json_input_requires_an_object_and_string_image_paths() {
+        for document in [r#"["not", "an", "object"]"#, r#"{"image":[42]}"#] {
+            let error =
+                collect_input_with_reader(empty_args(), &mut Cursor::new(document.as_bytes()))
+                    .unwrap_err();
+            assert_eq!(error.code, "cli.invalid_input");
+            assert_eq!(error.exit_class, ExitClass::Usage);
+        }
+    }
+
+    #[test]
     fn duplicate_image_sources_are_rejected() {
         let mut args = empty_args();
         args.image.push(PathBuf::from("flag.jpg"));

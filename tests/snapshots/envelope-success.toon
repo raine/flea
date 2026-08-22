@@ -1,0 +1,9 @@
+ok: true
+data:
+  draft_id: "36443414"
+  state: draft
+  fields[1]{key,status,value}:
+    title,set,Chair
+warnings[0]:
+next_actions[1]{command}:
+  tori draft show 36443414

@@ -1,0 +1,31 @@
+{
+  "ok": false,
+  "error": {
+    "code": "draft.validation_failed",
+    "message": "Required fields are missing",
+    "retryable": false,
+    "details": {
+      "missing_fields": [
+        "title",
+        "delivery"
+      ]
+    }
+  },
+  "partial": {
+    "draft_id": "36443414",
+    "completed_steps": [
+      "fetch_draft"
+    ]
+  },
+  "warnings": [],
+  "next_actions": [
+    {
+      "command": "tori draft update 36443414 --input PATH"
+    }
+  ],
+  "diagnostics": {
+    "trace_id": "trace-fixture",
+    "correlation_id": "correlation-fixture",
+    "log_path": "/state/tori-cli/logs/tori-cli.fixture.jsonl"
+  }
+}

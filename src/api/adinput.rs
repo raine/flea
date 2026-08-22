@@ -902,9 +902,10 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         paths: &[impl AsRef<Path>],
         completed: &mut Vec<String>,
     ) -> Result<DraftState, WorkflowError> {
-        let mut ordered: Vec<String> = state
-            .images
-            .iter()
+        let mut existing = state.images.iter().collect::<Vec<_>>();
+        existing.sort_by_key(|image| image.position);
+        let mut ordered: Vec<String> = existing
+            .into_iter()
             .map(|image| image.image_id.clone())
             .collect();
         for path in paths {
@@ -953,10 +954,14 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .get_draft(draft_id)
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
-        let ordered: Vec<String> = state
+        let mut retained = state
             .images
             .iter()
             .filter(|image| !remove.contains(&image.image_id))
+            .collect::<Vec<_>>();
+        retained.sort_by_key(|image| image.position);
+        let ordered: Vec<String> = retained
+            .into_iter()
             .map(|image| image.image_id.clone())
             .collect();
         self.api
@@ -1143,6 +1148,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn image_dimensions(bytes: &[u8]) -> Result<(u32, u32), ApiError> {
     let image = image::load_from_memory(bytes)
         .map_err(|error| ApiError::new("draft.invalid_image", error.to_string()))?;

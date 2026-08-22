@@ -79,6 +79,67 @@ fn config() -> WorkflowConfig {
     }
 }
 
+fn successful_publish_responses() -> Vec<HttpResponse> {
+    let valid = draft(
+        "one",
+        json!({
+            "values": {
+                "category": "furniture/chairs",
+                "title": "Chair",
+                "delivery": ["pickup"]
+            },
+            "required_fields": ["category", "title", "delivery"],
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        }),
+    );
+    vec![
+        response(200, valid.clone()),
+        response(
+            200,
+            draft(
+                "two",
+                json!({ "values": valid["values"].clone(), "images": valid["images"].clone() }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "two",
+                json!({ "values": valid["values"].clone(), "images": valid["images"].clone() }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "three",
+                json!({
+                    "values": {
+                        "category": "furniture/chairs",
+                        "title": "Chair",
+                        "delivery": ["pickup"],
+                        "revision": "revision-7"
+                    }
+                }),
+            ),
+        ),
+        response(204, Value::Null),
+        response(
+            200,
+            json!({ "revision": "revision-7", "context": { "currency": "EUR" } }),
+        ),
+        response(
+            201,
+            json!({ "listing_id": "listing-9", "revision": "revision-7", "state": "pending" }),
+        ),
+        response(200, json!({ "order_id": "order-4", "details": {} })),
+        response(204, Value::Null),
+        response(
+            200,
+            json!({ "listing_id": "listing-9", "state": "pending" }),
+        ),
+    ]
+}
+
 #[tokio::test]
 async fn update_conflict_fetches_and_returns_fresh_remote_state() {
     let transport = FixtureTransport::new([
@@ -230,9 +291,9 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
                 "one",
                 json!({
                     "images": [
+                        { "image_id": "third", "position": 2, "state": "ready" },
                         { "image_id": "first", "position": 0, "state": "ready" },
-                        { "image_id": "second", "position": 1, "state": "ready" },
-                        { "image_id": "third", "position": 2, "state": "ready" }
+                        { "image_id": "second", "position": 1, "state": "ready" }
                     ]
                 }),
             ),
@@ -355,13 +416,272 @@ async fn publish_runs_the_complete_bounded_sequence() {
 
     let requests = transport.requests();
     assert_eq!(requests.len(), 10);
-    assert_eq!(requests[6].path, "/drafts/draft-1/publish");
+    let observed_sequence = requests
+        .iter()
+        .map(|request| (request.method.clone(), request.path.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        observed_sequence,
+        [
+            (Method::Get, "/drafts/draft-1/with-model"),
+            (Method::Patch, "/drafts/draft-1/item"),
+            (Method::Get, "/drafts/draft-1/with-model"),
+            (Method::Put, "/drafts/draft-1/adinput"),
+            (Method::Put, "/drafts/draft-1/delivery"),
+            (Method::Get, "/drafts/draft-1/products?revision=revision-7"),
+            (Method::Post, "/drafts/draft-1/publish"),
+            (Method::Get, "/listings/listing-9/confirmation"),
+            (Method::Post, "/tracking/confirmation"),
+            (Method::Get, "/listings/listing-9"),
+        ]
+    );
+    assert_eq!(
+        requests[4].body,
+        RequestBody::Json(json!({
+            "revision": "revision-7",
+            "delivery": ["pickup"]
+        }))
+    );
+    assert_eq!(
+        requests[6].body,
+        RequestBody::Json(json!({
+            "package": "basic",
+            "revision": "revision-7",
+            "context": { "currency": "EUR" }
+        }))
+    );
     assert!(requests.iter().all(|request| {
         !matches!(
             request.method,
             Method::Post | Method::Patch | Method::Put | Method::Delete
         ) || request.retry == RetryPolicy::Never
     }));
+}
+
+#[tokio::test]
+async fn publish_validation_rejects_missing_fields_and_implicit_delivery() {
+    for (values, required, expected_missing) in [
+        (
+            json!({ "delivery": ["pickup"] }),
+            json!(["title", "delivery"]),
+            json!(["title"]),
+        ),
+        (
+            json!({ "title": "Chair", "delivery": [] }),
+            json!(["title"]),
+            json!(["delivery"]),
+        ),
+    ] {
+        let state = draft(
+            "one",
+            json!({
+                "values": values,
+                "required_fields": required,
+                "images": []
+            }),
+        );
+        let workflow = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new([response(200, state)])),
+            config(),
+        );
+
+        let error = workflow.publish("draft-1").await.unwrap_err();
+        assert_eq!(error.code, "draft.validation_failed");
+        assert_eq!(error.details.unwrap()["missing_fields"], expected_missing);
+        assert_eq!(error.recovery.unwrap().completed_steps, ["fetch_draft"]);
+    }
+}
+
+#[tokio::test]
+async fn publish_reports_failed_image_and_preserves_its_identity() {
+    let failed = draft(
+        "one",
+        json!({
+            "values": { "title": "Chair", "delivery": ["pickup"] },
+            "required_fields": ["title", "delivery"],
+            "images": [{
+                "image_id": "image-broken",
+                "position": 0,
+                "state": "failed",
+                "failure": "unsupported image"
+            }]
+        }),
+    );
+    let transport = FixtureTransport::new([response(200, failed)]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow.publish("draft-1").await.unwrap_err();
+
+    assert_eq!(error.code, "draft.image_failed");
+    assert_eq!(
+        error.source.unwrap().details.unwrap()["image_id"],
+        "image-broken"
+    );
+    assert_eq!(
+        error.recovery.unwrap().completed_steps,
+        ["fetch_draft", "validate"]
+    );
+}
+
+#[tokio::test]
+async fn publish_failures_report_each_completed_workflow_boundary() {
+    let cases = [
+        (0, &[][..], true),
+        (
+            1,
+            &["fetch_draft", "validate", "wait_for_images"][..],
+            false,
+        ),
+        (
+            2,
+            &[
+                "fetch_draft",
+                "validate",
+                "wait_for_images",
+                "patch_item_fields",
+            ][..],
+            true,
+        ),
+        (
+            3,
+            &[
+                "fetch_draft",
+                "validate",
+                "wait_for_images",
+                "patch_item_fields",
+                "fetch_fresh_etag",
+            ][..],
+            false,
+        ),
+        (
+            4,
+            &[
+                "fetch_draft",
+                "validate",
+                "wait_for_images",
+                "patch_item_fields",
+                "fetch_fresh_etag",
+                "submit_adinput",
+            ][..],
+            false,
+        ),
+        (
+            5,
+            &[
+                "fetch_draft",
+                "validate",
+                "wait_for_images",
+                "patch_item_fields",
+                "fetch_fresh_etag",
+                "submit_adinput",
+                "apply_delivery",
+            ][..],
+            true,
+        ),
+        (
+            6,
+            &[
+                "fetch_draft",
+                "validate",
+                "wait_for_images",
+                "patch_item_fields",
+                "fetch_fresh_etag",
+                "submit_adinput",
+                "apply_delivery",
+                "fetch_product_context",
+            ][..],
+            false,
+        ),
+        (
+            9,
+            &[
+                "fetch_draft",
+                "validate",
+                "wait_for_images",
+                "patch_item_fields",
+                "fetch_fresh_etag",
+                "submit_adinput",
+                "apply_delivery",
+                "fetch_product_context",
+                "publish_basic",
+                "fetch_confirmation",
+                "track_confirmation",
+            ][..],
+            true,
+        ),
+    ];
+
+    for (failure_index, expected_steps, retryable) in cases {
+        let mut responses = successful_publish_responses();
+        responses[failure_index] = response(503, json!({ "message": "fixture failure" }));
+        let workflow = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new(responses)),
+            config(),
+        );
+
+        let error = workflow.publish("draft-1").await.unwrap_err();
+        let recovery = error.recovery.unwrap();
+        assert_eq!(
+            recovery.completed_steps, expected_steps,
+            "failure index {failure_index}"
+        );
+        assert_eq!(
+            recovery.retryable, retryable,
+            "failure index {failure_index}"
+        );
+        if failure_index == 9 {
+            assert_eq!(
+                error.details.unwrap()["listing_id"],
+                "listing-9",
+                "published listing identity must survive observation failure"
+            );
+            assert_eq!(recovery.next_safe_actions, ["tori listing show listing-9"]);
+        } else {
+            assert_eq!(recovery.next_safe_actions, ["tori draft show draft-1"]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
+    let mut confirmation_failure = successful_publish_responses();
+    confirmation_failure[7] = response(503, json!({ "message": "confirmation unavailable" }));
+    confirmation_failure.remove(8);
+    let result = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new(confirmation_failure)),
+        config(),
+    )
+    .publish("draft-1")
+    .await
+    .unwrap();
+    assert_eq!(
+        result.warnings,
+        ["confirmation fetch failed: confirmation unavailable"]
+    );
+    assert_eq!(
+        result.completed_steps.last().unwrap(),
+        "fetch_observed_listing"
+    );
+
+    let mut tracking_failure = successful_publish_responses();
+    tracking_failure[8] = response(503, json!({ "message": "tracking unavailable" }));
+    let result = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new(tracking_failure)),
+        config(),
+    )
+    .publish("draft-1")
+    .await
+    .unwrap();
+    assert_eq!(
+        result.warnings,
+        ["confirmation tracking failed: tracking unavailable"]
+    );
+    assert!(
+        !result
+            .completed_steps
+            .iter()
+            .any(|step| step == "track_confirmation")
+    );
 }
 
 #[tokio::test]

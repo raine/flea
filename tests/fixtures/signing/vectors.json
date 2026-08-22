@@ -1,0 +1,23 @@
+[
+  {
+    "method": "GET",
+    "path_and_query": "/public/users/697554341/unreadmessagecount",
+    "service": "MESSAGING-API",
+    "body": "",
+    "signature": "bbAqA7PQNmE6YbhPHwTmhasqW/n2rXnHl+f2UTJjxQWcIDynRvYR2sDCBxDpWgJkTfVfPOkbjzVR78rnn/1ojg=="
+  },
+  {
+    "method": "get",
+    "path_and_query": "/search?foo=one%20two&x=1",
+    "service": "SEARCH-QUEST",
+    "body": "",
+    "signature": "rARwXhpkwuDVfRL8MgsujE4ytirzxT/D8+CXWtp/nxKg8qaTA+9VQAMgnZI/5iIzZk+Yln1ls7I7/Dfw6XeolA=="
+  },
+  {
+    "method": "POST",
+    "path_and_query": "/items/42",
+    "service": "RC-ITEM-CREATION-FLOW-API",
+    "body": "{\"title\":\"Tuoli\"}",
+    "signature": "Xff7efJCPUIBUKKZJbzR6YNxD7WyyhynrKOHbmhzGWmlHNDbmfo8SK3YCJ2/uK2mpaCQkG2f06aS4oIac3jz6A=="
+  }
+]

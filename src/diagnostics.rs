@@ -731,6 +731,35 @@ mod tests {
                 .iter()
                 .all(|event| event["span"]["correlation_id"] == session.context().correlation_id)
         );
+        assert!(events.iter().all(|event| {
+            event["timestamp"].is_string()
+                && event["level"].is_string()
+                && event["target"].is_string()
+                && event["span"]["command"] == "draft show"
+        }));
+        assert!(
+            events
+                .iter()
+                .any(|event| { event["event"] == "command.started" })
+        );
+        assert!(events.iter().any(|event| {
+            event["event"] == "command.finished"
+                && event["status"] == "success"
+                && event["exit_code"] == 0
+                && event["duration_ms"].is_number()
+        }));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&session.context().log_path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
     }
 
     #[test]

@@ -160,6 +160,23 @@ mod tests {
     }
 
     #[test]
+    fn failed_replacement_preserves_destination_and_cleans_temporary_file() {
+        let temporary = tempdir().unwrap();
+        let destination = temporary.path().join("record.json");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("sentinel"), b"old").unwrap();
+
+        assert!(write_atomic(&destination, b"replacement").is_err());
+
+        assert_eq!(fs::read(destination.join("sentinel")).unwrap(), b"old");
+        let entries = fs::read_dir(temporary.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(entries, ["record.json"]);
+    }
+
+    #[test]
     fn tightens_existing_directory_permissions() {
         let temporary = tempdir().unwrap();
         let directory = temporary.path().join("state");
