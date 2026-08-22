@@ -40,8 +40,9 @@ and the live smoke harness must not publish listings.
    image state is `ready`, and the normalized values match the intended test
    listing.
 5. Run the authoritative read-only `flea draft validate DRAFT_ID` check on the
-   persisted draft. Resolve every remote composer, category, delivery, and image
-   requirement before publication.
+   persisted draft. Confirm it reports `ready: true`. The command makes only
+   read requests. Resolve every reported missing, invalid, pending, or
+   unverifiable requirement before publication.
 6. Run `flea draft publish DRAFT_ID` once. Record the trace ID, listing ID,
    completed steps, warnings, and returned listing state. Do not repeat the
    command after an ambiguous failure. Inspect the draft and listing first.

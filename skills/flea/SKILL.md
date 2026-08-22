@@ -64,6 +64,7 @@ flea draft show DRAFT_ID
 flea draft update DRAFT_ID [fields]
 flea draft image add DRAFT_ID PATH...
 flea draft image remove DRAFT_ID IMAGE_ID...
+flea draft validate DRAFT_ID
 flea draft publish DRAFT_ID
 flea draft delete DRAFT_ID
 
@@ -74,4 +75,4 @@ flea listing dispose LISTING_ID
 flea listing delete LISTING_ID
 ```
 
-Local draft preview works without authentication. Category-enriched preview and account draft or published listing work require authentication. Preview reports local assumptions and unverifiable requirements, while `draft validate DRAFT_ID` authoritatively checks an existing remote draft. Build a draft incrementally, inspect required fields and allowed options with `draft show`, upload images, and inspect again. Publish, dispose, and delete act without confirmation, so run them only when requested.
+Local draft preview works without authentication. Category-enriched preview and account draft or published listing work require authentication. Preview reports local assumptions and unverifiable requirements, while `draft validate DRAFT_ID` authoritatively checks an existing remote draft without changing it. Build a draft incrementally, inspect required fields and allowed options with `draft show`, upload images, and run `draft validate` until it reports `ready: true`. Publish, dispose, and delete act without confirmation, so run them only when requested.

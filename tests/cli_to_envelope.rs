@@ -361,6 +361,76 @@ fn draft_create_flows_through_the_http_adapter() {
 }
 
 #[test]
+fn draft_validate_is_compact_deterministic_and_read_only_in_json_and_toon() {
+    let client = || {
+        MockClient::with_responses([
+            response(
+                StatusCode::OK,
+                json!({
+                    "draft_id": "draft-1",
+                    "etag": "one",
+                    "values": {
+                        "category": "furniture/chairs",
+                        "title": "Chair",
+                        "description": "Solid birch chair",
+                        "trade_type": "sell",
+                        "price": 45,
+                        "postal_code": "00100"
+                    },
+                    "fields": [],
+                    "options": [],
+                    "required_fields": [],
+                    "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+                }),
+            ),
+            response(StatusCode::OK, delivery_page(true)),
+            response(
+                StatusCode::OK,
+                json!({
+                    "categories": [{
+                        "id": "furniture/chairs",
+                        "label": "Chairs",
+                        "isSelectable": true
+                    }]
+                }),
+            ),
+        ])
+    };
+    let json_client = client();
+    let value = invoke(
+        &TestRuntime {
+            client: json_client.clone(),
+        },
+        ["flea", "--format", "json", "draft", "validate", "draft-1"],
+    );
+
+    assert_eq!(
+        value["data"],
+        json!({ "draft_id": "draft-1", "ready": true })
+    );
+    let requests = json_client.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.method == reqwest::Method::GET)
+    );
+    drop(requests);
+
+    let first = run_with_runtime(
+        ["flea", "draft", "validate", "draft-1"],
+        &TestRuntime { client: client() },
+    );
+    let second = run_with_runtime(
+        ["flea", "draft", "validate", "draft-1"],
+        &TestRuntime { client: client() },
+    );
+    assert_eq!(first.document, second.document);
+    assert!(first.document.contains("ready: true"));
+    assert!(!first.document.contains("missing"));
+}
+
+#[test]
 fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
     let client = MockClient::with_responses([
         response(
@@ -676,23 +746,43 @@ fn image_add_flows_through_upload_and_ordering() {
 
 #[test]
 fn publish_flows_through_every_http_step() {
+    let values = json!({
+        "category": "furniture/chairs",
+        "title": "Chair",
+        "description": "Solid birch chair",
+        "trade_type": "sell",
+        "price": 45,
+        "postal_code": "00100"
+    });
     let valid = json!({
         "draft_id": "draft-1",
         "etag": "one",
-        "values": { "title": "Chair" },
+        "values": values,
         "fields": [],
         "options": [],
         "required_fields": ["title", "delivery"],
-        "images": []
+        "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
     });
+    let mut submitted_values = valid["values"].clone();
+    submitted_values["revision"] = json!("revision-1");
     let submitted = json!({
         "draft_id": "draft-1",
         "etag": "three",
-        "values": { "title": "Chair", "revision": "revision-1" }
+        "values": submitted_values
     });
     let client = MockClient::with_responses([
         response(StatusCode::OK, valid.clone()),
         response(StatusCode::OK, delivery_page(true)),
+        response(
+            StatusCode::OK,
+            json!({
+                "categories": [{
+                    "id": "furniture/chairs",
+                    "label": "Chairs",
+                    "isSelectable": true
+                }]
+            }),
+        ),
         response(StatusCode::OK, valid.clone()),
         response(StatusCode::OK, valid),
         response(StatusCode::OK, submitted),
@@ -719,9 +809,9 @@ fn publish_flows_through_every_http_step() {
 
     assert_eq!(value["data"]["listing_id"], "listing-1");
     let requests = client.requests.lock().unwrap();
-    assert_eq!(requests.len(), 12);
-    assert_eq!(requests[5].path_and_query, "/ads/draft-1/delivery");
-    assert_eq!(requests[5].service, "TJT-API");
+    assert_eq!(requests.len(), 13);
+    assert_eq!(requests[6].path_and_query, "/ads/draft-1/delivery");
+    assert_eq!(requests[6].service, "TJT-API");
 }
 
 #[test]

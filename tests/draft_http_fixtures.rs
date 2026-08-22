@@ -196,21 +196,45 @@ fn shipping_page(products: &[&str]) -> Value {
     })
 }
 
+fn publication_values() -> Value {
+    json!({
+        "category": "furniture/chairs",
+        "title": "Chair",
+        "description": "Solid birch chair",
+        "trade_type": "sell",
+        "price": 45,
+        "postal_code": "00100"
+    })
+}
+
+fn category_taxonomy(category_id: &str, selectable: bool) -> HttpResponse {
+    response(
+        200,
+        json!({
+            "categories": [{
+                "id": category_id,
+                "label": "Fixture category",
+                "isSelectable": selectable
+            }]
+        }),
+    )
+}
+
 fn successful_publish_responses() -> Vec<HttpResponse> {
     let valid = draft(
         "one",
         json!({
-            "values": {
-                "category": "furniture/chairs",
-                "title": "Chair"
-            },
+            "values": publication_values(),
             "required_fields": ["category", "title", "delivery"],
             "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
         }),
     );
+    let mut submitted_values = publication_values();
+    submitted_values["revision"] = json!("revision-7");
     vec![
         response(200, valid.clone()),
         response(200, delivery_page(Some("pickup"))),
+        category_taxonomy("furniture/chairs", true),
         response(
             200,
             draft(
@@ -225,19 +249,7 @@ fn successful_publish_responses() -> Vec<HttpResponse> {
                 json!({ "values": valid["values"].clone(), "images": valid["images"].clone() }),
             ),
         ),
-        response(
-            200,
-            draft(
-                "three",
-                json!({
-                    "values": {
-                        "category": "furniture/chairs",
-                        "title": "Chair",
-                        "revision": "revision-7"
-                    }
-                }),
-            ),
-        ),
+        response(200, draft("three", json!({ "values": submitted_values }))),
         response(204, Value::Null),
         response(200, delivery_page(Some("pickup"))),
         response(
@@ -1666,6 +1678,251 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
 }
 
 #[tokio::test]
+async fn validate_reports_complete_drafts_and_uses_only_read_requests() {
+    let state = draft(
+        "one",
+        json!({
+            "values": publication_values(),
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        }),
+    );
+    let transport = FixtureTransport::new([
+        response(200, state),
+        response(200, delivery_page(Some("pickup"))),
+        category_taxonomy("furniture/chairs", true),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let report = workflow.validate("draft-1").await.unwrap();
+
+    assert!(report.ready);
+    assert!(report.missing.is_empty());
+    assert!(report.invalid.is_empty());
+    assert!(report.pending.is_empty());
+    assert!(report.unverifiable.is_empty());
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(requests.iter().all(|request| {
+        request.method == Method::Get && request.retry == RetryPolicy::BoundedRead
+    }));
+}
+
+#[tokio::test]
+async fn validate_applies_category_specific_composer_requirements() {
+    let mut composer = composer_fixture();
+    composer["ad"]["values"]
+        .as_object_mut()
+        .unwrap()
+        .remove("condition");
+    composer["ad"]["values"]["multi_image"] = json!([{
+        "url": "https://img.tori.net/dynamic/default/image-1.jpg",
+        "width": 640,
+        "height": 480,
+        "type": "image/jpeg"
+    }]);
+    composer["model"]["sections"][2]["content"][1]["required"] = json!(true);
+    composer["model"]["sections"][2]["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "hidden_serial",
+            "type": "simple",
+            "required": true,
+            "hidden": true
+        }));
+    let mut delivery = delivery_fixture();
+    delivery["context"]["meetup"] = json!(true);
+    let workflow = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, composer),
+            response(200, delivery),
+            category_taxonomy("258", true),
+        ])),
+        config(),
+    );
+
+    let report = workflow.validate("46000000").await.unwrap();
+
+    assert!(!report.ready);
+    assert_eq!(report.missing.len(), 1);
+    assert_eq!(report.missing[0].field, "condition");
+    assert_eq!(report.missing[0].source, "listing_composer");
+}
+
+#[tokio::test]
+async fn validate_distinguishes_giveaway_sale_delivery_and_image_states() {
+    let mut giveaway_values = publication_values();
+    giveaway_values["trade_type"] = json!("give_away");
+    giveaway_values.as_object_mut().unwrap().remove("price");
+    let giveaway = draft(
+        "one",
+        json!({
+            "values": giveaway_values,
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        }),
+    );
+    let report = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, giveaway),
+            response(200, delivery_page(Some("pickup"))),
+            category_taxonomy("furniture/chairs", true),
+        ])),
+        config(),
+    )
+    .validate("draft-1")
+    .await
+    .unwrap();
+    assert!(report.ready);
+
+    let mut sale_values = publication_values();
+    sale_values.as_object_mut().unwrap().remove("price");
+    let sale = draft(
+        "one",
+        json!({
+            "values": sale_values,
+            "images": [{ "image_id": "image-1", "position": 0, "state": "processing" }]
+        }),
+    );
+    let report = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, sale),
+            response(200, delivery_page(None)),
+            category_taxonomy("furniture/chairs", true),
+        ])),
+        config(),
+    )
+    .validate("draft-1")
+    .await
+    .unwrap();
+    assert!(report.missing.iter().any(|issue| issue.field == "price"));
+    assert!(report.missing.iter().any(|issue| issue.field == "delivery"));
+    assert!(report.pending.iter().any(|issue| issue.field == "images"));
+    for issue in report.missing.iter().chain(&report.pending) {
+        assert!(!issue.reason.is_empty());
+        assert!(!issue.source.is_empty());
+        assert!(issue.command.starts_with("flea "));
+    }
+}
+
+#[tokio::test]
+async fn validate_separates_missing_pending_and_rejected_images() {
+    for (images, status) in [
+        (json!([]), "missing"),
+        (
+            json!([{ "image_id": "image-1", "position": 0, "state": "processing" }]),
+            "pending",
+        ),
+        (
+            json!([{ "image_id": "image-1", "position": 0, "state": "failed" }]),
+            "invalid",
+        ),
+    ] {
+        let state = draft(
+            "one",
+            json!({ "values": publication_values(), "images": images }),
+        );
+        let report = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new([
+                response(200, state),
+                response(200, delivery_page(Some("pickup"))),
+                category_taxonomy("furniture/chairs", true),
+            ])),
+            config(),
+        )
+        .validate("draft-1")
+        .await
+        .unwrap();
+        let value = serde_json::to_value(report).unwrap();
+        assert_eq!(value[status][0]["field"], "images");
+    }
+}
+
+#[tokio::test]
+async fn validate_reports_unselectable_and_unavailable_authoritative_models() {
+    let state = draft(
+        "one",
+        json!({
+            "values": publication_values(),
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        }),
+    );
+    let report = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, state.clone()),
+            response(200, delivery_page(Some("pickup"))),
+            category_taxonomy("furniture/chairs", false),
+        ])),
+        config(),
+    )
+    .validate("draft-1")
+    .await
+    .unwrap();
+    assert_eq!(report.invalid[0].field, "category");
+    assert_eq!(report.invalid[0].source, "category_taxonomy");
+
+    let report = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, state),
+            response(503, json!({ "message": "delivery unavailable" })),
+            response(503, json!({ "message": "taxonomy unavailable" })),
+        ])),
+        config(),
+    )
+    .validate("draft-1")
+    .await
+    .unwrap();
+    assert!(
+        report
+            .unverifiable
+            .iter()
+            .any(|issue| issue.field == "category")
+    );
+    assert!(
+        report
+            .unverifiable
+            .iter()
+            .any(|issue| issue.field == "delivery")
+    );
+}
+
+#[tokio::test]
+async fn validate_marks_unavailable_and_malformed_models_unverifiable() {
+    for model in [Value::Null, json!({ "sections": "invalid" })] {
+        let mut values = publication_values();
+        values["multi_image"] = json!([{
+            "url": "https://img.tori.net/dynamic/default/image-1.jpg",
+            "width": 640,
+            "height": 480,
+            "type": "image/jpeg"
+        }]);
+        let source = json!({
+            "ad": {
+                "id": "draft-1",
+                "etag": "one",
+                "values": values,
+                "meta-data": {},
+                "locked-fields": []
+            },
+            "model": model
+        });
+        let report = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new([
+                response(200, source),
+                response(200, delivery_page(Some("pickup"))),
+                category_taxonomy("furniture/chairs", true),
+            ])),
+            config(),
+        )
+        .validate("draft-1")
+        .await
+        .unwrap();
+        assert!(!report.ready);
+        assert_eq!(report.unverifiable[0].field, "composer_model");
+        assert_eq!(report.unverifiable[0].source, "listing_composer");
+    }
+}
+
+#[tokio::test]
 async fn publish_runs_the_complete_bounded_sequence() {
     let transport = FixtureTransport::new(successful_publish_responses());
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
@@ -1679,6 +1936,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
         [
             "fetch_draft",
             "fetch_delivery_options",
+            "fetch_category_taxonomy",
             "validate",
             "wait_for_images",
             "patch_item_fields",
@@ -1696,7 +1954,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
     assert!(published.warnings.is_empty());
 
     let requests = transport.requests();
-    assert_eq!(requests.len(), 12);
+    assert_eq!(requests.len(), 13);
     let observed_sequence = requests
         .iter()
         .map(|request| (request.method.clone(), request.path.as_str()))
@@ -1706,6 +1964,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
         [
             (Method::Get, "/adinput/ad/withModel/draft-1"),
             (Method::Get, "/ui/addelivery?adId=draft-1&editMode=false"),
+            (Method::Get, "/categories/taxonomy"),
             (Method::Put, "/adinput/ad/recommerce/draft-1/update"),
             (Method::Get, "/adinput/ad/withModel/draft-1"),
             (Method::Put, "/drafts/draft-1/adinput"),
@@ -1719,7 +1978,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
         ]
     );
     assert_eq!(
-        requests[5].body,
+        requests[6].body,
         RequestBody::Json(json!({
             "meetup": true,
             "shipping": false,
@@ -1728,12 +1987,12 @@ async fn publish_runs_the_complete_bounded_sequence() {
             "buyNow": false
         }))
     );
-    let RequestBody::Json(item_values) = &requests[2].body else {
+    let RequestBody::Json(item_values) = &requests[3].body else {
         panic!("expected item update")
     };
     assert!(item_values.get("delivery").is_none());
     assert_eq!(
-        requests[8].body,
+        requests[9].body,
         RequestBody::Json(json!({
             "package": "basic",
             "revision": "revision-7",
@@ -1749,51 +2008,78 @@ async fn publish_runs_the_complete_bounded_sequence() {
 }
 
 #[tokio::test]
+async fn publish_waits_for_processing_images_and_reuses_the_validation_engine() {
+    let mut responses = successful_publish_responses();
+    responses[0].body["images"][0]["state"] = json!("processing");
+    let mut ready = responses[0].body.clone();
+    ready["images"][0]["state"] = json!("ready");
+    responses.insert(3, response(200, ready));
+    let transport = FixtureTransport::new(responses);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let published = workflow.publish("draft-1").await.unwrap();
+
+    assert_eq!(published.listing_id, "listing-9");
+    assert_eq!(transport.requests()[3].method, Method::Get);
+}
+
+#[tokio::test]
 async fn publish_validation_rejects_missing_fields_and_missing_delivery() {
+    let mut missing_title_values = publication_values();
+    missing_title_values
+        .as_object_mut()
+        .unwrap()
+        .remove("title");
     let missing_title = draft(
         "one",
         json!({
-            "values": {},
+            "values": missing_title_values,
             "required_fields": ["title", "delivery"],
-            "images": []
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
         }),
     );
     let workflow = DraftWorkflow::new(
         HttpAdInputApi::new(FixtureTransport::new([
             response(200, missing_title),
             response(200, delivery_page(Some("pickup"))),
+            category_taxonomy("furniture/chairs", true),
         ])),
         config(),
     );
     let error = workflow.publish("draft-1").await.unwrap_err();
     assert_eq!(error.code, "draft.validation_failed");
-    assert_eq!(error.details.unwrap()["missing_fields"], json!(["title"]));
+    assert_eq!(error.details.unwrap()["missing"][0]["field"], "title");
     assert_eq!(
         error.recovery.unwrap().completed_steps,
-        ["fetch_draft", "fetch_delivery_options"]
+        [
+            "fetch_draft",
+            "fetch_delivery_options",
+            "fetch_category_taxonomy"
+        ]
     );
 
     let no_delivery = draft(
         "one",
         json!({
-            "values": { "title": "Chair" },
+            "values": publication_values(),
             "required_fields": ["title", "delivery"],
-            "images": []
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
         }),
     );
     let workflow = DraftWorkflow::new(
         HttpAdInputApi::new(FixtureTransport::new([
             response(200, no_delivery),
             response(200, delivery_page(None)),
+            category_taxonomy("furniture/chairs", true),
         ])),
         config(),
     );
     let error = workflow.publish("draft-1").await.unwrap_err();
     assert_eq!(error.code, "draft.validation_failed");
-    assert_eq!(error.details.unwrap()["allowed_values"][0], "pickup");
+    assert_eq!(error.details.unwrap()["missing"][0]["field"], "delivery");
     assert_eq!(
         error.recovery.unwrap().next_safe_actions[0],
-        "flea draft update draft-1 --delivery pickup"
+        "flea draft update draft-1 --delivery VALUE"
     );
 }
 
@@ -1802,7 +2088,7 @@ async fn publish_reports_failed_image_and_preserves_its_identity() {
     let failed = draft(
         "one",
         json!({
-            "values": { "title": "Chair", "delivery": ["pickup"] },
+            "values": publication_values(),
             "required_fields": ["title", "delivery"],
             "images": [{
                 "image_id": "image-broken",
@@ -1815,19 +2101,21 @@ async fn publish_reports_failed_image_and_preserves_its_identity() {
     let transport = FixtureTransport::new([
         response(200, failed),
         response(200, delivery_page(Some("pickup"))),
+        category_taxonomy("furniture/chairs", true),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
 
     let error = workflow.publish("draft-1").await.unwrap_err();
 
-    assert_eq!(error.code, "draft.image_failed");
-    assert_eq!(
-        error.source.unwrap().details.unwrap()["image_id"],
-        "image-broken"
-    );
+    assert_eq!(error.code, "draft.validation_failed");
+    assert_eq!(error.details.unwrap()["invalid"][0]["field"], "images");
     assert_eq!(
         error.recovery.unwrap().completed_steps,
-        ["fetch_draft", "fetch_delivery_options", "validate"]
+        [
+            "fetch_draft",
+            "fetch_delivery_options",
+            "fetch_category_taxonomy"
+        ]
     );
 }
 
@@ -1835,25 +2123,14 @@ async fn publish_reports_failed_image_and_preserves_its_identity() {
 async fn publish_failures_report_each_completed_workflow_boundary() {
     let cases = [
         (0, &[][..], true),
-        (1, &["fetch_draft"][..], true),
-        (
-            2,
-            &[
-                "fetch_draft",
-                "fetch_delivery_options",
-                "validate",
-                "wait_for_images",
-            ][..],
-            false,
-        ),
         (
             3,
             &[
                 "fetch_draft",
                 "fetch_delivery_options",
+                "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
-                "patch_item_fields",
             ][..],
             false,
         ),
@@ -1862,10 +2139,10 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             &[
                 "fetch_draft",
                 "fetch_delivery_options",
+                "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
-                "fetch_fresh_etag",
             ][..],
             false,
         ),
@@ -1874,11 +2151,11 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             &[
                 "fetch_draft",
                 "fetch_delivery_options",
+                "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
                 "fetch_fresh_etag",
-                "submit_adinput",
             ][..],
             false,
         ),
@@ -1887,12 +2164,12 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             &[
                 "fetch_draft",
                 "fetch_delivery_options",
+                "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
                 "fetch_fresh_etag",
                 "submit_adinput",
-                "apply_delivery",
             ][..],
             false,
         ),
@@ -1901,13 +2178,13 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             &[
                 "fetch_draft",
                 "fetch_delivery_options",
+                "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
                 "fetch_fresh_etag",
                 "submit_adinput",
                 "apply_delivery",
-                "observe_delivery",
             ][..],
             false,
         ),
@@ -1916,6 +2193,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             &[
                 "fetch_draft",
                 "fetch_delivery_options",
+                "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
@@ -1923,15 +2201,15 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "submit_adinput",
                 "apply_delivery",
                 "observe_delivery",
-                "fetch_product_context",
             ][..],
             false,
         ),
         (
-            11,
+            12,
             &[
                 "fetch_draft",
                 "fetch_delivery_options",
+                "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
@@ -1967,7 +2245,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             recovery.safe_to_retry, safe_to_retry,
             "failure index {failure_index}"
         );
-        if failure_index == 11 {
+        if failure_index == 12 {
             assert_eq!(
                 error.details.unwrap()["listing_id"],
                 "listing-9",
@@ -1983,8 +2261,8 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
 #[tokio::test]
 async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
     let mut confirmation_failure = successful_publish_responses();
-    confirmation_failure[9] = response(503, json!({ "message": "confirmation unavailable" }));
-    confirmation_failure.remove(10);
+    confirmation_failure[10] = response(503, json!({ "message": "confirmation unavailable" }));
+    confirmation_failure.remove(11);
     let result = DraftWorkflow::new(
         HttpAdInputApi::new(FixtureTransport::new(confirmation_failure)),
         config(),
@@ -2002,7 +2280,7 @@ async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
     );
 
     let mut tracking_failure = successful_publish_responses();
-    tracking_failure[10] = response(503, json!({ "message": "tracking unavailable" }));
+    tracking_failure[11] = response(503, json!({ "message": "tracking unavailable" }));
     let result = DraftWorkflow::new(
         HttpAdInputApi::new(FixtureTransport::new(tracking_failure)),
         config(),
@@ -2093,7 +2371,7 @@ async fn publish_timeout_bounds_a_hung_poll_request() {
     let processing = draft(
         "one",
         json!({
-            "values": { "title": "Chair", "delivery": ["pickup"] },
+            "values": publication_values(),
             "required_fields": ["title", "delivery"],
             "images": [{ "image_id": "image-1", "position": 0, "state": "processing" }]
         }),
@@ -2103,6 +2381,7 @@ async fn publish_timeout_bounds_a_hung_poll_request() {
             responses: Mutex::new(VecDeque::from([
                 response(200, processing),
                 response(200, delivery_page(Some("pickup"))),
+                category_taxonomy("furniture/chairs", true),
             ])),
         }),
         WorkflowConfig {
@@ -2128,7 +2407,7 @@ async fn publish_timeout_is_bounded_and_recoverable() {
     let processing = draft(
         "one",
         json!({
-            "values": { "title": "Chair", "delivery": ["pickup"] },
+            "values": publication_values(),
             "required_fields": ["title", "delivery"],
             "images": [{ "image_id": "image-1", "position": 0, "state": "processing" }]
         }),
@@ -2136,6 +2415,7 @@ async fn publish_timeout_is_bounded_and_recoverable() {
     let transport = FixtureTransport::new([
         response(200, processing.clone()),
         response(200, delivery_page(Some("pickup"))),
+        category_taxonomy("furniture/chairs", true),
         response(200, processing.clone()),
         response(200, processing),
     ]);
@@ -2149,7 +2429,12 @@ async fn publish_timeout_is_bounded_and_recoverable() {
     assert!(recovery.safe_to_retry);
     assert_eq!(
         recovery.completed_steps,
-        ["fetch_draft", "fetch_delivery_options", "validate"]
+        [
+            "fetch_draft",
+            "fetch_delivery_options",
+            "fetch_category_taxonomy",
+            "validate"
+        ]
     );
     assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
 }
@@ -2264,17 +2549,17 @@ async fn publish_validates_the_same_source_observed_model_as_show() {
     let transport = FixtureTransport::new([
         response(200, composer_fixture()),
         response(200, delivery_fixture()),
+        category_taxonomy("258", true),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
     let error = workflow.publish("46000000").await.unwrap_err();
 
     assert_eq!(error.code, "draft.validation_failed");
-    assert_eq!(
-        error.details.unwrap()["missing_fields"],
-        json!(["delivery"])
-    );
-    assert_eq!(transport.requests().len(), 2);
+    let details = error.details.unwrap();
+    assert_eq!(details["missing"][0]["field"], "delivery");
+    assert_eq!(details["missing"][1]["field"], "images");
+    assert_eq!(transport.requests().len(), 3);
     assert!(
         transport
             .requests()

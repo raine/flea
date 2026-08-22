@@ -129,10 +129,11 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(item.contains("--raw"));
 
     let draft = stdout(&invoke(&["draft", "--help"]));
-    assert!(draft.contains("create   Create a remote draft"));
-    assert!(draft.contains("preview  Preview and validate draft input locally"));
-    assert!(draft.contains("image    Manage draft images"));
-    assert!(draft.contains("publish  Publish a remote draft"));
+    assert!(draft.contains("create    Create a remote draft"));
+    assert!(draft.contains("preview   Preview and validate draft input locally"));
+    assert!(draft.contains("image     Manage draft images"));
+    assert!(draft.contains("validate  Validate publication readiness"));
+    assert!(draft.contains("publish   Publish a remote draft"));
 
     let create = stdout(&invoke(&["draft", "create", "--help"]));
     assert!(create.contains("--from-listing <FROM_LISTING>"));

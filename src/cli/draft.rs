@@ -132,6 +132,14 @@ pub enum DraftCommand {
     )]
     Image(ImageArgs),
     #[command(
+        about = "Validate publication readiness",
+        long_about = "Check the latest remote draft, listing-composer requirements, category, delivery, and images without changing remote state."
+    )]
+    Validate {
+        /// Tori draft identifier.
+        draft_id: String,
+    },
+    #[command(
         about = "Publish a remote draft",
         long_about = "Validate the latest remote draft, wait for image processing, and publish it with the free Basic package."
     )]
@@ -549,6 +557,10 @@ pub async fn execute<A: AdInputApi>(
                 .map_err(workflow_error)?,
         )
         .map_err(|error| AppError::output(error.to_string())),
+        DraftCommand::Validate { draft_id } => {
+            serde_json::to_value(workflow.validate(&draft_id).await.map_err(workflow_error)?)
+                .map_err(|error| AppError::output(error.to_string()))
+        }
         DraftCommand::Publish { draft_id } => {
             serde_json::to_value(workflow.publish(&draft_id).await.map_err(workflow_error)?)
                 .map_err(|error| AppError::output(error.to_string()))

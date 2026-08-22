@@ -22,7 +22,7 @@ use crate::{
     },
     diagnostics,
     domain::field::{
-        Field, FieldType, Requirement, UpstreamValidationError, ValidationIssue,
+        Field, FieldStatus, FieldType, Requirement, UpstreamValidationError, ValidationIssue,
         map_validation_errors, stable_field_key,
     },
     retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},
@@ -376,6 +376,8 @@ fn service_for_path(path: &str) -> &'static str {
         ""
     } else if path.starts_with("/ui/addelivery") || path.contains("/delivery") {
         compatibility::SERVICE_DELIVERY
+    } else if path == "/categories/taxonomy" {
+        compatibility::SERVICE_ITEM_CREATION
     } else if path.contains("/products") || path.contains("/publish") {
         compatibility::SERVICE_ORDER_PAYMENT
     } else if path.contains("/tracking/") {
@@ -478,6 +480,48 @@ impl fmt::Debug for DeliveryComposer {
             .field("source", &"[REDACTED]")
             .finish()
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ComposerModelStatus {
+    #[default]
+    Available,
+    Unavailable,
+    Malformed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PublicationDraftState {
+    pub draft: DraftState,
+    pub composer_model: ComposerModelStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PublicationCategory {
+    pub category_id: String,
+    pub selectable: bool,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct PublicationRequirement {
+    pub field: String,
+    pub reason: String,
+    pub source: String,
+    pub command: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PublicationValidation {
+    pub draft_id: String,
+    pub ready: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub missing: Vec<PublicationRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub invalid: Vec<PublicationRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending: Vec<PublicationRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unverifiable: Vec<PublicationRequirement>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -599,6 +643,14 @@ pub struct Confirmation {
 pub trait AdInputApi: Send + Sync {
     async fn create_draft(&self) -> Result<DraftState, ApiError>;
     async fn get_draft(&self, draft_id: &str) -> Result<DraftState, ApiError>;
+    async fn publication_draft(&self, draft_id: &str) -> Result<PublicationDraftState, ApiError> {
+        self.get_draft(draft_id)
+            .await
+            .map(|draft| PublicationDraftState {
+                draft,
+                composer_model: ComposerModelStatus::Available,
+            })
+    }
     async fn update_item(
         &self,
         draft_id: &str,
@@ -637,6 +689,7 @@ pub trait AdInputApi: Send + Sync {
         &self,
         draft_id: &str,
     ) -> Result<Vec<CategoryPrediction>, ApiError>;
+    async fn publication_categories(&self) -> Result<Vec<PublicationCategory>, ApiError>;
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError>;
     async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError>;
     async fn apply_delivery(
@@ -795,6 +848,19 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             true,
         )
         .await
+    }
+
+    async fn publication_draft(&self, draft_id: &str) -> Result<PublicationDraftState, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
+        let response = self
+            .json(HttpRequest::read(format!(
+                "/adinput/ad/withModel/{draft_id}"
+            )))
+            .await?;
+        if response.body_is_unparseable {
+            return Err(malformed_read_response("publication_draft"));
+        }
+        normalize_publication_draft(response.body, response.etag.as_deref())
     }
 
     async fn update_item(
@@ -982,6 +1048,11 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             .await?;
         serde_json::from_value(response.body)
             .map_err(|_| malformed_read_response("category_predictions"))
+    }
+
+    async fn publication_categories(&self) -> Result<Vec<PublicationCategory>, ApiError> {
+        let response = self.json(HttpRequest::read("/categories/taxonomy")).await?;
+        normalize_publication_categories(&response.body)
     }
 
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
@@ -1390,17 +1461,15 @@ fn normalize_delivery_composer(
         .get("head")
         .and_then(Value::as_object)
         .and_then(|head| head.get("title"))
-    {
-        if title
+        && title
             .as_str()
             .is_none_or(|title| !safe_display_string(title))
-        {
-            return Err(model_error(
-                "delivery_composer",
-                "$.sections.head.title",
-                "delivery field label is unavailable or unsafe",
-            ));
-        }
+    {
+        return Err(model_error(
+            "delivery_composer",
+            "$.sections.head.title",
+            "delivery field label is unavailable or unsafe",
+        ));
     }
     let delivery_options = sections
         .get("deliveryOptions")
@@ -1863,6 +1932,112 @@ fn normalize_authoritative_draft_state(
     normalize_draft_state(body, response_etag)
 }
 
+fn normalize_publication_draft(
+    body: Value,
+    response_etag: Option<&str>,
+) -> Result<PublicationDraftState, ApiError> {
+    let composer_model = publication_composer_status(&body);
+    match normalize_authoritative_draft_state(body.clone(), response_etag) {
+        Ok(draft) => Ok(PublicationDraftState {
+            draft,
+            composer_model,
+        }),
+        Err(error)
+            if composer_model != ComposerModelStatus::Available
+                || error
+                    .details
+                    .as_deref()
+                    .and_then(|details| details.get("path"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| path.starts_with("$.model")) =>
+        {
+            publication_draft_without_model(body, response_etag).map(|draft| {
+                PublicationDraftState {
+                    draft,
+                    composer_model: if composer_model == ComposerModelStatus::Available {
+                        ComposerModelStatus::Malformed
+                    } else {
+                        composer_model
+                    },
+                }
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn publication_composer_status(body: &Value) -> ComposerModelStatus {
+    if body.get("draft_id").is_some()
+        && ["fields", "options", "required_fields"]
+            .into_iter()
+            .all(|key| body.get(key).and_then(Value::as_array).is_some())
+    {
+        return ComposerModelStatus::Available;
+    }
+    let Some(model) = body.get("model").filter(|model| !model.is_null()) else {
+        return ComposerModelStatus::Unavailable;
+    };
+    let Some(model) = model.as_object() else {
+        return ComposerModelStatus::Malformed;
+    };
+    match model.get("sections") {
+        Some(Value::Array(sections)) if !sections.is_empty() => ComposerModelStatus::Available,
+        Some(Value::Array(_)) | None | Some(Value::Null) => ComposerModelStatus::Unavailable,
+        Some(_) => ComposerModelStatus::Malformed,
+    }
+}
+
+fn publication_draft_without_model(
+    body: Value,
+    response_etag: Option<&str>,
+) -> Result<DraftState, ApiError> {
+    if body.get("draft_id").is_some() {
+        return normalize_draft_state(body, response_etag);
+    }
+    let draft_id = draft_id_from_body(&body).ok_or_else(|| {
+        model_error(
+            "publication_validation",
+            "$",
+            "draft response did not contain an authoritative identity",
+        )
+    })?;
+    let ad = body
+        .get("ad")
+        .and_then(Value::as_object)
+        .ok_or_else(|| model_error("publication_validation", "$.ad", "ad data is unavailable"))?;
+    let values = normalize_draft_values(
+        ad.get("values")
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or_else(|| {
+                model_error(
+                    "publication_validation",
+                    "$.ad.values",
+                    "draft values are unavailable or unrecognized",
+                )
+            })?,
+    )?;
+    let etag = response_etag
+        .or_else(|| ad.get("etag").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_owned();
+    let revision = extract_revision(ad, &values, &etag).ok();
+    let images = normalize_draft_images(&values)?;
+    Ok(DraftState {
+        draft_id,
+        etag,
+        revision,
+        values,
+        fields: Vec::new(),
+        options: Vec::new(),
+        required_fields: Vec::new(),
+        images,
+        cleared_fields: Vec::new(),
+        predictions: Vec::new(),
+        delivery: None,
+    })
+}
+
 fn normalize_source_draft_state(
     body: Value,
     response_etag: Option<&str>,
@@ -2157,6 +2332,17 @@ fn widget_is_applicable(
     values: &Map<String, Value>,
     path: &str,
 ) -> Result<bool, ApiError> {
+    match widget.get("hidden") {
+        Some(Value::Bool(true)) => return Ok(false),
+        Some(Value::Bool(false)) | None => {}
+        Some(_) => {
+            return Err(model_error(
+                "listing_composer",
+                &format!("{path}.hidden"),
+                "hidden state must be a boolean",
+            ));
+        }
+    }
     if let Some(dependencies) = widget.get("dependencies") {
         let dependencies = dependencies.as_array().ok_or_else(|| {
             model_error(
@@ -2721,6 +2907,63 @@ fn attach_delivery_model(
     Ok(())
 }
 
+fn normalize_publication_categories(body: &Value) -> Result<Vec<PublicationCategory>, ApiError> {
+    let roots = body
+        .get("categories")
+        .and_then(Value::as_array)
+        .ok_or_else(category_model_error)?;
+    let mut categories = Vec::new();
+    let mut seen = BTreeSet::new();
+    for root in roots {
+        normalize_publication_category(root, &mut seen, &mut categories)?;
+    }
+    if categories.is_empty() {
+        return Err(category_model_error());
+    }
+    categories.sort_by(|left, right| left.category_id.cmp(&right.category_id));
+    Ok(categories)
+}
+
+fn normalize_publication_category(
+    category: &Value,
+    seen: &mut BTreeSet<String>,
+    output: &mut Vec<PublicationCategory>,
+) -> Result<(), ApiError> {
+    let category = category.as_object().ok_or_else(category_model_error)?;
+    let category_id = category
+        .get("id")
+        .or_else(|| category.get("category_id"))
+        .and_then(publication_scalar_string)
+        .ok_or_else(category_model_error)?;
+    if !seen.insert(category_id.clone()) {
+        return Err(category_model_error());
+    }
+    let children: &[Value] = match category.get("children") {
+        Some(children) => children.as_array().ok_or_else(category_model_error)?,
+        None => &[],
+    };
+    let selectable = match category
+        .get("selectable")
+        .or_else(|| category.get("isSelectable"))
+    {
+        Some(Value::Bool(selectable)) => *selectable,
+        Some(_) => return Err(category_model_error()),
+        None => children.is_empty(),
+    };
+    output.push(PublicationCategory {
+        category_id,
+        selectable,
+    });
+    for child in children {
+        normalize_publication_category(child, seen, output)?;
+    }
+    Ok(())
+}
+
+fn category_model_error() -> ApiError {
+    malformed_read_response("publication_category_taxonomy")
+}
+
 fn model_error(stage: &str, path: &str, reason: &str) -> ApiError {
     let mut error = ApiError::new(
         "upstream.unrecognized_model",
@@ -2900,13 +3143,25 @@ impl WorkflowError {
         }
     }
 
-    fn validation(draft_id: &str, completed_steps: &[String], missing: Vec<String>) -> Self {
+    fn validation(completed_steps: &[String], report: PublicationValidation) -> Self {
+        let repeatable = !report.pending.is_empty() || !report.unverifiable.is_empty();
+        let next_safe_actions = report
+            .missing
+            .iter()
+            .chain(&report.invalid)
+            .chain(&report.pending)
+            .chain(&report.unverifiable)
+            .map(|requirement| requirement.command.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let details = serde_json::to_value(&report).ok();
         Self {
             code: "draft.validation_failed".to_owned(),
-            message: "Required fields are missing or invalid".to_owned(),
+            message: "The draft is not ready for publication".to_owned(),
             source: None,
             recovery: Some(Recovery {
-                draft_id: draft_id.to_owned(),
+                draft_id: report.draft_id,
                 listing_id: None,
                 completed_steps: completed_steps.to_vec(),
                 active_step: None,
@@ -2916,12 +3171,12 @@ impl WorkflowError {
                 indeterminate_fields: Vec::new(),
                 unattempted_fields: Vec::new(),
                 manual_inspection_required: false,
-                upstream_transient: false,
-                safe_to_retry: false,
-                next_safe_actions: vec![format!("flea draft update {draft_id} --input PATH")],
+                upstream_transient: repeatable,
+                safe_to_retry: repeatable,
+                next_safe_actions,
                 fresh_state: None,
             }),
-            details: Some(json!({ "missing_fields": missing })),
+            details,
         }
     }
 
@@ -3268,6 +3523,7 @@ fn retry_field_action(draft_id: &str, fields: &[String]) -> String {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn field_recovery(
     draft_id: &str,
     completed_steps: &[String],
@@ -3669,6 +3925,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn observed_field_error(
         &self,
         draft_before: &DraftState,
@@ -3726,6 +3983,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn unavailable_field_observation(
         &self,
         draft: &DraftState,
@@ -4434,6 +4692,26 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         Ok(state)
     }
 
+    pub async fn validate(&self, draft_id: &str) -> Result<PublicationValidation, WorkflowError> {
+        let publication = self
+            .api
+            .publication_draft(draft_id)
+            .await
+            .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
+        let mut state = publication.draft;
+        let delivery_verifiable = match self.api.delivery_composer(draft_id).await {
+            Ok(composer) => attach_delivery_model(&mut state, &composer).is_ok(),
+            Err(_) => false,
+        };
+        let categories = self.api.publication_categories().await.ok();
+        Ok(evaluate_publication(
+            &state,
+            categories.as_deref(),
+            publication.composer_model,
+            delivery_verifiable,
+        ))
+    }
+
     pub async fn update(
         &self,
         draft_id: &str,
@@ -4603,45 +4881,63 @@ impl<A: AdInputApi> DraftWorkflow<A> {
 
     pub async fn publish(&self, draft_id: &str) -> Result<PublishResult, WorkflowError> {
         let mut completed = Vec::new();
-        let mut state = self
+        let publication = self
             .api
-            .get_draft(draft_id)
+            .publication_draft(draft_id)
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
+        let composer_model = publication.composer_model;
+        let mut state = publication.draft;
         completed.push("fetch_draft".to_owned());
-        let composer = self.delivery_composer(draft_id, &completed).await?;
-        completed.push("fetch_delivery_options".to_owned());
-        attach_delivery_model(&mut state, &composer)
-            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?;
 
-        let missing = missing_required_fields(&state);
-        if !missing.is_empty() {
-            return Err(WorkflowError::validation(draft_id, &completed, missing));
+        let composer = self.api.delivery_composer(draft_id).await.ok();
+        let mut delivery_verifiable = match composer.as_ref() {
+            Some(composer) if attach_delivery_model(&mut state, composer).is_ok() => {
+                completed.push("fetch_delivery_options".to_owned());
+                true
+            }
+            _ => false,
+        };
+        let categories = self.api.publication_categories().await.ok();
+        if categories.is_some() {
+            completed.push("fetch_category_taxonomy".to_owned());
         }
-        let requested_delivery = composer.state.selected.clone();
-        let delivery = requested_delivery
-            .first()
-            .filter(|_| requested_delivery.len() == 1)
-            .filter(|requested| {
-                composer
-                    .state
-                    .options
-                    .iter()
-                    .any(|option| option.value.as_str() == requested.as_str())
-            })
-            .cloned()
-            .ok_or_else(|| {
-                WorkflowError::delivery_validation(
-                    draft_id,
-                    &completed,
-                    &composer.state,
-                    requested_delivery,
-                )
-            })?;
+        let report = evaluate_publication(
+            &state,
+            categories.as_deref(),
+            composer_model,
+            delivery_verifiable,
+        );
+        if !report.missing.is_empty()
+            || !report.invalid.is_empty()
+            || !report.unverifiable.is_empty()
+        {
+            return Err(WorkflowError::validation(&completed, report));
+        }
         completed.push("validate".to_owned());
 
         state = self.wait_for_images(state, &completed).await?;
         completed.push("wait_for_images".to_owned());
+        if delivery_verifiable && state.delivery.is_none() {
+            delivery_verifiable = composer
+                .as_ref()
+                .is_some_and(|composer| attach_delivery_model(&mut state, composer).is_ok());
+        }
+        let report = evaluate_publication(
+            &state,
+            categories.as_deref(),
+            composer_model,
+            delivery_verifiable,
+        );
+        if !report.ready {
+            return Err(WorkflowError::validation(&completed, report));
+        }
+        let composer = composer.expect("ready publication has a delivery composer");
+        let requested_delivery = composer.state.selected.clone();
+        let delivery = requested_delivery
+            .first()
+            .expect("ready publication has one delivery selection")
+            .clone();
 
         state.values.remove("delivery");
         self.api
@@ -4760,26 +5056,11 @@ impl<A: AdInputApi> DraftWorkflow<A> {
     ) -> Result<DraftState, WorkflowError> {
         let started = tokio::time::Instant::now();
         for poll in 0..=self.config.image_poll_limit {
-            if let Some(image) = state
-                .images
-                .iter()
-                .find(|image| image.state == ImageState::Failed)
-            {
-                let mut error = ApiError::new("draft.image_failed", "An image failed processing");
-                error.details = Some(Box::new(
-                    json!({ "image_id": image.image_id, "failure": image.failure }),
-                ));
-                return Err(WorkflowError::for_draft(
-                    &state.draft_id,
-                    completed,
-                    error,
-                    false,
-                ));
-            }
-            if state
-                .images
-                .iter()
-                .all(|image| image.state == ImageState::Ready)
+            if !state.images.is_empty()
+                && state
+                    .images
+                    .iter()
+                    .all(|image| image.state != ImageState::Processing)
             {
                 return Ok(state);
             }
@@ -5122,26 +5403,502 @@ fn uploaded_from_draft_image(image: &DraftImage) -> UploadedImage {
     }
 }
 
-fn missing_required_fields(state: &DraftState) -> Vec<String> {
-    state
-        .required_fields
-        .iter()
-        .filter(|key| key.as_str() != "delivery")
-        .filter(|key| {
-            state
-                .values
-                .get(*key)
-                .or_else(|| {
-                    state
-                        .fields
+pub fn evaluate_publication(
+    state: &DraftState,
+    categories: Option<&[PublicationCategory]>,
+    composer_model: ComposerModelStatus,
+    delivery_verifiable: bool,
+) -> PublicationValidation {
+    let mut report = PublicationValidation {
+        draft_id: state.draft_id.clone(),
+        ready: false,
+        missing: Vec::new(),
+        invalid: Vec::new(),
+        pending: Vec::new(),
+        unverifiable: Vec::new(),
+    };
+    validate_publication_core(state, categories, delivery_verifiable, &mut report);
+    validate_publication_composer(state, composer_model, &mut report);
+    validate_publication_images(state, &mut report);
+    for requirements in [
+        &mut report.missing,
+        &mut report.invalid,
+        &mut report.pending,
+        &mut report.unverifiable,
+    ] {
+        requirements.sort();
+        requirements.dedup();
+    }
+    report.ready = report.missing.is_empty()
+        && report.invalid.is_empty()
+        && report.pending.is_empty()
+        && report.unverifiable.is_empty();
+    report
+}
+
+fn validate_publication_core(
+    state: &DraftState,
+    categories: Option<&[PublicationCategory]>,
+    delivery_verifiable: bool,
+    report: &mut PublicationValidation,
+) {
+    let category = publication_field_value(state, "category").and_then(publication_scalar_string);
+    match category {
+        None if publication_field_value(state, "category")
+            .is_none_or(publication_value_missing) =>
+        {
+            report.missing.push(publication_issue(
+                "category",
+                "a category is required for publication",
+                "publication_invariant",
+                "flea category list".to_owned(),
+            ));
+        }
+        None => report.invalid.push(publication_issue(
+            "category",
+            "the category must be a non-empty machine value",
+            "publication_invariant",
+            "flea category list".to_owned(),
+        )),
+        Some(category_id) => match categories {
+            Some(categories) => match categories
+                .iter()
+                .find(|category| category.category_id == category_id)
+            {
+                Some(category) if category.selectable => {}
+                Some(_) => report.invalid.push(publication_issue(
+                    "category",
+                    "the selected category cannot contain listings",
+                    "category_taxonomy",
+                    "flea category list".to_owned(),
+                )),
+                None => report.invalid.push(publication_issue(
+                    "category",
+                    "the selected category is absent from the current taxonomy",
+                    "category_taxonomy",
+                    "flea category list".to_owned(),
+                )),
+            },
+            None => report.unverifiable.push(publication_issue(
+                "category",
+                "category selectability could not be verified",
+                "category_taxonomy",
+                format!("flea draft validate {}", state.draft_id),
+            )),
+        },
+    }
+
+    validate_publication_text(state, "title", report);
+    validate_publication_text(state, "description", report);
+
+    let trade_type = publication_field_value(state, "trade_type");
+    let trade_type = match trade_type.and_then(Value::as_str) {
+        None if trade_type.is_none_or(publication_value_missing) => {
+            report.missing.push(publication_core_issue(
+                state,
+                "trade_type",
+                "a trade type is required for publication",
+            ));
+            None
+        }
+        Some("sell" | "SELL" | "1") => Some("sell"),
+        Some("give_away" | "GIVE_AWAY" | "2") => Some("give_away"),
+        Some("wanted" | "WANTED" | "3") => Some("wanted"),
+        _ => {
+            report.invalid.push(publication_core_issue(
+                state,
+                "trade_type",
+                "the trade type must identify a sale, give-away, or wanted listing",
+            ));
+            None
+        }
+    };
+
+    let price = publication_field_value(state, "price");
+    match trade_type {
+        Some("sell") => match price.and_then(publication_numeric_value) {
+            None if price.is_none_or(publication_value_missing) => report.missing.push(
+                publication_core_issue(state, "price", "sale listings require a price"),
+            ),
+            Some(price) if price > 0.0 => {}
+            _ => report.invalid.push(publication_core_issue(
+                state,
+                "price",
+                "a sale price must be a positive number",
+            )),
+        },
+        Some("give_away") if price.is_some_and(|price| !publication_value_missing(price)) => {
+            report.invalid.push(publication_core_issue(
+                state,
+                "price",
+                "give-away listings cannot include a sale price",
+            ));
+        }
+        Some("wanted") if price.is_some_and(|price| publication_numeric_value(price).is_none()) => {
+            report.invalid.push(publication_core_issue(
+                state,
+                "price",
+                "the price must be numeric when supplied",
+            ));
+        }
+        _ => {}
+    }
+
+    match publication_field_value(state, "postal_code") {
+        None => report.missing.push(publication_core_issue(
+            state,
+            "postal_code",
+            "a postal location is required for publication",
+        )),
+        Some(Value::String(postal_code))
+            if postal_code.len() == 5
+                && postal_code
+                    .bytes()
+                    .all(|character| character.is_ascii_digit()) => {}
+        Some(_) => report.invalid.push(publication_core_issue(
+            state,
+            "postal_code",
+            "the postal location must contain a five-digit postal code",
+        )),
+    }
+
+    if !delivery_verifiable {
+        report.unverifiable.push(publication_issue(
+            "delivery",
+            "delivery configuration could not be verified",
+            "delivery_composer",
+            format!("flea draft validate {}", state.draft_id),
+        ));
+    } else {
+        match state.delivery.as_ref() {
+            Some(delivery) if delivery.selected.is_empty() => {
+                report.missing.push(publication_core_issue(
+                    state,
+                    "delivery",
+                    "explicit delivery intent is required for publication",
+                ))
+            }
+            Some(delivery)
+                if delivery.selected.len() == 1
+                    && delivery
+                        .options
                         .iter()
-                        .find(|field| field.key == **key)
-                        .and_then(|field| field.value.as_ref())
-                })
-                .is_none_or(|value| !value_is_present(value))
-        })
-        .cloned()
-        .collect()
+                        .any(|option| option.value == delivery.selected[0]) => {}
+            Some(_) => report.invalid.push(publication_issue(
+                "delivery",
+                "the selected delivery value is unavailable or ambiguous",
+                "delivery_composer",
+                format!("flea draft show {}", state.draft_id),
+            )),
+            None => report.unverifiable.push(publication_issue(
+                "delivery",
+                "delivery configuration could not be verified",
+                "delivery_composer",
+                format!("flea draft validate {}", state.draft_id),
+            )),
+        }
+    }
+}
+
+fn validate_publication_text(state: &DraftState, field: &str, report: &mut PublicationValidation) {
+    match publication_field_value(state, field) {
+        None => report.missing.push(publication_core_issue(
+            state,
+            field,
+            &format!("a {field} is required for publication"),
+        )),
+        Some(Value::String(value)) if !value.trim().is_empty() => {}
+        Some(Value::String(_)) => report.missing.push(publication_core_issue(
+            state,
+            field,
+            &format!("a {field} is required for publication"),
+        )),
+        Some(_) => report.invalid.push(publication_core_issue(
+            state,
+            field,
+            &format!("the {field} must be text"),
+        )),
+    }
+}
+
+fn validate_publication_composer(
+    state: &DraftState,
+    composer_model: ComposerModelStatus,
+    report: &mut PublicationValidation,
+) {
+    if composer_model != ComposerModelStatus::Available {
+        let reason = match composer_model {
+            ComposerModelStatus::Unavailable => "listing-composer requirements are unavailable",
+            ComposerModelStatus::Malformed => "listing-composer requirements are malformed",
+            ComposerModelStatus::Available => unreachable!(),
+        };
+        report.unverifiable.push(publication_issue(
+            "composer_model",
+            reason,
+            "listing_composer",
+            format!("flea draft validate {}", state.draft_id),
+        ));
+        return;
+    }
+
+    for field in &state.fields {
+        let publication_field = publication_field_name(&field.key);
+        if field.requirement == Requirement::Required
+            && !publication_report_contains(report, publication_field)
+            && publication_field_value(state, publication_field)
+                .is_none_or(publication_value_missing)
+        {
+            report.missing.push(publication_issue(
+                publication_field,
+                "the selected category requires this field",
+                "listing_composer",
+                format!("flea draft show {}", state.draft_id),
+            ));
+            continue;
+        }
+        if field.status == FieldStatus::Invalid
+            && !publication_report_contains(report, publication_field)
+        {
+            report.invalid.push(publication_issue(
+                publication_field,
+                field
+                    .validation_message
+                    .as_deref()
+                    .unwrap_or("the listing composer rejected this value"),
+                "listing_composer",
+                format!("flea draft show {}", state.draft_id),
+            ));
+            continue;
+        }
+        if field.requirement == Requirement::Required
+            && matches!(field.field_type, FieldType::Unknown(_))
+            && !publication_report_contains(report, publication_field)
+        {
+            report.unverifiable.push(publication_issue(
+                publication_field,
+                "the required listing-composer field has an unknown type",
+                "listing_composer",
+                format!("flea draft show {}", state.draft_id),
+            ));
+        }
+    }
+
+    for field in &state.fields {
+        let publication_field = publication_field_name(&field.key);
+        if publication_report_contains(report, publication_field) {
+            continue;
+        }
+        let options = state
+            .options
+            .iter()
+            .filter(|option| option.field == field.key)
+            .collect::<Vec<_>>();
+        if options.is_empty() {
+            continue;
+        }
+        let Some(value) = publication_field_value(state, publication_field) else {
+            continue;
+        };
+        let valid = match value {
+            Value::Array(values) => values.iter().all(|value| {
+                options
+                    .iter()
+                    .any(|option| values_semantically_equal(value, &option.value))
+            }),
+            value => options
+                .iter()
+                .any(|option| values_semantically_equal(value, &option.value)),
+        };
+        if !valid && field.options_truncated {
+            report.unverifiable.push(publication_issue(
+                publication_field,
+                "the listing-composer options are truncated",
+                "listing_composer",
+                format!("flea draft show {}", state.draft_id),
+            ));
+        } else if !valid {
+            report.invalid.push(publication_issue(
+                publication_field,
+                "the value is not an option in the current listing composer",
+                "listing_composer",
+                format!("flea draft show {}", state.draft_id),
+            ));
+        }
+    }
+}
+
+fn validate_publication_images(state: &DraftState, report: &mut PublicationValidation) {
+    if state.images.is_empty() {
+        report.missing.push(publication_issue(
+            "images",
+            "at least one image is required for publication",
+            "publication_invariant",
+            format!("flea draft image add {} PATH", state.draft_id),
+        ));
+        return;
+    }
+    let mut images = state.images.iter().collect::<Vec<_>>();
+    images.sort_by(|left, right| {
+        left.position
+            .cmp(&right.position)
+            .then_with(|| left.image_id.cmp(&right.image_id))
+    });
+    let pending = images
+        .iter()
+        .filter(|image| image.state == ImageState::Processing)
+        .map(|image| image.image_id.as_str())
+        .collect::<Vec<_>>();
+    if !pending.is_empty() {
+        report.pending.push(publication_issue(
+            "images",
+            format!("image processing is pending: {}", pending.join(", ")),
+            "image_processing",
+            format!("flea draft validate {}", state.draft_id),
+        ));
+    }
+    let failed = images
+        .iter()
+        .filter(|image| image.state == ImageState::Failed)
+        .map(|image| image.image_id.as_str())
+        .collect::<Vec<_>>();
+    if !failed.is_empty() {
+        report.invalid.push(publication_issue(
+            "images",
+            format!("image processing rejected: {}", failed.join(", ")),
+            "image_processing",
+            format!("flea draft show {}", state.draft_id),
+        ));
+    }
+}
+
+fn publication_field_value<'a>(state: &'a DraftState, field: &str) -> Option<&'a Value> {
+    let aliases: &[&str] = match field {
+        "category" => &["category", "category_id", "categoryId"],
+        "title" => &["title", "subject", "heading"],
+        "description" => &["description", "body", "text"],
+        "trade_type" => &["trade_type", "trade-type", "tradeType"],
+        "price" => &["price", "price_amount", "price_max"],
+        "postal_code" => &[
+            "postal_code",
+            "postal-code",
+            "post-code",
+            "postcode",
+            "postalCode",
+        ],
+        "images" => &["multi_image", "multi-image", "image", "images"],
+        "delivery" => &["delivery"],
+        _ => &[],
+    };
+    if let Some(value) = aliases.iter().find_map(|alias| state.values.get(*alias)) {
+        return Some(value);
+    }
+    if let Some(value) = state.values.get(field) {
+        return Some(value);
+    }
+    if field == "postal_code"
+        && let Some(value) = publication_postal_value(state.values.get("location")?)
+    {
+        return Some(value);
+    }
+    state
+        .fields
+        .iter()
+        .find(|model_field| publication_field_name(&model_field.key) == field)
+        .and_then(|model_field| model_field.value.as_ref())
+}
+
+fn publication_postal_value(location: &Value) -> Option<&Value> {
+    let location = match location {
+        Value::Array(locations) => locations.first()?,
+        location => location,
+    };
+    let location = location.as_object()?;
+    ["postal_code", "postal-code", "postalCode"]
+        .into_iter()
+        .find_map(|key| location.get(key))
+}
+
+fn publication_field_name(field: &str) -> &str {
+    match field {
+        "subject" | "heading" => "title",
+        "body" | "text" => "description",
+        "categoryId" | "category_id" => "category",
+        "tradeType" | "trade-type" => "trade_type",
+        "price_amount" | "price_max" => "price",
+        "postalCode" | "postal-code" | "post-code" | "postcode" => "postal_code",
+        "multi_image" | "multi-image" | "image" => "images",
+        field => field,
+    }
+}
+
+fn publication_scalar_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) if !value.trim().is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn publication_value_missing(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::String(value) => value.trim().is_empty(),
+        Value::Array(values) => values.is_empty(),
+        Value::Object(values) => values.is_empty(),
+        _ => false,
+    }
+}
+
+fn publication_numeric_value(value: &Value) -> Option<f64> {
+    let value = match value {
+        Value::Number(value) => value.as_f64()?,
+        Value::String(value) => value.parse().ok()?,
+        _ => return None,
+    };
+    value.is_finite().then_some(value)
+}
+
+fn publication_issue(
+    field: impl Into<String>,
+    reason: impl Into<String>,
+    source: impl Into<String>,
+    command: String,
+) -> PublicationRequirement {
+    PublicationRequirement {
+        field: field.into(),
+        reason: reason.into(),
+        source: source.into(),
+        command,
+    }
+}
+
+fn publication_core_issue(state: &DraftState, field: &str, reason: &str) -> PublicationRequirement {
+    let option = match field {
+        "category" => "--category VALUE",
+        "title" => "--title VALUE",
+        "description" => "--description VALUE",
+        "trade_type" => "--trade-type VALUE",
+        "price" => "--price VALUE",
+        "postal_code" => "--postal-code VALUE",
+        "delivery" => "--delivery VALUE",
+        _ => "--input PATH",
+    };
+    publication_issue(
+        field,
+        reason,
+        "publication_invariant",
+        format!("flea draft update {} {option}", state.draft_id),
+    )
+}
+
+fn publication_report_contains(report: &PublicationValidation, field: &str) -> bool {
+    report
+        .missing
+        .iter()
+        .chain(&report.invalid)
+        .chain(&report.pending)
+        .chain(&report.unverifiable)
+        .any(|requirement| requirement.field == field)
 }
 
 fn delivery_values(delivery: &Value) -> Option<Vec<String>> {

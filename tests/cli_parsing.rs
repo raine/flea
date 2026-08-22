@@ -22,6 +22,7 @@ fn every_command_leaf_parses() {
         vec!["flea", "draft", "update", "draft-1", "--title", "Chair"],
         vec!["flea", "draft", "image", "add", "draft-1", "one.jpg"],
         vec!["flea", "draft", "image", "remove", "draft-1", "image-1"],
+        vec!["flea", "draft", "validate", "draft-1"],
         vec!["flea", "draft", "publish", "draft-1"],
         vec!["flea", "draft", "delete", "draft-1"],
         vec!["flea", "listing", "list"],
