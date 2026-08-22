@@ -142,8 +142,14 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(create.contains("--input <PATH>"));
     assert!(create.contains("Read listing fields from a JSON object"));
 
+    let category_search = stdout(&invoke(&["category", "search", "--help"]));
+    assert!(category_search.contains("canonical taxonomy_value"));
+    assert!(category_search.contains("`flea search --category`"));
+    assert!(category_search.contains("flea search --category 2.93.3215.8368"));
+
     let search = stdout(&invoke(&["search", "--help"]));
     assert!(search.contains("--area <PLACE,PLACE,...>"));
+    assert!(search.contains("Canonical taxonomy_value from `flea category search`"));
     assert!(search.contains("--explain <LIMIT>"));
     assert!(search.contains("at most LIMIT public item detail requests"));
     assert!(search.contains("Helsinki-area example:"));

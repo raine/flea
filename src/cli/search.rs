@@ -91,7 +91,7 @@ pub struct SearchArgs {
     /// Free-text marketplace query. May be omitted to browse filtered listings.
     pub query: Option<String>,
 
-    /// Search category machine value, such as 1.93.3217. At most 64 characters.
+    /// Canonical taxonomy_value from `flea category search`, such as 2.93.3215.8368. At most 64 characters.
     #[arg(long)]
     pub category: Option<String>,
 

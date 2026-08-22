@@ -56,14 +56,14 @@ impl PublicItemApi for ExplainItemApi {
 }
 
 #[test]
-fn exact_search_target_is_stable_encoded_and_uses_taxonomy_depth() {
+fn canonical_leaf_category_value_is_accepted_by_search() {
     let api = FixtureApi::new(empty_fixture());
     let cli = Cli::parse_from([
         "flea",
         "search",
         "kävelymatto & tuoli",
         "--category",
-        "2.93.3215.46",
+        "2.93.3215.8368",
         "--location",
         "Helsinki",
         "--price-from",
@@ -84,7 +84,7 @@ fn exact_search_target_is_stable_encoded_and_uses_taxonomy_depth() {
 
     assert_eq!(
         request.path_and_query(),
-        "/search/SEARCH_ID_BAP_COMMON?client=android&location=1.100018.110091&page=2&price_from=10&price_to=100&product_category=2.93.3215.46&q=k%C3%A4velymatto+%26+tuoli&rows=20&shipping_exists=true"
+        "/search/SEARCH_ID_BAP_COMMON?client=android&location=1.100018.110091&page=2&price_from=10&price_to=100&product_category=2.93.3215.8368&q=k%C3%A4velymatto+%26+tuoli&rows=20&shipping_exists=true"
     );
 }
 

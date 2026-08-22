@@ -858,6 +858,7 @@ fn resolve_category_context(
 fn category_search_context(category: &Category) -> CategorySearchContext {
     CategorySearchContext {
         category_id: category.category_id.clone(),
+        taxonomy_value: category.taxonomy_value.clone(),
         label: category.label.clone(),
         path: category.path.clone(),
     }
@@ -1027,6 +1028,7 @@ fn flatten_categories(roots: &[UpstreamCategory]) -> Result<Vec<Category>, Strin
         nodes: &[UpstreamCategory],
         inherited_parent: Option<&str>,
         parent_path: &str,
+        ancestor_ids: &[String],
         seen: &mut HashSet<String>,
         output: &mut Vec<Category>,
     ) -> Result<(), String> {
@@ -1050,14 +1052,25 @@ fn flatten_categories(roots: &[UpstreamCategory]) -> Result<Vec<Category>, Strin
             } else {
                 format!("{parent_path} > {}", node.label)
             };
+            let mut taxonomy_ids = ancestor_ids.to_vec();
+            taxonomy_ids.push(node.id.clone());
+            let taxonomy_value = format!("{}.{}", taxonomy_ids.len() - 1, taxonomy_ids.join("."));
             output.push(Category {
                 category_id: node.id.clone(),
+                taxonomy_value,
                 label: node.label.clone(),
                 parent_id: inherited_parent.map(ToOwned::to_owned),
                 path: path.clone(),
                 selectable: node.selectable.unwrap_or(node.children.is_empty()),
             });
-            visit(&node.children, Some(&node.id), &path, seen, output)?;
+            visit(
+                &node.children,
+                Some(&node.id),
+                &path,
+                &taxonomy_ids,
+                seen,
+                output,
+            )?;
         }
         Ok(())
     }
@@ -1066,7 +1079,7 @@ fn flatten_categories(roots: &[UpstreamCategory]) -> Result<Vec<Category>, Strin
         return Err("category taxonomy is empty".to_owned());
     }
     let mut output = Vec::new();
-    visit(roots, None, "", &mut HashSet::new(), &mut output)?;
+    visit(roots, None, "", &[], &mut HashSet::new(), &mut output)?;
     Ok(output)
 }
 

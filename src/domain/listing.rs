@@ -8,6 +8,7 @@ use super::commerce::{Price, TradeType};
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Category {
     pub category_id: String,
+    pub taxonomy_value: String,
     pub label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
@@ -23,6 +24,7 @@ pub struct CategoryList {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CategorySearchContext {
     pub category_id: String,
+    pub taxonomy_value: String,
     pub label: String,
     pub path: String,
 }

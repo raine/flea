@@ -51,9 +51,9 @@ scope and ordering. Search summaries expose `price.amount` and
 `price.currency`. Item, draft, and account-listing output also provide
 normalized `trade_type` and `price.kind`. Never parse `price.display`.
 
-Use returned `category_id` values. Refine broad category searches with
-`--parent` or `--path`, and follow pagination actions instead of dumping the
-full taxonomy.
+Use `taxonomy_value` with `search --category` and `category_id` for drafts or
+`category list --parent`. Refine broad searches with `--parent` or `--path`, and
+follow pagination actions instead of dumping the full taxonomy.
 
 ## Create and publish listings
 

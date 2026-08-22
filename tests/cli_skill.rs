@@ -33,6 +33,7 @@ fn skill_prints_the_project_skill_source() {
     assert!(CANONICAL_SKILL.contains("draft validate DRAFT_ID"));
     assert!(CANONICAL_SKILL.contains("draft publish DRAFT_ID --if-revision"));
     assert!(CANONICAL_SKILL.contains(".data.revision"));
+    assert!(CANONICAL_SKILL.contains("Use `taxonomy_value` with `search --category`"));
     let words = CANONICAL_SKILL.split_whitespace().count();
     assert!(
         words <= 600,

@@ -171,6 +171,15 @@ fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
                 .starts_with("Urheilu ja ulkoilu > Pyöräily > ")
     }));
 
+    let components = listings.search_categories("tietokonekomponentit").unwrap();
+    assert_eq!(components.categories.len(), 1);
+    assert_eq!(components.categories[0].category_id, "8368");
+    assert_eq!(components.categories[0].taxonomy_value, "2.93.3215.8368");
+    assert_eq!(
+        serde_json::to_value(&components).unwrap()["categories"][0]["taxonomy_value"],
+        "2.93.3215.8368"
+    );
+
     let no_matches = listings.search_categories("lukko").unwrap();
     assert!(no_matches.categories.is_empty());
     assert_eq!(no_matches.returned, 0);
