@@ -20,8 +20,8 @@ pub struct CategoryArgs {
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum CategoryCommand {
     #[command(
-        about = "Search categories by text",
-        long_about = "Search and rank Tori categories by ID, label, and hierarchy context. Each result contains a category_id for listing workflows and a canonical taxonomy_value accepted by `flea search --category`. Results default to 20 and --limit accepts 1 through 100.",
+        about = "Search categories (authentication required)",
+        long_about = "Search and rank Tori categories by ID, label, and hierarchy context. Authentication is required. If you are not signed in, run `flea auth login` before searching. Each result contains a category_id for listing workflows and a canonical taxonomy_value accepted by `flea search --category`. Results default to 20 and --limit accepts 1 through 100.",
         after_long_help = "Search-filter example:\n  flea category search tietokonekomponentit\n  flea search --category 2.93.3215.8368\n\nBroad-query refinement:\n  flea category search tarvikkeet\n  flea category search tarvikkeet --path 'Urheilu ja ulkoilu > Pyöräily'\n\nUse --parent with a category_id or --path with a returned category path to search its descendants. Follow next_actions to continue a truncated search."
     )]
     Search {
@@ -49,8 +49,8 @@ pub enum CategoryCommand {
         offset: usize,
     },
     #[command(
-        about = "List categories",
-        long_about = "List root categories or the direct children of a parent category machine value. Each result contains a category_id for listing workflows and a canonical taxonomy_value accepted by `flea search --category`."
+        about = "List categories (authentication required)",
+        long_about = "List root categories or the direct children of a parent category machine value. Authentication is required. If you are not signed in, run `flea auth login` before listing. Each result contains a category_id for listing workflows and a canonical taxonomy_value accepted by `flea search --category`."
     )]
     List {
         /// Parent category machine value whose children to list.

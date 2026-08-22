@@ -39,8 +39,8 @@ pub enum Command {
     )]
     Auth(auth::AuthArgs),
     #[command(
-        about = "Discover Tori category machine values",
-        long_about = "Search or browse Tori categories and return machine values suitable for listing input."
+        about = "Discover Tori categories (authentication required)",
+        long_about = "Search or browse Tori categories and return machine values suitable for listing input. Authentication is required. If you are not signed in, run `flea auth login` before category discovery."
     )]
     Category(category::CategoryArgs),
     #[command(

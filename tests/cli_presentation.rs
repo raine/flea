@@ -117,7 +117,7 @@ fn nested_help_flags_and_commands_use_stdout() {
 fn help_tables_include_agent_oriented_summaries() {
     let top = stdout(&invoke(&["--help"]));
     assert!(top.contains("auth      Manage browser authentication"));
-    assert!(top.contains("category  Discover Tori category machine values"));
+    assert!(top.contains("category  Discover Tori categories (authentication required)"));
     assert!(top.contains("draft     Preview input and manage remote drafts"));
     assert!(top.contains("item      Inspect public marketplace listings"));
     assert!(top.contains("listing   Manage published listings"));
@@ -163,6 +163,26 @@ fn help_tables_include_agent_oriented_summaries() {
     let skill = stdout(&invoke(&["skill", "--help"]));
     assert!(skill.contains("install  Install the flea skill for coding agents"));
     assert!(skill.contains("flea skill [OPTIONS] [COMMAND]"));
+}
+
+#[test]
+fn category_help_explains_authentication_requirement() {
+    for args in [
+        &["category", "--help"][..],
+        &["category", "search", "--help"][..],
+        &["category", "list", "--help"][..],
+    ] {
+        let output = invoke(args);
+        let out = stdout(&output);
+
+        assert_eq!(output.status.code(), Some(0), "args: {args:?}");
+        assert!(stderr(&output).is_empty(), "args: {args:?}");
+        assert!(
+            out.contains("Authentication is required."),
+            "args: {args:?}"
+        );
+        assert!(out.contains("`flea auth login`"), "args: {args:?}");
+    }
 }
 
 #[test]
