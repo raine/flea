@@ -190,7 +190,7 @@ fn publication_draft_without_model(
     })
 }
 
-fn normalize_source_draft_state(
+pub(super) fn normalize_source_draft_state(
     body: Value,
     response_etag: Option<&str>,
 ) -> Result<DraftState, ApiError> {

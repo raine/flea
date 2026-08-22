@@ -24,11 +24,17 @@ pub trait AdInputApi: Send + Sync {
         etag: &str,
         price: &Value,
     ) -> Result<String, ApiError>;
-    async fn submit_adinput(
+    async fn patch_item_fields(
         &self,
         draft_id: &str,
         etag: &str,
-        state: &DraftState,
+        values: &Map<String, Value>,
+    ) -> Result<String, ApiError>;
+    async fn update_recommerce(
+        &self,
+        draft_id: &str,
+        etag: &str,
+        values: &Map<String, Value>,
     ) -> Result<DraftState, ApiError>;
     async fn delete_draft(&self, draft_id: &str) -> Result<(), ApiError>;
     async fn upload_image(
@@ -69,7 +75,7 @@ pub trait AdInputApi: Send + Sync {
         draft_id: &str,
         context: &ProductContext,
     ) -> Result<Publication, ApiError>;
-    async fn confirmation(&self, listing_id: &str) -> Result<Confirmation, ApiError>;
+    async fn confirmation(&self, publication: &Publication) -> Result<Confirmation, ApiError>;
     async fn track_confirmation(&self, confirmation: &Confirmation) -> Result<(), ApiError>;
     async fn observed_listing(&self, listing_id: &str) -> Result<Value, ApiError>;
 }
@@ -265,27 +271,49 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             .json(request)
             .await
             .map_err(|error| error_at_stage(error, "apply_price"))?;
-        normalize_item_update(response, draft_id)
+        normalize_item_update(response, draft_id, "apply_price")
     }
 
-    async fn submit_adinput(
+    async fn patch_item_fields(
         &self,
         draft_id: &str,
         etag: &str,
-        state: &DraftState,
-    ) -> Result<DraftState, ApiError> {
+        values: &Map<String, Value>,
+    ) -> Result<String, ApiError> {
         validate_resource_id(draft_id, "draft")?;
-        let mut body = serde_json::to_value(state).expect("draft state serializes");
-        if let Some(body) = body.as_object_mut() {
-            body.remove("delivery");
-        }
+        let data = item_creation_fields(values)?;
         let mut request = HttpRequest::mutation(
-            Method::Put,
-            format!("/drafts/{draft_id}/adinput"),
-            RequestBody::Json(body),
+            Method::Patch,
+            format!("/items/{draft_id}"),
+            RequestBody::Json(json!({ "data": data })),
         );
         request.if_match = Some(etag.to_owned());
-        self.draft_request(request, false).await
+        let response = self
+            .json(request)
+            .await
+            .map_err(|error| error_at_stage(error, "patch_item_fields"))?;
+        normalize_item_update(response, draft_id, "patch_item_fields")
+    }
+
+    async fn update_recommerce(
+        &self,
+        draft_id: &str,
+        etag: &str,
+        values: &Map<String, Value>,
+    ) -> Result<DraftState, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
+        let body = composer_values(values)?;
+        let mut request = HttpRequest::mutation(
+            Method::Put,
+            format!("/adinput/ad/recommerce/{draft_id}/update"),
+            RequestBody::Json(Value::Object(body)),
+        );
+        request.if_match = Some(etag.to_owned());
+        let response = self
+            .json(request)
+            .await
+            .map_err(|error| error_at_stage(error, "update_recommerce"))?;
+        normalize_recommerce_update(response, draft_id)
     }
 
     async fn delete_draft(&self, draft_id: &str) -> Result<(), ApiError> {
@@ -582,14 +610,14 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         revision: &str,
     ) -> Result<ProductContext, ApiError> {
         validate_resource_id(draft_id, "draft")?;
-        let revision: String = url::form_urlencoded::byte_serialize(revision.as_bytes()).collect();
+        let encoded_revision: String =
+            url::form_urlencoded::byte_serialize(revision.as_bytes()).collect();
         let response = self
             .json(HttpRequest::read(format!(
-                "/drafts/{draft_id}/products?revision={revision}"
+                "/adinput/product/recommerce/{draft_id}/productcontext?adRevision={encoded_revision}"
             )))
             .await?;
-        serde_json::from_value(response.body)
-            .map_err(|_| malformed_read_response("product_context"))
+        normalize_product_context(response.body, draft_id, revision)
     }
 
     async fn publish_basic(
@@ -601,41 +629,51 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         let response = self
             .json(HttpRequest::mutation(
                 Method::Post,
-                format!("/drafts/{draft_id}/publish"),
-                RequestBody::Json(json!({
-                    "package": "basic",
-                    "revision": context.revision,
-                    "context": context.context,
-                })),
+                format!("/adinput/order/choices/{draft_id}"),
+                RequestBody::Form(vec![(
+                    "choices".to_owned(),
+                    context.basic_package_urn.clone(),
+                )]),
             ))
-            .await?;
-        serde_json::from_value(response.body)
-            .map_err(|_| uncertain_mutation_response("publish_basic"))
+            .await
+            .map_err(|error| error_at_stage(error, "package_choice"))?;
+        normalize_publication(response, draft_id, &context.revision)
     }
 
-    async fn confirmation(&self, listing_id: &str) -> Result<Confirmation, ApiError> {
-        validate_resource_id(listing_id, "listing")?;
+    async fn confirmation(&self, publication: &Publication) -> Result<Confirmation, ApiError> {
+        validate_resource_id(&publication.listing_id, "listing")?;
+        validate_resource_id(&publication.order_id, "order")?;
         let response = self
             .json(HttpRequest::read(format!(
-                "/listings/{listing_id}/confirmation"
+                "/orders/{}/confirmation/{}",
+                publication.order_id, publication.listing_id
             )))
             .await?;
-        serde_json::from_value(response.body).map_err(|_| malformed_read_response("confirmation"))
+        if response.body_is_unparseable || !response.body.is_object() {
+            return Err(malformed_read_response("confirmation"));
+        }
+        Ok(Confirmation {
+            listing_id: publication.listing_id.clone(),
+            order_id: publication.order_id.clone(),
+            details: response.body,
+        })
     }
 
     async fn track_confirmation(&self, confirmation: &Confirmation) -> Result<(), ApiError> {
-        self.json(HttpRequest::mutation(
-            Method::Post,
-            "/tracking/confirmation",
-            RequestBody::Json(json!({ "order_id": confirmation.order_id })),
-        ))
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        query.append_pair("adId", &confirmation.listing_id);
+        query.append_pair("orderId", &confirmation.order_id);
+        self.json(HttpRequest::read(format!(
+            "/tracking/adconfirmation?{}",
+            query.finish()
+        )))
         .await
         .map(|_| ())
     }
 
     async fn observed_listing(&self, listing_id: &str) -> Result<Value, ApiError> {
         validate_resource_id(listing_id, "listing")?;
-        self.json(HttpRequest::read(format!("/listings/{listing_id}")))
+        self.json(HttpRequest::read(format!("/{listing_id}")))
             .await
             .map(|response| response.body)
     }
@@ -653,6 +691,56 @@ pub(super) fn validate_price(price: &Value) -> Result<(), ApiError> {
         ));
     }
     Ok(())
+}
+
+fn item_creation_fields(values: &Map<String, Value>) -> Result<Map<String, Value>, ApiError> {
+    let mut data = Map::new();
+    for key in ["title", "description"] {
+        if let Some(value) = values.get(key).filter(|value| !value.is_null()) {
+            data.insert(key.to_owned(), value.clone());
+        }
+    }
+    if let Some(condition) = values.get("condition").filter(|value| !value.is_null()) {
+        data.insert("condition".to_owned(), numeric_string(condition));
+    }
+    if let Some(price) = values.get("price") {
+        validate_price(price)?;
+        if price.as_f64().is_some_and(|amount| amount > 0.0) {
+            data.insert("price".to_owned(), json!({ "price_amount": price }));
+        }
+    }
+    let excluded = [
+        "category",
+        "delivery",
+        "image",
+        "location",
+        "multi_image",
+        "price",
+        "postal_code",
+        "postal-code",
+        "postalCode",
+        "title",
+        "description",
+        "condition",
+        "trade_type",
+        "revision",
+    ];
+    for (key, value) in values {
+        if excluded.contains(&key.as_str())
+            || !matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_))
+        {
+            continue;
+        }
+        data.insert(key.clone(), numeric_string(value));
+    }
+    Ok(data)
+}
+
+fn numeric_string(value: &Value) -> Value {
+    value
+        .as_str()
+        .and_then(|value| value.parse::<i64>().ok())
+        .map_or_else(|| value.clone(), |value| json!(value))
 }
 
 pub(super) fn composer_trade_type(value: &str) -> &str {
@@ -708,14 +796,20 @@ pub(super) fn error_at_stage(mut error: ApiError, stage: &str) -> ApiError {
     error
 }
 
-fn uncertain_item_update(response: &HttpResponse, reason: &str) -> ApiError {
+fn uncertain_item_update(
+    response: &HttpResponse,
+    stage: &str,
+    path: &str,
+    reason: &str,
+) -> ApiError {
     let mut error = ApiError::new(
         "mutation.uncertain",
-        "The price mutation may have succeeded, but its resulting revision is unknown",
+        "The item patch may have succeeded, but its resulting revision is unknown",
     );
     error.status = Some(response.status);
     error.details = Some(Box::new(json!({
-        "stage": "apply_price",
+        "stage": stage,
+        "path": path,
         "status": response.status,
         "content_type": response.content_type,
         "reason": reason,
@@ -723,10 +817,16 @@ fn uncertain_item_update(response: &HttpResponse, reason: &str) -> ApiError {
     error
 }
 
-fn normalize_item_update(response: HttpResponse, draft_id: &str) -> Result<String, ApiError> {
+fn normalize_item_update(
+    response: HttpResponse,
+    draft_id: &str,
+    stage: &str,
+) -> Result<String, ApiError> {
     if response.body_is_unparseable {
         return Err(uncertain_item_update(
             &response,
+            stage,
+            "$",
             "successful response was not valid JSON",
         ));
     }
@@ -738,6 +838,8 @@ fn normalize_item_update(response: HttpResponse, draft_id: &str) -> Result<Strin
     if response_id.as_deref() != Some(draft_id) {
         return Err(uncertain_item_update(
             &response,
+            stage,
+            "$.id",
             "successful response identified a different item",
         ));
     }
@@ -750,9 +852,166 @@ fn normalize_item_update(response: HttpResponse, draft_id: &str) -> Result<Strin
         .ok_or_else(|| {
             uncertain_item_update(
                 &response,
+                stage,
+                "$.etag",
                 "successful response did not contain an authoritative ETag",
             )
         })
+}
+
+fn normalize_recommerce_update(
+    response: HttpResponse,
+    draft_id: &str,
+) -> Result<DraftState, ApiError> {
+    if response.body_is_unparseable {
+        return Err(uncertain_mutation_model(
+            &response,
+            "update_recommerce",
+            "$",
+            "successful response was not valid JSON",
+        ));
+    }
+    let body = if response.body.get("ad").is_some() {
+        response.body.clone()
+    } else {
+        json!({ "ad": response.body.clone(), "model": { "sections": [] } })
+    };
+    normalize_source_draft_state(body, response.etag.as_deref())
+        .and_then(|state| {
+            (state.draft_id == draft_id)
+                .then_some(state)
+                .ok_or_else(|| {
+                    model_error(
+                        "update_recommerce",
+                        "$.id",
+                        "successful response identified a different draft",
+                    )
+                })
+        })
+        .map_err(|error| {
+            let path = error
+                .details
+                .as_deref()
+                .and_then(|details| details.get("path"))
+                .and_then(Value::as_str)
+                .unwrap_or("$");
+            uncertain_mutation_model(&response, "update_recommerce", path, &error.message)
+        })
+}
+
+fn uncertain_mutation_model(
+    response: &HttpResponse,
+    stage: &str,
+    path: &str,
+    reason: &str,
+) -> ApiError {
+    let mut error = ApiError::new(
+        "mutation.uncertain",
+        "The mutation may have succeeded, but its resulting state is unknown",
+    );
+    error.status = Some(response.status);
+    error.details = Some(Box::new(json!({
+        "stage": stage,
+        "path": path,
+        "reason": reason,
+        "status": response.status,
+    })));
+    error
+}
+
+fn normalize_product_context(
+    body: Value,
+    draft_id: &str,
+    revision: &str,
+) -> Result<ProductContext, ApiError> {
+    let id = body.get("id").and_then(|value| match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    });
+    if id.as_deref() != Some(draft_id) {
+        return Err(read_model_error(
+            "product_context",
+            "$.id",
+            "product context identified a different draft",
+        ));
+    }
+    let basic_package_urn = body
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| {
+            choices.iter().find_map(|choice| {
+                (choice.get("package-identifier").and_then(Value::as_i64) == Some(10))
+                    .then(|| choice.get("specification-urn").and_then(Value::as_str))
+                    .flatten()
+            })
+        })
+        .filter(|urn| *urn == "urn:product:package-specification:10")
+        .ok_or_else(|| {
+            read_model_error(
+                "product_context",
+                "$.choices[*].specification-urn",
+                "free Basic package is unavailable",
+            )
+        })?;
+    Ok(ProductContext {
+        revision: revision.to_owned(),
+        basic_package_urn: basic_package_urn.to_owned(),
+    })
+}
+
+fn normalize_publication(
+    response: HttpResponse,
+    draft_id: &str,
+    revision: &str,
+) -> Result<Publication, ApiError> {
+    if response.body_is_unparseable {
+        return Err(uncertain_mutation_model(
+            &response,
+            "package_choice",
+            "$",
+            "successful response was not valid JSON",
+        ));
+    }
+    let order_id = response
+        .body
+        .get("order-id")
+        .and_then(|value| match value {
+            Value::String(value) if !value.is_empty() => Some(value.clone()),
+            Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            uncertain_mutation_model(
+                &response,
+                "package_choice",
+                "$.order-id",
+                "successful response omitted the order identity",
+            )
+        })?;
+    if response.body.get("is-completed").and_then(Value::as_bool) != Some(true) {
+        return Err(uncertain_mutation_model(
+            &response,
+            "package_choice",
+            "$.is-completed",
+            "package order completion is unavailable",
+        ));
+    }
+    Ok(Publication {
+        listing_id: draft_id.to_owned(),
+        revision: revision.to_owned(),
+        state: "pending".to_owned(),
+        order_id,
+    })
+}
+
+fn read_model_error(stage: &str, path: &str, reason: &str) -> ApiError {
+    let mut error = model_error(stage, path, reason).retry_classification(classify(
+        FailureKind::MalformedSuccess,
+        RetryContext::read(OperationMethod::Get),
+    ));
+    error.code = "upstream.unexpected_response".to_owned();
+    error
 }
 
 fn unexpected_representation(stage: &str, response: &HttpResponse) -> ApiError {
@@ -779,18 +1038,6 @@ pub(super) fn malformed_read_response(stage: &str) -> ApiError {
         RetryContext::read(OperationMethod::Get),
     ));
     error.details = Some(Box::new(json!({ "stage": stage })));
-    error
-}
-
-fn uncertain_mutation_response(stage: &str) -> ApiError {
-    let mut error = ApiError::new(
-        "mutation.uncertain",
-        "The mutation may have succeeded, but its resulting state is unknown",
-    );
-    error.details = Some(Box::new(json!({
-        "stage": stage,
-        "recovery_guidance": "Inspect authoritative state before continuing; do not repeat the mutation"
-    })));
     error
 }
 

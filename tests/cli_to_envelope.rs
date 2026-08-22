@@ -830,13 +830,6 @@ fn publish_flows_through_every_http_step() {
         "required_fields": ["title", "delivery"],
         "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
     });
-    let mut submitted_values = valid["values"].clone();
-    submitted_values["revision"] = json!("revision-1");
-    let submitted = json!({
-        "draft_id": "draft-1",
-        "etag": "three",
-        "values": submitted_values
-    });
     let client = MockClient::with_responses([
         response(StatusCode::OK, valid.clone()),
         response(StatusCode::OK, delivery_page(true)),
@@ -850,21 +843,35 @@ fn publish_flows_through_every_http_step() {
                 }]
             }),
         ),
+        response(StatusCode::OK, json!({ "id": "draft-1", "etag": "two" })),
         response(StatusCode::OK, valid.clone()),
-        response(StatusCode::OK, valid),
-        response(StatusCode::OK, submitted),
+        response(
+            StatusCode::OK,
+            json!({
+                "id": "draft-1",
+                "ad-type": "recommerce",
+                "etag": "revision-1",
+                "values": valid["values"].clone()
+            }),
+        ),
         response(StatusCode::NO_CONTENT, Value::Null),
         response(StatusCode::OK, delivery_page(true)),
         response(
             StatusCode::OK,
-            json!({ "revision": "revision-1", "context": {} }),
+            json!({
+                "id": "draft-1",
+                "choices": [{
+                    "package-identifier": 10,
+                    "specification-urn": "urn:product:package-specification:10"
+                }]
+            }),
         ),
         response(
-            StatusCode::CREATED,
-            json!({ "listing_id": "listing-1", "revision": "revision-1", "state": "pending" }),
+            StatusCode::OK,
+            json!({ "order-id": 11, "is-completed": true }),
         ),
-        response(StatusCode::OK, json!({ "order_id": "order-1" })),
-        response(StatusCode::NO_CONTENT, Value::Null),
+        response(StatusCode::OK, json!({ "title": "Published" })),
+        response(StatusCode::OK, json!({ "transactionId": 11 })),
         response(StatusCode::OK, json!({ "state": "pending" })),
     ]);
     let value = invoke(
@@ -874,11 +881,29 @@ fn publish_flows_through_every_http_step() {
         ["flea", "--format", "json", "draft", "publish", "draft-1"],
     );
 
-    assert_eq!(value["data"]["listing_id"], "listing-1");
+    assert_eq!(value["data"]["listing_id"], "draft-1");
     let requests = client.requests.lock().unwrap();
     assert_eq!(requests.len(), 13);
+    assert_eq!(requests[3].method, reqwest::Method::PATCH);
+    assert_eq!(requests[3].path_and_query, "/items/draft-1");
+    assert_eq!(requests[3].service, "RC-ITEM-CREATION-FLOW-API");
+    assert_eq!(
+        requests[5].path_and_query,
+        "/adinput/ad/recommerce/draft-1/update"
+    );
+    assert_eq!(requests[5].service, "APPS-ADINPUT");
     assert_eq!(requests[6].path_and_query, "/ads/draft-1/delivery");
     assert_eq!(requests[6].service, "TJT-API");
+    assert_eq!(requests[9].path_and_query, "/adinput/order/choices/draft-1");
+    assert_eq!(requests[9].service, "APPS-ADINPUT");
+    assert_eq!(
+        requests[9].content_type.as_ref().unwrap(),
+        "application/x-www-form-urlencoded"
+    );
+    let flea::api::client::RequestBody::Bytes(body) = &requests[9].body else {
+        panic!("expected encoded package choice")
+    };
+    assert_eq!(body, b"choices=urn%3Aproduct%3Apackage-specification%3A10");
 }
 
 #[test]
@@ -1013,9 +1038,12 @@ fn category_and_listing_commands_flow_through_http_normalization() {
         StatusCode::OK,
         json!({
             "id": "listing-1",
-            "etag": "v1",
-            "state": { "type": "active" },
-            "fields": { "title": "Chair" }
+            "state": { "type": "pending", "label": "Under review" },
+            "data": {
+                "title": "Chair",
+                "subtitle": "Tori myydään 5 €",
+                "image": "item/listing-1/image"
+            }
         }),
     )]);
     let listing = invoke(
@@ -1025,7 +1053,11 @@ fn category_and_listing_commands_flow_through_http_normalization() {
         ["flea", "--format", "json", "listing", "show", "listing-1"],
     );
     assert_eq!(listing["data"]["listing_id"], "listing-1");
+    assert_eq!(listing["data"]["state"], "pending");
     assert_eq!(listing["data"]["fields"]["title"], "Chair");
+    let requests = listings.requests.lock().unwrap();
+    assert_eq!(requests[0].path_and_query, "/listing-1");
+    assert_eq!(requests[0].service, "AD-SUMMARIES");
 }
 
 #[test]

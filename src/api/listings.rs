@@ -193,12 +193,7 @@ impl ListingsApi for HttpListingsApi {
     }
 
     fn listing(&self, listing_id: &str) -> Result<UpstreamListing, ListingsApiError> {
-        self.request(
-            Method::GET,
-            format!("/my/listings/{listing_id}"),
-            None,
-            None,
-        )
+        self.request(Method::GET, format!("/{listing_id}"), None, None)
     }
 
     fn update_listing(
@@ -381,11 +376,14 @@ pub struct UpstreamFacet {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct UpstreamListing {
     pub id: Value,
+    #[serde(default)]
     pub etag: String,
     #[serde(default)]
     pub state: UpstreamState,
     #[serde(default)]
     pub fields: BTreeMap<String, Value>,
+    #[serde(default)]
+    pub data: UpstreamSummaryData,
     #[serde(default)]
     pub actions: Vec<UpstreamAction>,
     #[serde(default, rename = "externalData", alias = "external_data")]
@@ -575,7 +573,16 @@ impl<'a> Listings<'a> {
 
     pub fn show(&self, listing_id: &str) -> Result<ListingDetail, AppError> {
         validate_id(listing_id)?;
-        self.snapshot(listing_id).map(|snapshot| snapshot.detail)
+        self.api
+            .listing(listing_id)
+            .map_err(|error| {
+                listing_error(
+                    error,
+                    Some(listing_id),
+                    RetryContext::read(OperationMethod::Get),
+                )
+            })
+            .and_then(|listing| normalize_listing_detail_for_id(listing, listing_id))
     }
 
     pub fn snapshot(&self, listing_id: &str) -> Result<ListingSnapshot, AppError> {
@@ -968,6 +975,37 @@ fn normalize_summary(raw: UpstreamListingSummary) -> Result<ListingSummary, AppE
         updated_at: raw.updated,
         expires_at: raw.expires,
         days_until_expires: raw.days_until_expires,
+        statistics: normalize_statistics(&raw.external_data),
+        actions: raw.actions.into_iter().map(normalize_action).collect(),
+    })
+}
+
+fn normalize_listing_detail_for_id(
+    mut raw: UpstreamListing,
+    expected_id: &str,
+) -> Result<ListingDetail, AppError> {
+    let listing_id = value_id(&raw.id)?;
+    if listing_id != expected_id {
+        return Err(unexpected("listing detail returned a different ID"));
+    }
+    if raw.fields.is_empty() {
+        if !raw.data.title.is_empty() {
+            raw.fields
+                .insert("title".to_owned(), Value::String(raw.data.title));
+        }
+        if !raw.data.subtitle.is_empty() {
+            raw.fields
+                .insert("subtitle".to_owned(), Value::String(raw.data.subtitle));
+        }
+        if !raw.data.image.is_empty() {
+            raw.fields
+                .insert("image".to_owned(), Value::String(raw.data.image));
+        }
+    }
+    Ok(ListingDetail {
+        listing_id,
+        state: normalize_state(&raw.state),
+        fields: raw.fields,
         statistics: normalize_statistics(&raw.external_data),
         actions: raw.actions.into_iter().map(normalize_action).collect(),
     })

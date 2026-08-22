@@ -31,6 +31,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn recover_after_failure(
         &self,
         mut error: WorkflowError,
@@ -42,13 +43,75 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         publication: Option<RecoveryStatus>,
     ) -> WorkflowError {
         let mutation_status = error.source.as_ref().and_then(|source| source.status);
+        let ambiguous = error.code == "mutation.uncertain"
+            || error.source.as_ref().is_some_and(mutation_is_ambiguous);
         let observation = self.api.get_draft(draft_id).await;
+        let listing_observation = if failed_stage == "package_choice" && ambiguous {
+            Some(self.api.observed_listing(draft_id).await)
+        } else {
+            None
+        };
         let recovery = error
             .recovery
             .get_or_insert_with(|| Recovery::base(draft_id, &[], Some(&error.code)));
         recovery.active_step = Some(failed_stage.to_owned());
         recovery.failed_stage = Some(bounded_recovery_text(failed_stage));
+        let failed_mutation = if ambiguous {
+            RecoveryStatus::Indeterminate
+        } else {
+            RecoveryStatus::Rejected
+        };
+        recovery.item_patch = Some(
+            if recovery
+                .completed_steps
+                .iter()
+                .any(|step| step == "patch_item_fields")
+            {
+                RecoveryStatus::Persisted
+            } else if failed_stage == "patch_item_fields" {
+                failed_mutation
+            } else {
+                RecoveryStatus::Unattempted
+            },
+        );
+        recovery.recommerce_update = Some(
+            if recovery
+                .completed_steps
+                .iter()
+                .any(|step| step == "update_recommerce")
+            {
+                RecoveryStatus::Persisted
+            } else if failed_stage == "update_recommerce" {
+                failed_mutation
+            } else {
+                RecoveryStatus::Unattempted
+            },
+        );
         recovery.delivery = delivery;
+        recovery.package_choice = Some(
+            if recovery
+                .completed_steps
+                .iter()
+                .any(|step| step == "package_choice")
+            {
+                RecoveryStatus::Persisted
+            } else if failed_stage == "package_choice" {
+                failed_mutation
+            } else {
+                RecoveryStatus::Unattempted
+            },
+        );
+        recovery.confirmation = Some(
+            if recovery
+                .completed_steps
+                .iter()
+                .any(|step| step == "fetch_confirmation")
+            {
+                RecoveryStatus::Persisted
+            } else {
+                RecoveryStatus::Unattempted
+            },
+        );
         recovery.publication = publication;
         match observation {
             Ok(state) => {
@@ -112,6 +175,24 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 recovery.next_safe_actions = vec![format!("flea draft show {draft_id}")];
                 recovery.refresh_field_summary();
                 set_recovery_images(recovery, images, true);
+            }
+        }
+        if let Some(listing_observation) = listing_observation {
+            recovery.destructive_actions.clear();
+            match listing_observation {
+                Ok(_) => {
+                    recovery.listing_id = Some(draft_id.to_owned());
+                    recovery.package_choice = Some(RecoveryStatus::Persisted);
+                    recovery.publication = Some(RecoveryStatus::Persisted);
+                    recovery.next_safe_actions = vec![format!("flea listing show {draft_id}")];
+                }
+                Err(listing_error) => {
+                    recovery.observation.error_code = Some(listing_error.code);
+                    recovery.next_safe_actions = vec![
+                        format!("flea draft show {draft_id}"),
+                        format!("flea listing show {draft_id}"),
+                    ];
+                }
             }
         }
         error
@@ -961,7 +1042,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .api
                 .upload_image(
                     &draft.draft_id,
-                    &image.file_name,
+                    image.file_name,
                     image.bytes,
                     image.width,
                     image.height,
@@ -1185,7 +1266,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .api
                 .upload_image(
                     &state.draft_id,
-                    &image.file_name,
+                    image.file_name,
                     image.bytes,
                     image.width,
                     image.height,
@@ -1397,7 +1478,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         state.values.remove("delivery");
         if let Err(error) = self
             .api
-            .update_item(draft_id, &state.etag, &state.values)
+            .patch_item_fields(draft_id, &state.etag, &state.values)
             .await
         {
             let workflow = WorkflowError::for_draft(draft_id, &completed, error, false);
@@ -1423,7 +1504,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     .recover_after_failure(
                         workflow,
                         draft_id,
-                        "fetch_fresh_etag",
+                        "fetch_fresh_model",
                         Some(&state.etag),
                         &publication_images,
                         Some(RecoveryStatus::Pending),
@@ -1432,9 +1513,13 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     .await);
             }
         };
-        completed.push("fetch_fresh_etag".to_owned());
+        completed.push("fetch_fresh_model".to_owned());
 
-        state = match self.api.submit_adinput(draft_id, &state.etag, &state).await {
+        state = match self
+            .api
+            .update_recommerce(draft_id, &state.etag, &state.values)
+            .await
+        {
             Ok(state) => state,
             Err(error) => {
                 let workflow = WorkflowError::for_draft(draft_id, &completed, error, false);
@@ -1442,7 +1527,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     .recover_after_failure(
                         workflow,
                         draft_id,
-                        "submit_adinput",
+                        "update_recommerce",
                         Some(&state.etag),
                         &publication_images,
                         Some(RecoveryStatus::Pending),
@@ -1451,7 +1536,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     .await);
             }
         };
-        completed.push("submit_adinput".to_owned());
+        completed.push("update_recommerce".to_owned());
 
         let revision = state.revision.clone().ok_or_else(|| {
             WorkflowError::for_draft(
@@ -1548,7 +1633,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     .recover_after_failure(
                         workflow,
                         draft_id,
-                        "publish_basic",
+                        "package_choice",
                         Some(&state.etag),
                         &publication_images,
                         Some(RecoveryStatus::Persisted),
@@ -1557,10 +1642,10 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     .await);
             }
         };
-        completed.push("publish_basic".to_owned());
+        completed.push("package_choice".to_owned());
 
         let mut warnings = Vec::new();
-        match self.api.confirmation(&publication.listing_id).await {
+        match self.api.confirmation(&publication).await {
             Ok(confirmation) => {
                 completed.push("fetch_confirmation".to_owned());
                 if let Err(error) = self.api.track_confirmation(&confirmation).await {

@@ -35,6 +35,7 @@ impl Method {
 pub enum RequestBody {
     Empty,
     Json(Value),
+    Form(Vec<(String, String)>),
     Image {
         bytes: Vec<u8>,
         file_name: String,
@@ -53,6 +54,10 @@ impl fmt::Debug for RequestBody {
                 diagnostics::redact_diagnostic_value(&mut redacted);
                 formatter.debug_tuple("Json").field(&redacted).finish()
             }
+            Self::Form(values) => formatter
+                .debug_tuple("Form")
+                .field(&values.iter().map(|(key, _)| key).collect::<Vec<_>>())
+                .finish(),
             Self::Image {
                 bytes,
                 mime_type,
@@ -263,6 +268,16 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
                 })?,
                 HeaderValue::from_static("application/json"),
             ),
+            RequestBody::Form(values) => {
+                let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+                for (key, value) in values {
+                    serializer.append_pair(&key, &value);
+                }
+                spec.body(
+                    serializer.finish().into_bytes(),
+                    HeaderValue::from_static("application/x-www-form-urlencoded"),
+                )
+            }
             RequestBody::Image {
                 bytes,
                 file_name,
@@ -347,20 +362,26 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
 }
 
 fn service_for_path(path: &str) -> &'static str {
-    if path.ends_with("/upload") || path.ends_with("/update") {
-        ""
+    if path.starts_with("/adinput/") {
+        compatibility::SERVICE_ADINPUT
     } else if path.starts_with("/ui/addelivery") || path.contains("/delivery") {
         compatibility::SERVICE_DELIVERY
-    } else if path == "/categories/taxonomy" {
+    } else if path == "/categories/taxonomy" || path.starts_with("/items/") {
         compatibility::SERVICE_ITEM_CREATION
-    } else if path.contains("/products") || path.contains("/publish") {
+    } else if path.starts_with("/orders/") {
         compatibility::SERVICE_ORDER_PAYMENT
-    } else if path.contains("/tracking/") {
+    } else if path.starts_with("/tracking/") {
         compatibility::SERVICE_BILLING_TRACKING
-    } else if path.starts_with("/listings/") {
+    } else if path.starts_with("/my/listings/")
+        || path.starts_with("/listings/")
+        || path.strip_prefix('/').is_some_and(|id| {
+            !id.is_empty()
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+    {
         compatibility::SERVICE_AD_SUMMARIES
-    } else if path.ends_with("/item") || path.starts_with("/items/") {
-        compatibility::SERVICE_ITEM_CREATION
     } else {
         compatibility::SERVICE_ADINPUT
     }

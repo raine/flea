@@ -231,43 +231,44 @@ fn successful_publish_responses() -> Vec<HttpResponse> {
             "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
         }),
     );
-    let mut submitted_values = publication_values();
-    submitted_values["revision"] = json!("revision-7");
+    let fresh = draft(
+        "two",
+        json!({
+            "values": valid["values"].clone(),
+            "images": valid["images"].clone()
+        }),
+    );
     vec![
         response(200, valid.clone()),
         response(200, delivery_page(Some("pickup"))),
         category_taxonomy("furniture/chairs", true),
+        response(200, item_update("draft-1", "two", json!(45))),
+        response(200, fresh),
         response(
             200,
-            draft(
-                "two",
-                json!({ "values": valid["values"].clone(), "images": valid["images"].clone() }),
-            ),
+            json!({
+                "id": "draft-1",
+                "ad-type": "recommerce",
+                "etag": "revision-7",
+                "values": valid["values"].clone()
+            }),
         ),
-        response(
-            200,
-            draft(
-                "two",
-                json!({ "values": valid["values"].clone(), "images": valid["images"].clone() }),
-            ),
-        ),
-        response(200, draft("three", json!({ "values": submitted_values }))),
         response(204, Value::Null),
         response(200, delivery_page(Some("pickup"))),
         response(
             200,
-            json!({ "revision": "revision-7", "context": { "currency": "EUR" } }),
+            json!({
+                "id": "draft-1",
+                "choices": [{
+                    "package-identifier": 10,
+                    "specification-urn": "urn:product:package-specification:10"
+                }]
+            }),
         ),
-        response(
-            201,
-            json!({ "listing_id": "listing-9", "revision": "revision-7", "state": "pending" }),
-        ),
-        response(200, json!({ "order_id": "order-4", "details": {} })),
-        response(204, Value::Null),
-        response(
-            200,
-            json!({ "listing_id": "listing-9", "state": "pending" }),
-        ),
+        response(200, json!({ "order-id": 4, "is-completed": true })),
+        response(200, json!({ "title": "Published" })),
+        response(200, json!({ "transactionId": 4 })),
+        response(200, json!({ "listing_id": "draft-1", "state": "pending" })),
     ]
 }
 
@@ -2186,7 +2187,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
 
     let published = workflow.publish("draft-1").await.unwrap();
 
-    assert_eq!(published.listing_id, "listing-9");
+    assert_eq!(published.listing_id, "draft-1");
     assert_eq!(published.state, "pending");
     assert_eq!(
         published.completed_steps,
@@ -2197,12 +2198,12 @@ async fn publish_runs_the_complete_bounded_sequence() {
             "validate",
             "wait_for_images",
             "patch_item_fields",
-            "fetch_fresh_etag",
-            "submit_adinput",
+            "fetch_fresh_model",
+            "update_recommerce",
             "apply_delivery",
             "observe_delivery",
             "fetch_product_context",
-            "publish_basic",
+            "package_choice",
             "fetch_confirmation",
             "track_confirmation",
             "fetch_observed_listing"
@@ -2222,16 +2223,22 @@ async fn publish_runs_the_complete_bounded_sequence() {
             (Method::Get, "/adinput/ad/withModel/draft-1"),
             (Method::Get, "/ui/addelivery?adId=draft-1&editMode=false"),
             (Method::Get, "/categories/taxonomy"),
-            (Method::Put, "/adinput/ad/recommerce/draft-1/update"),
+            (Method::Patch, "/items/draft-1"),
             (Method::Get, "/adinput/ad/withModel/draft-1"),
-            (Method::Put, "/drafts/draft-1/adinput"),
+            (Method::Put, "/adinput/ad/recommerce/draft-1/update"),
             (Method::Post, "/ads/draft-1/delivery"),
             (Method::Get, "/ui/addelivery?adId=draft-1&editMode=false"),
-            (Method::Get, "/drafts/draft-1/products?revision=revision-7"),
-            (Method::Post, "/drafts/draft-1/publish"),
-            (Method::Get, "/listings/listing-9/confirmation"),
-            (Method::Post, "/tracking/confirmation"),
-            (Method::Get, "/listings/listing-9"),
+            (
+                Method::Get,
+                "/adinput/product/recommerce/draft-1/productcontext?adRevision=revision-7"
+            ),
+            (Method::Post, "/adinput/order/choices/draft-1"),
+            (Method::Get, "/orders/4/confirmation/draft-1"),
+            (
+                Method::Get,
+                "/tracking/adconfirmation?adId=draft-1&orderId=4"
+            ),
+            (Method::Get, "/draft-1"),
         ]
     );
     assert_eq!(
@@ -2244,17 +2251,31 @@ async fn publish_runs_the_complete_bounded_sequence() {
             "buyNow": false
         }))
     );
-    let RequestBody::Json(item_values) = &requests[3].body else {
-        panic!("expected item update")
+    assert_eq!(requests[3].if_match.as_deref(), Some("one"));
+    assert_eq!(
+        requests[3].body,
+        RequestBody::Json(json!({
+            "data": {
+                "title": "Chair",
+                "description": "Solid birch chair",
+                "price": { "price_amount": 45 }
+            }
+        }))
+    );
+    assert_eq!(requests[5].if_match.as_deref(), Some("two"));
+    let RequestBody::Json(recommerce_values) = &requests[5].body else {
+        panic!("expected recommerce update")
     };
-    assert!(item_values.get("delivery").is_none());
+    assert_eq!(
+        recommerce_values["price"],
+        json!([{ "price_amount": "45" }])
+    );
     assert_eq!(
         requests[9].body,
-        RequestBody::Json(json!({
-            "package": "basic",
-            "revision": "revision-7",
-            "context": { "currency": "EUR" }
-        }))
+        RequestBody::Form(vec![(
+            "choices".to_owned(),
+            "urn:product:package-specification:10".to_owned()
+        )])
     );
     assert!(requests.iter().all(|request| {
         !matches!(
@@ -2262,6 +2283,146 @@ async fn publish_runs_the_complete_bounded_sequence() {
             Method::Post | Method::Patch | Method::Put | Method::Delete
         ) || request.retry == RetryPolicy::Never
     }));
+}
+
+#[tokio::test]
+async fn publication_model_failures_before_dispatch_are_not_mutation_uncertainty() {
+    let transport =
+        FixtureTransport::new([response(200, json!({ "model": { "sections": [{}] } }))]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow.publish("draft-1").await.unwrap_err();
+
+    assert_eq!(error.code, "upstream.unrecognized_model");
+    assert_ne!(error.code, "mutation.uncertain");
+    assert_eq!(error.source.unwrap().details.unwrap()["path"], "$");
+    assert_eq!(transport.requests().len(), 1);
+    assert_eq!(transport.requests()[0].method, Method::Get);
+}
+
+#[tokio::test]
+async fn fresh_model_requires_ad_after_the_item_patch_without_claiming_a_new_mutation() {
+    let mut responses = successful_publish_responses();
+    responses[4] = response(200, json!({ "model": { "sections": [{}] } }));
+    responses.truncate(6);
+    responses.push(response(
+        503,
+        json!({ "message": "observation unavailable" }),
+    ));
+    let transport = FixtureTransport::new(responses);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow.publish("draft-1").await.unwrap_err();
+    let recovery = error.recovery.unwrap();
+
+    assert_eq!(error.code, "upstream.unrecognized_model");
+    assert_eq!(recovery.failed_stage.as_deref(), Some("fetch_fresh_model"));
+    assert_eq!(recovery.item_patch, Some(RecoveryStatus::Persisted));
+    assert_eq!(
+        recovery.recommerce_update,
+        Some(RecoveryStatus::Unattempted)
+    );
+    let mutations = transport
+        .requests()
+        .into_iter()
+        .filter(|request| request.method != Method::Get)
+        .collect::<Vec<_>>();
+    assert_eq!(mutations.len(), 1);
+    assert_eq!(mutations[0].path, "/items/draft-1");
+}
+
+#[tokio::test]
+async fn recommerce_update_accepts_wrapped_and_flattened_success_shapes() {
+    for wrapped in [false, true] {
+        let mut responses = successful_publish_responses();
+        if wrapped {
+            let flat = responses[5].body.clone();
+            responses[5].body = json!({ "ad": flat, "model": { "sections": [] } });
+        }
+        let published = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new(responses)),
+            config(),
+        )
+        .publish("draft-1")
+        .await
+        .unwrap();
+        assert_eq!(published.revision, "revision-7");
+    }
+}
+
+#[tokio::test]
+async fn package_choice_parse_uncertainty_reports_distinct_persistence_stages() {
+    let mut responses = successful_publish_responses();
+    responses[9] = response(200, json!({ "is-completed": true }));
+    responses.truncate(10);
+    responses.extend([
+        response(503, json!({ "message": "draft observation unavailable" })),
+        response(404, json!({ "message": "listing unavailable" })),
+    ]);
+    let transport = FixtureTransport::new(responses);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow.publish("draft-1").await.unwrap_err();
+    let recovery = error.recovery.unwrap();
+
+    assert_eq!(error.code, "mutation.uncertain");
+    assert_eq!(error.source.unwrap().details.unwrap()["path"], "$.order-id");
+    assert_eq!(recovery.item_patch, Some(RecoveryStatus::Persisted));
+    assert_eq!(recovery.recommerce_update, Some(RecoveryStatus::Persisted));
+    assert_eq!(recovery.delivery, Some(RecoveryStatus::Persisted));
+    assert_eq!(recovery.package_choice, Some(RecoveryStatus::Indeterminate));
+    assert_eq!(recovery.confirmation, Some(RecoveryStatus::Unattempted));
+    assert_eq!(
+        transport
+            .requests()
+            .iter()
+            .filter(|request| request.path == "/adinput/order/choices/draft-1")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn rejected_publication_mutations_preserve_stage_boundaries() {
+    for (index, stage, item, update, delivery) in [
+        (
+            3,
+            "patch_item_fields",
+            RecoveryStatus::Rejected,
+            RecoveryStatus::Unattempted,
+            RecoveryStatus::Pending,
+        ),
+        (
+            5,
+            "update_recommerce",
+            RecoveryStatus::Persisted,
+            RecoveryStatus::Rejected,
+            RecoveryStatus::Pending,
+        ),
+        (
+            6,
+            "apply_delivery",
+            RecoveryStatus::Persisted,
+            RecoveryStatus::Persisted,
+            RecoveryStatus::Rejected,
+        ),
+    ] {
+        let mut responses = successful_publish_responses();
+        responses[index] = response(400, json!({ "message": "rejected" }));
+        let error = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new(responses)),
+            config(),
+        )
+        .publish("draft-1")
+        .await
+        .unwrap_err();
+        let recovery = error.recovery.unwrap();
+        assert_eq!(recovery.failed_stage.as_deref(), Some(stage));
+        assert_eq!(recovery.item_patch, Some(item));
+        assert_eq!(recovery.recommerce_update, Some(update));
+        assert_eq!(recovery.delivery, Some(delivery));
+        assert_eq!(recovery.package_choice, Some(RecoveryStatus::Unattempted));
+    }
 }
 
 #[tokio::test]
@@ -2276,7 +2437,7 @@ async fn publish_waits_for_processing_images_and_reuses_the_validation_engine() 
 
     let published = workflow.publish("draft-1").await.unwrap();
 
-    assert_eq!(published.listing_id, "listing-9");
+    assert_eq!(published.listing_id, "draft-1");
     assert_eq!(transport.requests()[3].method, Method::Get);
 }
 
@@ -2494,7 +2655,7 @@ async fn corrected_validation_state_can_publish_successfully() {
         config(),
     );
     let published = corrected_workflow.publish("draft-1").await.unwrap();
-    assert_eq!(published.listing_id, "listing-9");
+    assert_eq!(published.listing_id, "draft-1");
 }
 
 #[tokio::test]
@@ -2569,7 +2730,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
-                "fetch_fresh_etag",
+                "fetch_fresh_model",
             ][..],
             false,
         ),
@@ -2582,8 +2743,8 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
-                "fetch_fresh_etag",
-                "submit_adinput",
+                "fetch_fresh_model",
+                "update_recommerce",
             ][..],
             false,
         ),
@@ -2596,8 +2757,8 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
-                "fetch_fresh_etag",
-                "submit_adinput",
+                "fetch_fresh_model",
+                "update_recommerce",
                 "apply_delivery",
             ][..],
             false,
@@ -2611,8 +2772,8 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
-                "fetch_fresh_etag",
-                "submit_adinput",
+                "fetch_fresh_model",
+                "update_recommerce",
                 "apply_delivery",
                 "observe_delivery",
             ][..],
@@ -2627,12 +2788,12 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
-                "fetch_fresh_etag",
-                "submit_adinput",
+                "fetch_fresh_model",
+                "update_recommerce",
                 "apply_delivery",
                 "observe_delivery",
                 "fetch_product_context",
-                "publish_basic",
+                "package_choice",
                 "fetch_confirmation",
                 "track_confirmation",
             ][..],
@@ -2662,10 +2823,10 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
         if failure_index == 12 {
             assert_eq!(
                 error.details.unwrap()["listing_id"],
-                "listing-9",
+                "draft-1",
                 "published listing identity must survive observation failure"
             );
-            assert_eq!(recovery.next_safe_actions, ["flea listing show listing-9"]);
+            assert_eq!(recovery.next_safe_actions, ["flea listing show draft-1"]);
         } else {
             assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
         }
@@ -2697,6 +2858,7 @@ async fn uncertain_publication_observes_before_recommending_any_continuation() {
         } else {
             response(503, json!({ "message": "observation unavailable" }))
         });
+        responses.push(response(404, json!({ "message": "listing unavailable" })));
         let workflow = DraftWorkflow::new(
             HttpAdInputApi::new(FixtureTransport::new(responses)),
             config(),
@@ -2705,10 +2867,13 @@ async fn uncertain_publication_observes_before_recommending_any_continuation() {
         let error = workflow.publish("draft-1").await.unwrap_err();
 
         let recovery = error.recovery.unwrap();
-        assert_eq!(recovery.failed_stage.as_deref(), Some("publish_basic"));
+        assert_eq!(recovery.failed_stage.as_deref(), Some("package_choice"));
         assert_eq!(recovery.delivery, Some(RecoveryStatus::Persisted));
         assert_eq!(recovery.publication, Some(RecoveryStatus::Indeterminate));
-        assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+        assert_eq!(
+            recovery.next_safe_actions,
+            ["flea draft show draft-1", "flea listing show draft-1"]
+        );
         assert!(recovery.destructive_actions.is_empty());
         if observation_available {
             assert_eq!(recovery.observation.status, ObservationStatus::Observed);
@@ -2757,9 +2922,7 @@ async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
     .unwrap();
     assert_eq!(
         result.warnings,
-        [
-            "confirmation tracking failed: The upstream failure may be temporary, but the mutation outcome is unknown"
-        ]
+        ["confirmation tracking failed: tracking unavailable"]
     );
     assert!(
         !result
@@ -2784,7 +2947,13 @@ async fn rejects_resource_ids_before_constructing_transport_paths() {
 async fn percent_encodes_upstream_revisions_in_signed_query_targets() {
     let transport = FixtureTransport::new([response(
         200,
-        json!({ "revision": "revision&admin=true", "context": {} }),
+        json!({
+            "id": "draft-1",
+            "choices": [{
+                "package-identifier": 10,
+                "specification-urn": "urn:product:package-specification:10"
+            }]
+        }),
     )]);
     let api = HttpAdInputApi::new(transport.clone());
 
@@ -2794,7 +2963,7 @@ async fn percent_encodes_upstream_revisions_in_signed_query_targets() {
 
     assert_eq!(
         transport.requests()[0].path,
-        "/drafts/draft-1/products?revision=revision%26admin%3Dtrue"
+        "/adinput/product/recommerce/draft-1/productcontext?adRevision=revision%26admin%3Dtrue"
     );
 }
 

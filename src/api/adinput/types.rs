@@ -262,7 +262,7 @@ impl fmt::Debug for SourceImage {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ProductContext {
     pub revision: String,
-    pub context: Value,
+    pub basic_package_urn: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -270,10 +270,12 @@ pub struct Publication {
     pub listing_id: String,
     pub revision: String,
     pub state: String,
+    pub order_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Confirmation {
+    pub listing_id: String,
     pub order_id: String,
     #[serde(default)]
     pub details: Value,

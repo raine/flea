@@ -138,7 +138,15 @@ pub struct Recovery {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub images_omitted: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_patch: Option<RecoveryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommerce_update: Option<RecoveryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<RecoveryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_choice: Option<RecoveryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<RecoveryStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publication: Option<RecoveryStatus>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -271,7 +279,11 @@ impl Recovery {
             fields_omitted: 0,
             images: Vec::new(),
             images_omitted: 0,
+            item_patch: None,
+            recommerce_update: None,
             delivery: None,
+            package_choice: None,
+            confirmation: None,
             publication: None,
             manual_inspection_required: false,
             upstream_transient: false,
@@ -622,10 +634,9 @@ pub(crate) fn completed_steps_have_mutation(completed_steps: &[String]) -> bool 
                     | "update_item_fields"
                     | "apply_price"
                     | "patch_item_fields"
-                    | "submit_adinput"
+                    | "update_recommerce"
                     | "apply_delivery"
-                    | "publish_basic"
-                    | "track_confirmation"
+                    | "package_choice"
             )
     })
 }
