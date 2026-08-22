@@ -11,8 +11,8 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     api::search::{
-        PublicSearch, PublicSearchApi, SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX, SEARCH_PAGE_MAX,
-        SEARCH_RADIUS_MAX_KM, UpstreamSearchRequest,
+        PublicSearch, PublicSearchApi, SEARCH_AREA_LOCATION_MAX, SEARCH_LIMIT_DEFAULT,
+        SEARCH_LIMIT_MAX, SEARCH_PAGE_MAX, SEARCH_RADIUS_MAX_KM, UpstreamSearchRequest,
     },
     error::AppError,
 };
@@ -75,6 +75,9 @@ impl Seller {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_long_help = "Helsinki-area example:\n  tori search 'tuoli' --area Helsinki,Espoo,Vantaa"
+)]
 pub struct SearchArgs {
     /// Free-text marketplace query. May be omitted to browse filtered listings.
     pub query: Option<String>,
@@ -83,9 +86,18 @@ pub struct SearchArgs {
     #[arg(long)]
     pub category: Option<String>,
 
-    /// Tori location ID or exact place name, at most 256 characters.
+    /// One exact Tori location ID or unambiguous exact place name.
     #[arg(long)]
     pub location: Option<String>,
+
+    /// Explicit area as comma-separated Tori location IDs or unambiguous names.
+    #[arg(
+        long,
+        value_name = "PLACE,PLACE,...",
+        value_delimiter = ',',
+        conflicts_with_all = ["location", "latitude", "longitude", "radius_km"]
+    )]
+    pub area: Vec<String>,
 
     /// Search center latitude in decimal degrees. Requires longitude and radius.
     #[arg(long, allow_hyphen_values = true)]
@@ -158,6 +170,7 @@ struct SearchInput {
     query: String,
     category: Option<String>,
     location: Option<String>,
+    area: Vec<String>,
     latitude: Option<f64>,
     longitude: Option<f64>,
     radius_km: Option<f64>,
@@ -241,6 +254,21 @@ pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<
     } else {
         None
     };
+    let resolved_area = if input.area.is_empty() {
+        None
+    } else {
+        let resolved = search.resolve_area(&input.area)?;
+        insert_parameter(
+            &mut parameters,
+            "location",
+            resolved
+                .locations
+                .iter()
+                .map(|location| location.id.clone())
+                .collect(),
+        )?;
+        Some(resolved)
+    };
     if let (Some(latitude), Some(longitude), Some(radius_km)) =
         (input.latitude, input.longitude, input.radius_km)
     {
@@ -258,7 +286,7 @@ pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<
         include_filters: input.include_facets,
         parameters,
     };
-    let (result, raw) = search.execute(&request, resolved_location)?;
+    let (result, raw) = search.execute_with_area(&request, resolved_location, resolved_area)?;
     if input.raw {
         return Ok(raw);
     }
@@ -267,11 +295,15 @@ pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<
     })?;
     let mut actions = Vec::new();
     if let Some(next_page) = result.pagination.next_page {
-        actions.push(json!({ "command": next_page_command(&request, next_page) }));
+        actions.push(json!({
+            "command": next_page_command(&request, next_page, result.resolved_area.as_ref())
+        }));
     } else if result.pagination.capped {
         let mut refinement = request.clone();
         refinement.include_filters = true;
-        actions.push(json!({ "command": next_page_command(&refinement, 1) }));
+        actions.push(json!({
+            "command": next_page_command(&refinement, 1, result.resolved_area.as_ref())
+        }));
     }
     if !actions.is_empty() {
         value
@@ -282,7 +314,11 @@ pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<
     Ok(value)
 }
 
-fn next_page_command(request: &UpstreamSearchRequest, page: usize) -> String {
+fn next_page_command(
+    request: &UpstreamSearchRequest,
+    page: usize,
+    resolved_area: Option<&crate::domain::search::SearchArea>,
+) -> String {
     let mut parts = vec!["tori search".to_owned()];
     if !request.query.is_empty() {
         parts.push(shell_quote(&request.query));
@@ -293,7 +329,10 @@ fn next_page_command(request: &UpstreamSearchRequest, page: usize) -> String {
                 "category" | "sub_category" | "product_category" => {
                     parts.push(format!("--category {}", shell_quote(value)));
                 }
-                "location" => parts.push(format!("--location {}", shell_quote(value))),
+                "location" if resolved_area.is_none() => {
+                    parts.push(format!("--location {}", shell_quote(value)));
+                }
+                "location" => {}
                 "price_from" => parts.push(format!("--price-from {value}")),
                 "price_to" => parts.push(format!("--price-to {value}")),
                 "trade_type" => {
@@ -334,6 +373,15 @@ fn next_page_command(request: &UpstreamSearchRequest, page: usize) -> String {
             }
         }
     }
+    if let Some(area) = resolved_area {
+        let ids = area
+            .locations
+            .iter()
+            .map(|location| location.id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        parts.push(format!("--area {}", shell_quote(&ids)));
+    }
     if request.include_filters {
         parts.push("--include-facets".to_owned());
     }
@@ -354,6 +402,9 @@ fn collect_input(args: SearchArgs) -> Result<SearchInput, AppError> {
     insert_flag(&mut object, "query", args.query.map(Value::String))?;
     insert_flag(&mut object, "category", args.category.map(Value::String))?;
     insert_flag(&mut object, "location", args.location.map(Value::String))?;
+    if !args.area.is_empty() {
+        insert_flag(&mut object, "area", Some(json!(args.area)))?;
+    }
     insert_flag(&mut object, "latitude", args.latitude.map(value_from_f64))?;
     insert_flag(&mut object, "longitude", args.longitude.map(value_from_f64))?;
     insert_flag(&mut object, "radius_km", args.radius_km.map(value_from_f64))?;
@@ -400,6 +451,21 @@ fn validate(input: &SearchInput) -> Result<(), AppError> {
         .is_some_and(|location| location.chars().count() > 256)
     {
         return Err(AppError::usage("--location must be at most 256 characters"));
+    }
+    if !input.area.is_empty() {
+        if !(2..=SEARCH_AREA_LOCATION_MAX).contains(&input.area.len()) {
+            return Err(AppError::usage(
+                "--area must contain between 2 and 20 locations",
+            ));
+        }
+        if input.area.iter().any(|location| {
+            let length = location.chars().count();
+            length == 0 || length > 256
+        }) {
+            return Err(AppError::usage(
+                "--area locations must contain 1 through 256 characters",
+            ));
+        }
     }
     if input.condition.iter().any(|value| {
         let length = value.chars().count();
@@ -450,14 +516,17 @@ fn validate(input: &SearchInput) -> Result<(), AppError> {
     .into_iter()
     .filter(|present| *present)
     .count();
+    if !input.area.is_empty() && input.location.is_some() {
+        return Err(AppError::usage("--area cannot be combined with --location"));
+    }
+    if coordinate_count > 0 && (!input.area.is_empty() || input.location.is_some()) {
+        return Err(AppError::usage(
+            "--area and --location cannot be combined with coordinate radius arguments",
+        ));
+    }
     if coordinate_count != 0 && coordinate_count != 3 {
         return Err(AppError::usage(
             "--latitude, --longitude, and --radius-km must be provided together",
-        ));
-    }
-    if coordinate_count == 3 && input.location.is_some() {
-        return Err(AppError::usage(
-            "--location cannot be combined with coordinate radius arguments",
         ));
     }
     for (name, values) in &input.facets {

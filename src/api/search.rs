@@ -7,7 +7,7 @@ use url::form_urlencoded;
 use crate::{
     api::client::{RequestSpec, ToriClient, compatibility},
     domain::search::{
-        AppliedFilter, LocationCollection, MachineLabel, SearchCollection, SearchFacet,
+        AppliedFilter, LocationCollection, MachineLabel, SearchArea, SearchCollection, SearchFacet,
         SearchFacetOption, SearchFacetRange, SearchListing, SearchLocation, SearchPagination,
         SearchPrice,
     },
@@ -20,6 +20,7 @@ pub const SEARCH_LIMIT_MAX: usize = 300;
 pub const SEARCH_RADIUS_MAX_KM: f64 = 1000.0;
 pub const SEARCH_FACET_OPTION_LIMIT: usize = 500;
 pub const LOCATION_RESULT_LIMIT: usize = 100;
+pub const SEARCH_AREA_LOCATION_MAX: usize = 20;
 
 const SEARCH_PATH: &str = "/search/SEARCH_ID_BAP_COMMON";
 const SEARCH_CLIENT: &str = "android";
@@ -151,8 +152,17 @@ impl<'a> PublicSearch<'a> {
         request: &UpstreamSearchRequest,
         resolved_location: Option<SearchLocation>,
     ) -> Result<(SearchCollection, Value), AppError> {
+        self.execute_with_area(request, resolved_location, None)
+    }
+
+    pub fn execute_with_area(
+        &self,
+        request: &UpstreamSearchRequest,
+        resolved_location: Option<SearchLocation>,
+        resolved_area: Option<SearchArea>,
+    ) -> Result<(SearchCollection, Value), AppError> {
         let raw = self.api.search(request).map_err(search_error)?;
-        let normalized = normalize_search(&raw, request, resolved_location)?;
+        let normalized = normalize_search(&raw, request, resolved_location, resolved_area)?;
         Ok((normalized, raw))
     }
 
@@ -182,26 +192,74 @@ impl<'a> PublicSearch<'a> {
     }
 
     pub fn resolve_location(&self, value: &str) -> Result<SearchLocation, AppError> {
-        let value = value.trim();
-        if value.is_empty() {
-            return Err(AppError::usage("location must not be empty"));
-        }
         let raw = self.api.location_metadata().map_err(search_error)?;
-        let mut locations = extract_locations(&raw)?;
-        if let Some(location) = locations.iter().find(|location| location.id == value) {
-            return Ok(location.clone());
+        resolve_location(&extract_locations(&raw)?, value)
+    }
+
+    pub fn resolve_area(&self, values: &[String]) -> Result<SearchArea, AppError> {
+        let raw = self.api.location_metadata().map_err(search_error)?;
+        let locations = extract_locations(&raw)?;
+        let mut resolved = Vec::with_capacity(values.len());
+        for value in values {
+            let location = resolve_location(&locations, value)?;
+            if resolved
+                .iter()
+                .any(|existing: &SearchLocation| existing.id == location.id)
+            {
+                return Err(AppError::validation(
+                    "search.area_duplicate_location",
+                    "area contains the same location more than once",
+                )
+                .with_details(serde_json::json!({
+                    "location": value,
+                    "location_id": location.id
+                })));
+            }
+            resolved.push(location);
         }
-        let needle = normalize_name(value);
-        locations.retain(|location| normalize_name(&location.name) == needle);
-        locations.sort_by(|left, right| {
-            left.depth
-                .cmp(&right.depth)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        locations.into_iter().next().ok_or_else(|| {
-            AppError::validation("search.location_not_found", "location was not found")
-                .with_details(serde_json::json!({ "location": value }))
+        Ok(SearchArea {
+            locations: resolved,
         })
+    }
+}
+
+fn resolve_location(locations: &[SearchLocation], value: &str) -> Result<SearchLocation, AppError> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(AppError::usage("location must not be empty"));
+    }
+    if let Some(location) = locations.iter().find(|location| location.id == value) {
+        return Ok(location.clone());
+    }
+    let needle = normalize_name(value);
+    let mut matches = locations
+        .iter()
+        .filter(|location| normalize_name(&location.name) == needle)
+        .cloned()
+        .collect::<Vec<_>>();
+    matches.sort_by(|left, right| {
+        left.depth
+            .cmp(&right.depth)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    match matches.len() {
+        0 => Err(
+            AppError::validation("search.location_not_found", "location was not found")
+                .with_details(serde_json::json!({
+                    "location": value,
+                    "suggestion": "Run `tori location search` with this name to find Tori location names and IDs"
+                })),
+        ),
+        1 => Ok(matches.remove(0)),
+        _ => Err(AppError::validation(
+            "search.location_ambiguous",
+            "location name matches more than one Tori location",
+        )
+        .with_details(serde_json::json!({
+            "location": value,
+            "matches": matches,
+            "suggestion": "Use one of the exact location IDs shown in matches"
+        }))),
     }
 }
 
@@ -209,6 +267,7 @@ fn normalize_search(
     raw: &Value,
     request: &UpstreamSearchRequest,
     resolved_location: Option<SearchLocation>,
+    resolved_area: Option<SearchArea>,
 ) -> Result<SearchCollection, AppError> {
     let object = raw
         .as_object()
@@ -287,6 +346,7 @@ fn normalize_search(
         applied_filters,
         facets,
         resolved_location,
+        resolved_area,
     })
 }
 

@@ -26,6 +26,7 @@ fn every_command_leaf_parses() {
         vec!["tori", "listing", "dispose", "listing-1"],
         vec!["tori", "listing", "delete", "listing-1"],
         vec!["tori", "search", "chair"],
+        vec!["tori", "search", "chair", "--area", "Helsinki,Espoo,Vantaa"],
         vec!["tori", "location", "search", "Helsinki"],
         vec!["tori", "skill"],
         vec!["tori", "skill", "install", "--agent", "claude"],
@@ -117,6 +118,42 @@ fn parses_public_search_coordinates_facets_and_pagination() {
     assert!(matches!(search.sort, Some(SearchSort::PriceAsc)));
     assert_eq!(search.page, Some(2));
     assert_eq!(search.limit, Some(75));
+}
+
+#[test]
+fn parses_concise_explicit_helsinki_area() {
+    let cli = Cli::parse_from(["tori", "search", "chair", "--area", "Helsinki,Espoo,Vantaa"]);
+    let Command::Search(search) = cli.command else {
+        panic!("expected search command");
+    };
+
+    assert_eq!(search.area, ["Helsinki", "Espoo", "Vantaa"]);
+}
+
+#[test]
+fn clap_rejects_conflicting_area_exact_location_and_coordinates() {
+    for arguments in [
+        vec![
+            "tori",
+            "search",
+            "chair",
+            "--area",
+            "Helsinki,Espoo",
+            "--location",
+            "Helsinki",
+        ],
+        vec![
+            "tori",
+            "search",
+            "chair",
+            "--area",
+            "Helsinki,Espoo",
+            "--latitude",
+            "60",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
 }
 
 #[test]

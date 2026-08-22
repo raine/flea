@@ -133,6 +133,11 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(create.contains("--input <PATH>"));
     assert!(create.contains("Read listing fields from a JSON object"));
 
+    let search = stdout(&invoke(&["search", "--help"]));
+    assert!(search.contains("--area <PLACE,PLACE,...>"));
+    assert!(search.contains("Helsinki-area example:"));
+    assert!(search.contains("--area Helsinki,Espoo,Vantaa"));
+
     let auth = stdout(&invoke(&["auth", "--help"]));
     assert!(auth.contains("login   Sign in through the browser"));
     assert!(auth.contains("status  Show authentication status"));

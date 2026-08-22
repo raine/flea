@@ -10,6 +10,8 @@ pub struct SearchCollection {
     pub facets: Vec<SearchFacet>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_location: Option<SearchLocation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resolved_area: Option<SearchArea>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -125,6 +127,11 @@ pub struct SearchLocation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     pub depth: usize,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchArea {
+    pub locations: Vec<SearchLocation>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

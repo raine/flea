@@ -154,7 +154,7 @@ fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
 }
 
 #[test]
-fn resolves_location_names_case_insensitively_and_deterministically() {
+fn resolves_unambiguous_location_names_case_insensitively() {
     let api = FixtureApi::new(empty_fixture());
     let search = PublicSearch::new(&api);
     let location = search.resolve_location("  HELSINKI ").unwrap();
@@ -165,6 +165,63 @@ fn resolves_location_names_case_insensitively_and_deterministically() {
     assert_eq!(matches.returned, 1);
     assert_eq!(matches.total, 1);
     assert_eq!(matches.locations[0].name, "Helsinki");
+}
+
+#[test]
+fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
+    let api = FixtureApi::new(full_fixture());
+    let cli = Cli::parse_from([
+        "tori",
+        "search",
+        "tuoli",
+        "--area",
+        "Helsinki,Espoo,Vantaa",
+        "--limit",
+        "20",
+    ]);
+    let Command::Search(args) = cli.command else {
+        unreachable!()
+    };
+    let output = search::dispatch_with_api(*args, &api).unwrap();
+
+    assert_eq!(
+        api.requests.lock().unwrap()[0].path_and_query(),
+        "/search/SEARCH_ID_BAP_COMMON?client=android&location=1.100018.110091&location=1.100018.110049&location=1.100018.110092&page=1&q=tuoli&rows=20"
+    );
+    assert_eq!(output["resolved_area"]["locations"][0]["name"], "Helsinki");
+    assert_eq!(output["resolved_area"]["locations"][2]["name"], "Vantaa");
+    assert_eq!(
+        output["_next_actions"][0]["command"],
+        "tori search 'tuoli' --area '1.100018.110091,1.100018.110049,1.100018.110092' --page 2 --limit 20"
+    );
+}
+
+#[test]
+fn unknown_and_ambiguous_place_names_return_actionable_structured_errors() {
+    let mut api = FixtureApi::new(empty_fixture());
+    api.location_response["filters"][0]["filter_items"][0]["filter_items"][3]["filter_items"] = json!([{
+        "display_name": "Kauniainen", "name": "location", "value": "2.100018.110235.202700",
+        "filter_items": []
+    }]);
+
+    let ambiguous = PublicSearch::new(&api)
+        .resolve_location("Kauniainen")
+        .unwrap_err();
+    assert_eq!(ambiguous.code, "search.location_ambiguous");
+    assert_eq!(
+        ambiguous.details.as_ref().unwrap()["matches"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(ambiguous.details.as_ref().unwrap()["suggestion"].is_string());
+
+    let unknown = PublicSearch::new(&api)
+        .resolve_location("Atlantis")
+        .unwrap_err();
+    assert_eq!(unknown.code, "search.location_not_found");
+    assert!(unknown.details.as_ref().unwrap()["suggestion"].is_string());
 }
 
 #[test]
@@ -386,10 +443,24 @@ fn location_fixture() -> Value {
             "type": "STANDARD_FILTER",
             "filter_items": [{
                 "display_name": "Uusimaa", "name": "location", "value": "0.100018",
-                "filter_items": [{
-                    "display_name": "Helsinki", "name": "location", "value": "1.100018.110091",
-                    "filter_items": []
-                }]
+                "filter_items": [
+                    {
+                        "display_name": "Helsinki", "name": "location", "value": "1.100018.110091",
+                        "filter_items": []
+                    },
+                    {
+                        "display_name": "Espoo", "name": "location", "value": "1.100018.110049",
+                        "filter_items": []
+                    },
+                    {
+                        "display_name": "Vantaa", "name": "location", "value": "1.100018.110092",
+                        "filter_items": []
+                    },
+                    {
+                        "display_name": "Kauniainen", "name": "location", "value": "1.100018.110235",
+                        "filter_items": []
+                    }
+                ]
             }]
         }],
         "metadata": {"result_size":{"match_count":0},"paging":{"current":1,"last":1}}

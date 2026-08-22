@@ -52,15 +52,30 @@ tori location search Helsinki
 tori location search Uusimaa --format json
 ```
 
-`--location` accepts either the exact identifier or an exact case-insensitive Tori place name.
-Resolution prefers the shallowest exact match and then the lexicographically smallest identifier,
-which makes duplicate names deterministic.
+`--location` selects one exact location. It accepts either the exact identifier or an unambiguous,
+case-insensitive exact Tori place name. Unknown names return `search.location_not_found` with a
+location-discovery command. Names matching multiple Tori locations return
+`search.location_ambiguous` with the matching IDs, so the caller can choose instead of relying on
+an undocumented interpretation.
 
-A runnable Helsinki name search is:
+A runnable exact Helsinki search is:
 
 ```sh
 tori search "tuoli" --location Helsinki --limit 20
 ```
+
+`--area` explicitly searches a set of 2 through 20 Tori locations. Supply a comma-separated list
+of exact IDs or unambiguous names. Tori's search API represents the set as repeated `location`
+filters. The CLI does not infer what a phrase such as "Helsinki area" includes. This Helsinki-area
+example explicitly includes three neighboring capital-region municipalities:
+
+```sh
+tori search "tuoli" --area Helsinki,Espoo,Vantaa --limit 20
+```
+
+Normalized output exposes every selected location under `resolved_area.locations`, including its
+Tori ID, name, parent, and taxonomy depth. Exact searches continue to expose
+`resolved_location`. Pagination actions preserve an area with its resolved IDs.
 
 Coordinate radius searches require all three arguments. Radius is expressed in kilometers and is
 encoded as Tori's integer meter value:
@@ -74,8 +89,8 @@ tori search "tuoli" \
 ```
 
 `--distance-km` is an alias for `--radius-km`. Latitude must be from -90 through 90, longitude from
--180 through 180, and radius must be positive and at most 1000 km. A named location cannot be
-combined with coordinate radius arguments.
+-180 through 180, and radius must be positive and at most 1000 km. `--area`, `--location`, and
+coordinate radius arguments are mutually exclusive.
 
 Normalized listing output omits precise upstream coordinates. It includes textual location and a
 finite positive `distance` when Tori supplies one, while omitting Tori's zero placeholder. `--raw`
@@ -103,9 +118,9 @@ query, category, price, facets, or location can be narrowed to reach additional 
 ## JSON input
 
 `--input PATH` accepts a JSON object. Use `-` to read at most 1 MiB from standard input. Supported
-keys use flag names with underscores, including `query`, `category`, `location`, `latitude`,
-`longitude`, `radius_km`, `price_from`, `price_to`, `trade_type`, `condition`, `seller`, `shipping`,
-`facets`, `sort`, `page`, `limit`, `include_facets`, and `raw`.
+keys use flag names with underscores, including `query`, `category`, `location`, `area`,
+`latitude`, `longitude`, `radius_km`, `price_from`, `price_to`, `trade_type`, `condition`,
+`seller`, `shipping`, `facets`, `sort`, `page`, `limit`, `include_facets`, and `raw`.
 
 ```sh
 cat >search.json <<'JSON'
@@ -130,7 +145,9 @@ by the parser. Repeated `--facet` and `--condition` values are intentional multi
 - `QUERY`: optional free-text query, at most 500 characters
 - `--category TAXONOMY`: validated category, subcategory, or product category value, at most 64
   characters
-- `--location ID_OR_NAME`: exact Tori identifier or place name, at most 256 characters
+- `--location ID_OR_NAME`: one exact Tori identifier or unambiguous place name, at most 256
+  characters
+- `--area PLACE,PLACE,...`: 2 through 20 explicit Tori identifiers or unambiguous place names
 - `--latitude NUMBER`: decimal latitude, requires longitude and radius
 - `--longitude NUMBER`: decimal longitude, requires latitude and radius
 - `--radius-km NUMBER`, `--distance-km NUMBER`: positive radius up to 1000 km
