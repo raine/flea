@@ -88,11 +88,21 @@ A field failure identifies its boundary in `error.details` and `partial`:
   failed.
 - `unattempted_fields` belong to groups after the failure boundary.
 
-An ambiguous response, including an HTML 5xx response, triggers a read-only
-`draft show` observation inside the workflow. This observation can classify the
-active field without repeating the mutation. An unchanged ETag and unchanged
-field value prove that the requested replacement is absent. If observation
-fails, the active field remains indeterminate and requires manual inspection.
+An ambiguous response, including an empty success body, a success body without
+`ad`, or an HTML 5xx response, triggers a bounded read-only draft observation
+inside the workflow. The requested field values are compared with this
+authoritative state without repeating the mutation. If every requested value is
+present, the command succeeds and continues with later groups. Unrecognized 2xx
+response shapes report `mutation.response_model_drift`; other ambiguous
+responses report `mutation.observed_success`. An ETag change proves that a
+mutation occurred, but field comparison proves what persisted.
+
+Observed disagreement produces a bounded mixed outcome. Requested values that
+match appear in `persisted_fields`, mismatches appear in `absent_fields`, and
+values unavailable to authoritative observation appear in
+`indeterminate_fields`. Image attachment applies the same rule to every
+requested image, including attachment and processing state. If observation
+fails, active work remains indeterminate and requires manual inspection.
 
 Mutation recovery actions include only fields listed in `absent_fields`.
 Persisted fields must not be included in a recovery update. An indeterminate

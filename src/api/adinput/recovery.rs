@@ -825,6 +825,8 @@ pub struct CreateResult {
     pub image_processing: Vec<ImageProcessingReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing_copy: Option<ListingCopyReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -832,6 +834,8 @@ pub struct AddImagesResult {
     #[serde(flatten)]
     pub draft: DraftState,
     pub image_processing: Vec<ImageProcessingReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl std::ops::Deref for AddImagesResult {
@@ -852,6 +856,8 @@ pub struct UpdateResult {
     pub ignored_fields: Vec<String>,
     pub etag_changed: bool,
     pub completed_steps: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

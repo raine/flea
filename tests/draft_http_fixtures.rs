@@ -752,7 +752,7 @@ async fn structured_upstream_errors_name_the_active_field_and_preserve_progress(
 }
 
 #[tokio::test]
-async fn html_5xx_observation_reports_partial_persistence_without_replaying() {
+async fn html_5xx_with_confirmed_field_persistence_continues_without_replaying() {
     let transport = FixtureTransport::new([
         response(
             200,
@@ -782,10 +782,24 @@ async fn html_5xx_observation_reports_partial_persistence_without_replaying() {
                 }),
             ),
         ),
+        response(
+            200,
+            draft(
+                "four",
+                json!({
+                    "values": {
+                        "title": "Chair",
+                        "trade_type": "1",
+                        "price": 25,
+                        "postal_code": "00100"
+                    }
+                }),
+            ),
+        ),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
-    let error = workflow
+    let result = workflow
         .update(
             "draft-1",
             &Map::from_iter([
@@ -795,34 +809,16 @@ async fn html_5xx_observation_reports_partial_persistence_without_replaying() {
             ]),
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-    assert_eq!(error.code, "mutation.uncertain");
-    assert_eq!(error.details.as_ref().unwrap()["stage"], "apply_price");
-    assert_eq!(error.details.as_ref().unwrap()["content_type"], "text/html");
-    let recovery = error.recovery.unwrap();
-    assert_eq!(recovery.persisted_fields, ["title", "price"]);
-    assert_eq!(recovery.failed_stage.as_deref(), Some("apply_price"));
-    assert_eq!(recovery.observation.status, ObservationStatus::Observed);
-    assert!(recovery.observation.observed_at.is_some());
-    assert_eq!(recovery.observed_etag.as_deref(), Some("three"));
-    assert_eq!(
-        recovery
-            .field_summary
-            .iter()
-            .map(|field| (field.field.as_str(), field.status))
-            .collect::<Vec<_>>(),
-        [
-            ("price", RecoveryStatus::Persisted),
-            ("title", RecoveryStatus::Persisted),
-            ("postal_code", RecoveryStatus::Unattempted)
-        ]
-    );
-    assert!(recovery.absent_fields.is_empty());
-    assert!(recovery.indeterminate_fields.is_empty());
-    assert_eq!(recovery.unattempted_fields, ["postal_code"]);
+    assert_eq!(result.persisted_fields, ["postal_code", "price", "title"]);
+    assert!(result.ignored_fields.is_empty());
+    assert_eq!(result.draft.etag, "four");
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("authoritative observation"));
+    assert!(result.completed_steps.contains(&"observe_price".to_owned()));
     let requests = transport.requests();
-    assert_eq!(requests.len(), 4);
+    assert_eq!(requests.len(), 5);
     assert_eq!(
         requests
             .iter()
@@ -830,6 +826,99 @@ async fn html_5xx_observation_reports_partial_persistence_without_replaying() {
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn empty_and_missing_ad_successes_reconcile_title_and_description() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "one",
+                json!({ "values": { "title": "Old", "description": "Old" } }),
+            ),
+        ),
+        response(200, Value::Null),
+        response(
+            200,
+            draft(
+                "two",
+                json!({ "values": { "title": "Chair", "description": "Old" } }),
+            ),
+        ),
+        response(200, json!({ "model": { "sections": [] } })),
+        response(
+            200,
+            draft(
+                "three",
+                json!({ "values": { "title": "Chair", "description": "Comfortable" } }),
+            ),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let result = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([
+                ("title".to_owned(), json!("Chair")),
+                ("description".to_owned(), json!("Comfortable")),
+            ]),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.persisted_fields, ["description", "title"]);
+    assert!(result.ignored_fields.is_empty());
+    assert_eq!(result.draft.etag, "three");
+    assert_eq!(result.warnings.len(), 2);
+    assert_eq!(
+        result.completed_steps,
+        [
+            "fetch_draft",
+            "apply_title",
+            "observe_title",
+            "apply_description",
+            "observe_description"
+        ]
+    );
+    assert_eq!(
+        transport
+            .requests()
+            .iter()
+            .filter(|request| request.method == Method::Put)
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn changed_etag_without_requested_content_remains_uncertain() {
+    let transport = FixtureTransport::new([
+        response(200, draft("one", json!({ "values": { "title": "Old" } }))),
+        response(200, Value::Null),
+        response(200, draft("two", json!({ "values": { "title": "Other" } }))),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([("title".to_owned(), json!("Requested"))]),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "mutation.uncertain");
+    assert_eq!(
+        error.details.as_ref().unwrap()["observation"]["etag_changed"],
+        true
+    );
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.absent_fields, ["title"]);
+    assert!(recovery.persisted_fields.is_empty());
+    assert!(recovery.indeterminate_fields.is_empty());
+    assert_eq!(transport.requests().len(), 3);
 }
 
 #[tokio::test]
@@ -1819,6 +1908,16 @@ async fn incomplete_creation_continues_with_update_and_image_actions() {
                 }),
             ),
         ),
+        response(
+            200,
+            draft(
+                "five",
+                json!({
+                    "values": { "title": "Chair", "postal_code": "00100" },
+                    "images": [image("continued", 0, "ready", 4, 6)]
+                }),
+            ),
+        ),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
     let requested = Map::from_iter([
@@ -2075,6 +2174,13 @@ async fn copied_images_are_preprocessed_and_uploaded_as_fresh_attachments() {
             200,
             draft(
                 "two",
+                json!({ "images": [image("fresh-image", 0, "processing", 7, 11)] }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "three",
                 json!({ "images": [image("fresh-image", 0, "processing", 7, 11)] }),
             ),
         ),
@@ -2519,6 +2625,58 @@ async fn image_failure_recovery_uses_absolute_positions_and_lifecycle_states() {
             .all(|action| !action.contains("image add"))
     );
     assert_eq!(recovery.destructive_actions, ["flea draft delete draft-1"]);
+}
+
+#[tokio::test]
+async fn missing_ad_attachment_success_reconciles_multiple_ready_images() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = (0..2)
+        .map(|index| {
+            let path = directory.path().join(format!("private-{index}.png"));
+            image::DynamicImage::new_rgb8(4, 6).save(&path).unwrap();
+            path
+        })
+        .collect::<Vec<_>>();
+    let transport = FixtureTransport::new([
+        response(200, draft("one", json!({}))),
+        response_with_location(201, "https://img.tori.net/dynamic/default/first.jpg"),
+        response_with_location(201, "https://img.tori.net/dynamic/default/second.jpg"),
+        response(200, json!({ "model": { "sections": [] } })),
+        response(
+            200,
+            draft(
+                "two",
+                json!({
+                    "images": [
+                        image("first", 0, "ready", 4, 6),
+                        image("second", 1, "ready", 4, 6)
+                    ]
+                }),
+            ),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let result = workflow.add_images("draft-1", &paths).await.unwrap();
+
+    assert_eq!(result.images.len(), 2);
+    assert!(
+        result
+            .images
+            .iter()
+            .all(|image| image.state == ImageState::Ready)
+    );
+    assert_eq!(result.warnings.len(), 1);
+    assert!(result.warnings[0].contains("authoritative observation"));
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 5);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == Method::Put)
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

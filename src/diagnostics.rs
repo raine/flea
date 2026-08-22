@@ -764,6 +764,25 @@ pub fn workflow_step(context: &WorkflowContext<'_>, status: &str) {
     );
 }
 
+pub fn mutation_response_model_drift(
+    context: &WorkflowContext<'_>,
+    status: Option<u16>,
+    path: Option<&str>,
+    reason: Option<&str>,
+) {
+    info!(
+        event = "mutation.response_model_drift",
+        workflow = context.workflow,
+        step = context.step,
+        draft_id = context.draft_id,
+        listing_id = context.listing_id,
+        fields = ?context.fields,
+        http.status = status,
+        model.path = path,
+        model.reason = reason,
+    );
+}
+
 #[derive(Debug)]
 pub struct HttpContext<'a> {
     pub method: &'a str,
@@ -887,15 +906,19 @@ mod tests {
         session.run("draft show", || {
             info!(authorization = "Bearer top-secret", "request");
             let fields = vec!["price".to_owned()];
-            workflow_step(
-                &WorkflowContext {
-                    workflow: "draft_update",
-                    step: "apply_price",
-                    draft_id: Some("draft-1"),
-                    listing_id: None,
-                    fields: &fields,
-                },
-                "started",
+            let context = WorkflowContext {
+                workflow: "draft_update",
+                step: "apply_price",
+                draft_id: Some("draft-1"),
+                listing_id: None,
+                fields: &fields,
+            };
+            workflow_step(&context, "started");
+            mutation_response_model_drift(
+                &context,
+                Some(200),
+                Some("$.ad"),
+                Some("ad data is unavailable"),
             );
             ((), 0)
         });
@@ -938,6 +961,11 @@ mod tests {
                 && event["step"] == "apply_price"
                 && event["fields"] == "[\"price\"]"
                 && event["status"] == "started"
+        }));
+        assert!(events.iter().any(|event| {
+            event["event"] == "mutation.response_model_drift"
+                && event["http.status"] == 200
+                && event["model.path"] == "$.ad"
         }));
         #[cfg(unix)]
         {

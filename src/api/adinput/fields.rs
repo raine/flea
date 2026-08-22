@@ -25,6 +25,7 @@ pub(super) struct FieldProgress {
 pub(super) struct AppliedFieldMutations {
     pub(super) draft: DraftState,
     pub(super) progress: FieldProgress,
+    pub(super) warnings: Vec<String>,
 }
 
 pub(super) struct FieldBoundary<'a> {

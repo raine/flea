@@ -836,6 +836,25 @@ pub async fn execute<A: AdInputApi>(
         crate::domain::commerce::normalize_values_output(&mut value);
         normalize_observed_listing_output(&mut value);
         if let Some(object) = value.as_object_mut() {
+            let reconciled = object
+                .get("warnings")
+                .and_then(Value::as_array)
+                .is_some_and(|warnings| {
+                    warnings.iter().any(|warning| {
+                        warning.as_str().is_some_and(|warning| {
+                            warning.contains("authoritative observation confirmed persisted state")
+                        })
+                    })
+                });
+            let observation_source = if reconciled
+                && matches!(
+                    observation_source,
+                    "draft_creation_response" | "draft_update_response"
+                ) {
+                "draft_detail"
+            } else {
+                observation_source
+            };
             object.insert(
                 "_observation".to_owned(),
                 serde_json::to_value(if confirms_absence {

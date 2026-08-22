@@ -190,7 +190,18 @@ fn finish(
                     .iter()
                     .filter_map(serde_json::Value::as_str)
                     .map(|message| Warning {
-                        code: "workflow.best_effort_failed".to_owned(),
+                        code: if message.starts_with(
+                            "Tori returned an unrecognized successful mutation response",
+                        ) {
+                            "mutation.response_model_drift"
+                        } else if message
+                            .starts_with("Tori returned an ambiguous mutation response")
+                        {
+                            "mutation.observed_success"
+                        } else {
+                            "workflow.best_effort_failed"
+                        }
+                        .to_owned(),
                         message: message.to_owned(),
                     })
                     .collect();

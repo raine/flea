@@ -3,6 +3,38 @@ use super::{
     types::*, validation::*, *,
 };
 
+fn reconciled_mutation_warning(fields: &[String], response_model_drift: bool) -> String {
+    let response = if response_model_drift {
+        "an unrecognized successful mutation response"
+    } else {
+        "an ambiguous mutation response"
+    };
+    format!(
+        "Tori returned {response}; authoritative observation confirmed persisted state for {}",
+        fields.join(", ")
+    )
+}
+
+fn record_mutation_response_drift(context: &diagnostics::WorkflowContext<'_>, error: &ApiError) {
+    if !error
+        .status
+        .is_some_and(|status| (200..300).contains(&status))
+    {
+        return;
+    }
+    let details = error.details.as_deref();
+    diagnostics::mutation_response_model_drift(
+        context,
+        error.status,
+        details
+            .and_then(|details| details.get("path"))
+            .and_then(Value::as_str),
+        details
+            .and_then(|details| details.get("reason"))
+            .and_then(Value::as_str),
+    );
+}
+
 fn require_authoritative_revision(state: &DraftState) -> Result<&str, ApiError> {
     state
         .revision
@@ -86,7 +118,14 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         let mutation_status = error.source.as_ref().and_then(|source| source.status);
         let ambiguous = error.code == "mutation.uncertain"
             || error.source.as_ref().is_some_and(mutation_is_ambiguous);
-        let observation = self.api.get_draft(draft_id).await;
+        let observation = if matches!(failed_stage, "attach_images" | "remove_images") {
+            self.api
+                .publication_draft(draft_id)
+                .await
+                .map(|publication| publication.draft)
+        } else {
+            self.api.get_draft(draft_id).await
+        };
         let listing_observation = if failed_stage == "package_choice" && ambiguous {
             Some(self.api.observed_listing(draft_id).await)
         } else {
@@ -590,7 +629,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         completed: &[String],
         progress: &FieldProgress,
         error: ApiError,
-    ) -> WorkflowError {
+    ) -> Result<DraftState, WorkflowError> {
         let mut validation = structured_validation_issues(&error, draft);
         for issue in &mut validation {
             let candidate = stable_field_key(&issue.field);
@@ -604,7 +643,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             }
         }
         if error.status == Some(412) {
-            return match self.api.get_draft(&draft.draft_id).await {
+            return Err(match self.api.get_draft(&draft.draft_id).await {
                 Ok(fresh) => {
                     let mut context = RetryContext::mutation(match mutation.kind {
                         FieldMutationKind::Price => OperationMethod::Patch,
@@ -640,11 +679,12 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     error,
                     observation_error,
                 ),
-            };
+            });
         }
         if mutation_is_ambiguous(&error) {
             return match self.api.get_draft(&draft.draft_id).await {
-                Ok(fresh) => self.observed_field_error(
+                Ok(fresh) if field_is_persisted(&fresh, mutation) => Ok(fresh),
+                Ok(fresh) => Err(self.observed_field_error(
                     draft,
                     fresh,
                     mutations,
@@ -653,11 +693,11 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     progress,
                     error,
                     "mutation.uncertain",
-                    "A draft field mutation returned an ambiguous response",
+                    "Authoritative draft state conflicts with the requested mutation",
                     &validation,
                     false,
-                ),
-                Err(observation_error) => self.unavailable_field_observation(
+                )),
+                Err(observation_error) => Err(self.unavailable_field_observation(
                     draft,
                     mutations,
                     mutation,
@@ -665,7 +705,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     progress,
                     error,
                     observation_error,
-                ),
+                )),
             };
         }
 
@@ -678,7 +718,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .status
             .is_some_and(|status| (400..500).contains(&status))
             && !validation.is_empty();
-        WorkflowError {
+        Err(WorkflowError {
             code: if is_validation {
                 "draft.validation_failed".to_owned()
             } else {
@@ -715,7 +755,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 &validation,
                 None,
             )),
-        }
+        })
     }
 
     fn enrich_field_error(
@@ -813,6 +853,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         listing_id: Option<&str>,
     ) -> Result<AppliedFieldMutations, WorkflowError> {
         let mut progress = FieldProgress::default();
+        let mut warnings = Vec::new();
         let category_issues =
             if let Some(mutation) = mutations.iter().find(|mutation| mutation.key == "category") {
                 let categories = self.api.publication_categories().await.map_err(|error| {
@@ -864,13 +905,32 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                             draft = updated;
                         }
                         Err(error) => {
-                            diagnostics::workflow_step(&context, "failed");
-                            return Err(self
+                            let response_model_drift = error
+                                .status
+                                .is_some_and(|status| (200..300).contains(&status));
+                            record_mutation_response_drift(&context, &error);
+                            match self
                                 .field_mutation_error(
                                     &draft, &mutations, mutation, completed, &progress, error,
                                 )
                                 .await
-                                .with_optional_source_listing_id(listing_id));
+                            {
+                                Ok(fresh) => {
+                                    diagnostics::workflow_step(&context, "reconciled");
+                                    completed.push(mutation.step.clone());
+                                    completed.push(format!("observe_{}", mutation.key));
+                                    progress.persisted.extend(mutation.fields.clone());
+                                    warnings.push(reconciled_mutation_warning(
+                                        &mutation.fields,
+                                        response_model_drift,
+                                    ));
+                                    draft = fresh;
+                                }
+                                Err(error) => {
+                                    diagnostics::workflow_step(&context, "failed");
+                                    return Err(error.with_optional_source_listing_id(listing_id));
+                                }
+                            }
                         }
                     }
                 }
@@ -937,13 +997,32 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                             }
                         }
                         Err(error) => {
-                            diagnostics::workflow_step(&context, "failed");
-                            return Err(self
+                            let response_model_drift = error
+                                .status
+                                .is_some_and(|status| (200..300).contains(&status));
+                            record_mutation_response_drift(&context, &error);
+                            match self
                                 .field_mutation_error(
                                     &draft, &mutations, mutation, completed, &progress, error,
                                 )
                                 .await
-                                .with_optional_source_listing_id(listing_id));
+                            {
+                                Ok(fresh) => {
+                                    diagnostics::workflow_step(&context, "reconciled");
+                                    completed.push(mutation.step.clone());
+                                    completed.push(format!("observe_{}", mutation.key));
+                                    progress.persisted.extend(mutation.fields.clone());
+                                    warnings.push(reconciled_mutation_warning(
+                                        &mutation.fields,
+                                        response_model_drift,
+                                    ));
+                                    draft = fresh;
+                                }
+                                Err(error) => {
+                                    diagnostics::workflow_step(&context, "failed");
+                                    return Err(error.with_optional_source_listing_id(listing_id));
+                                }
+                            }
                         }
                     }
                 }
@@ -983,7 +1062,11 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 )
                 .with_optional_source_listing_id(listing_id));
         }
-        Ok(AppliedFieldMutations { draft, progress })
+        Ok(AppliedFieldMutations {
+            draft,
+            progress,
+            warnings,
+        })
     }
 
     async fn delivery_composer(
@@ -1211,6 +1294,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         };
         let persisted_fields = applied.progress.persisted.clone();
         let mut draft = applied.draft;
+        let mut warnings = applied.warnings;
         let mut image_processing = Vec::new();
         if !images.is_empty() {
             match self
@@ -1220,6 +1304,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 Ok(result) => {
                     draft = result.draft;
                     image_processing = result.image_processing;
+                    warnings.extend(result.warnings);
                 }
                 Err(error) => {
                     return Err(Self::create_incomplete(
@@ -1237,6 +1322,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             completed_steps: completed,
             image_processing,
             listing_copy: None,
+            warnings,
         })
     }
 
@@ -1308,6 +1394,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         };
         let persisted_fields = applied.progress.persisted.clone();
         let mut draft = applied.draft;
+        let mut warnings = applied.warnings;
         let mut image_processing = Vec::new();
         if !source_images.is_empty() {
             match self
@@ -1317,6 +1404,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 Ok(result) => {
                     draft = result.draft;
                     image_processing = result.image_processing;
+                    warnings.extend(result.warnings);
                 }
                 Err(error) => {
                     return Err(Self::create_incomplete(
@@ -1341,6 +1429,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 source_image_count,
                 image_handling: "fresh_upload_from_source_bytes".to_owned(),
             }),
+            warnings,
         })
     }
 
@@ -1547,6 +1636,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             persisted_fields: applied.progress.persisted,
             ignored_fields: applied.progress.absent,
             completed_steps: completed,
+            warnings: applied.warnings,
         })
     }
 
@@ -1657,6 +1747,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         for image in &mut intent {
             image.attachment = RecoveryAttempt::Attempting;
         }
+        let mut warnings = Vec::new();
         let updated = match self
             .api
             .set_images(&state.draft_id, &state.etag, &state.values, &ordered)
@@ -1664,8 +1755,19 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         {
             Ok(updated) => updated,
             Err(error) => {
+                let response_model_drift = error
+                    .status
+                    .is_some_and(|status| (200..300).contains(&status));
+                let context = diagnostics::WorkflowContext {
+                    workflow: "draft_image_add",
+                    step: "attach_images",
+                    draft_id: Some(&state.draft_id),
+                    listing_id: None,
+                    fields: &[],
+                };
+                record_mutation_response_drift(&context, &error);
                 let workflow = WorkflowError::for_draft(&state.draft_id, completed, error, false);
-                return Err(self
+                let reconciled = self
                     .recover_after_failure(
                         workflow,
                         &state.draft_id,
@@ -1675,22 +1777,49 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                         None,
                         None,
                     )
-                    .await);
+                    .await;
+                let every_image_persisted = reconciled.recovery.as_ref().is_some_and(|recovery| {
+                    recovery.fresh_state.as_ref().is_some_and(|fresh| {
+                        intent.iter().all(|requested| {
+                            requested.image_id.as_ref().is_some_and(|image_id| {
+                                fresh.images.iter().any(|image| {
+                                    image.image_id == *image_id && image.state == ImageState::Ready
+                                })
+                            })
+                        })
+                    })
+                });
+                if !every_image_persisted {
+                    return Err(reconciled);
+                }
+                diagnostics::workflow_step(&context, "reconciled");
+                warnings.push(reconciled_mutation_warning(
+                    &["images".to_owned()],
+                    response_model_drift,
+                ));
+                reconciled
+                    .recovery
+                    .and_then(|recovery| recovery.fresh_state)
+                    .expect("persisted image reconciliation has authoritative state")
             }
         };
         completed.push("attach_images".to_owned());
-        let observed = self
-            .api
-            .publication_draft(&state.draft_id)
-            .await
-            .map_err(|error| {
-                self.post_image_observation_error(&updated, completed, &intent, error)
-            })?
-            .draft;
+        let observed = if warnings.is_empty() {
+            self.api
+                .publication_draft(&state.draft_id)
+                .await
+                .map_err(|error| {
+                    self.post_image_observation_error(&updated, completed, &intent, error)
+                })?
+                .draft
+        } else {
+            updated
+        };
         completed.push("observe_attached_images".to_owned());
         Ok(AddImagesResult {
             draft: observed,
             image_processing,
+            warnings,
         })
     }
 
