@@ -446,6 +446,16 @@ fn html_price_failure_is_transient_but_unsafe_partial_envelope() {
             headers,
             body: b"<html>bad gateway</html>".to_vec(),
         },
+        response(
+            StatusCode::OK,
+            json!({
+                "ad": {
+                    "id": 46031010,
+                    "etag": "one",
+                    "values": { "trade_type": "1" }
+                }
+            }),
+        ),
     ]);
 
     let result = run_with_runtime(
@@ -468,9 +478,9 @@ fn html_price_failure_is_transient_but_unsafe_partial_envelope() {
     assert_eq!(value["partial"]["completed_steps"], json!(["fetch_draft"]));
     assert_eq!(
         value["next_actions"][0]["command"],
-        "flea draft show 46031010"
+        "flea draft update 46031010 --price VALUE"
     );
-    assert_eq!(client.requests.lock().unwrap().len(), 2);
+    assert_eq!(client.requests.lock().unwrap().len(), 3);
 }
 
 #[test]
@@ -481,6 +491,7 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
             StatusCode::SERVICE_UNAVAILABLE,
             json!({ "message": "category service unavailable" }),
         ),
+        response(StatusCode::OK, draft_state("one")),
     ]);
     let result = run_with_runtime(
         [
@@ -499,10 +510,13 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
     assert_eq!(result.exit_code, 50);
     assert_eq!(result.presentation, Presentation::Structured);
     assert_eq!(value["ok"], false);
+    assert_eq!(value["error"]["safe_to_retry"], false);
     assert_eq!(value["partial"]["draft_id"], "draft-1");
+    assert_eq!(value["partial"]["active_step"], "apply_category");
+    assert_eq!(value["partial"]["absent_fields"], json!(["category"]));
     assert_eq!(
         value["next_actions"][0]["command"],
-        "flea draft show draft-1"
+        "flea draft update draft-1 --category VALUE"
     );
 }
 
@@ -569,6 +583,7 @@ fn bad_gateway_after_draft_mutation_is_transient_but_unsafe_to_retry() {
             StatusCode::BAD_GATEWAY,
             json!({ "message": "gateway unavailable" }),
         ),
+        response(StatusCode::OK, draft_state("one")),
     ]);
     let result = run_with_runtime(
         [
@@ -590,7 +605,7 @@ fn bad_gateway_after_draft_mutation_is_transient_but_unsafe_to_retry() {
     );
     assert_eq!(
         value["next_actions"][0]["command"],
-        "flea draft show draft-1"
+        "flea draft update draft-1 --title VALUE"
     );
 }
 

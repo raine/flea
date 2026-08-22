@@ -54,6 +54,17 @@ fn response(status: u16, body: Value) -> HttpResponse {
     }
 }
 
+fn html_response(status: u16) -> HttpResponse {
+    HttpResponse {
+        status,
+        etag: None,
+        content_type: Some("text/html".to_owned()),
+        location: None,
+        body: Value::Null,
+        body_is_unparseable: true,
+    }
+}
+
 fn response_with_location(status: u16, location: &str) -> HttpResponse {
     HttpResponse {
         status,
@@ -264,6 +275,18 @@ fn item_update(id: &str, etag: &str, price: Value) -> Value {
     })
 }
 
+fn decimal_field(key: &str) -> Value {
+    json!({
+        "key": key,
+        "label": key,
+        "type": "decimal",
+        "requirement": "optional",
+        "status": "set",
+        "value": 10,
+        "section": "details"
+    })
+}
+
 #[tokio::test]
 async fn creation_normalizes_the_source_observed_json_success() {
     let transport = FixtureTransport::new([response(
@@ -377,6 +400,269 @@ async fn creation_rejects_noncanonical_redirects_without_following_them() {
 
     assert_eq!(error.status, Some(307));
     assert_eq!(transport.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn source_backed_shape_validation_happens_before_any_field_mutation() {
+    let transport = FixtureTransport::new([response(
+        200,
+        draft(
+            "one",
+            json!({
+                "values": { "title": 10 },
+                "fields": [decimal_field("title")]
+            }),
+        ),
+    )]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([
+                ("postal_code".to_owned(), json!("00100")),
+                ("title".to_owned(), json!("Chair")),
+            ]),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "draft.validation_failed");
+    assert_eq!(error.details.as_ref().unwrap()["stage"], "validate_title");
+    assert_eq!(error.details.as_ref().unwrap()["fields"], json!(["title"]));
+    assert_eq!(
+        error.details.as_ref().unwrap()["field_errors"][0]["source"],
+        "local_schema"
+    );
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.absent_fields, ["title"]);
+    assert_eq!(recovery.unattempted_fields, ["postal_code"]);
+    assert_eq!(transport.requests().len(), 1);
+    assert_eq!(transport.requests()[0].method, Method::Get);
+}
+
+#[tokio::test]
+async fn structured_upstream_errors_name_the_active_field_and_preserve_progress() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "one",
+                json!({
+                    "values": { "title": "Old", "trade_type": "1", "price": 10 }
+                }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "two",
+                json!({
+                    "values": { "title": "Chair", "trade_type": "1", "price": 10 }
+                }),
+            ),
+        ),
+        response(
+            422,
+            json!({
+                "errors": [{
+                    "field": "item.price",
+                    "code": "out_of_range",
+                    "message": "Price is outside the accepted range"
+                }]
+            }),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([
+                ("postal_code".to_owned(), json!("00100")),
+                ("price".to_owned(), json!(25)),
+                ("title".to_owned(), json!("Chair")),
+            ]),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "draft.validation_failed");
+    let details = error.details.unwrap();
+    assert_eq!(details["stage"], "apply_price");
+    assert_eq!(details["fields"], json!(["price"]));
+    assert_eq!(details["field_errors"][0]["field"], "price");
+    assert_eq!(details["field_errors"][0]["code"], "out_of_range");
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.completed_steps, ["fetch_draft", "apply_title"]);
+    assert_eq!(recovery.persisted_fields, ["title"]);
+    assert_eq!(recovery.absent_fields, ["price"]);
+    assert_eq!(recovery.unattempted_fields, ["postal_code"]);
+    assert_eq!(
+        recovery.next_safe_actions,
+        ["flea draft update draft-1 --price VALUE"]
+    );
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].method, Method::Put);
+    assert_eq!(requests[2].method, Method::Patch);
+}
+
+#[tokio::test]
+async fn html_5xx_observation_reports_partial_persistence_without_replaying() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "one",
+                json!({
+                    "values": { "title": "Old", "trade_type": "1", "price": 10 }
+                }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "two",
+                json!({
+                    "values": { "title": "Chair", "trade_type": "1", "price": 10 }
+                }),
+            ),
+        ),
+        html_response(502),
+        response(
+            200,
+            draft(
+                "three",
+                json!({
+                    "values": { "title": "Chair", "trade_type": "1", "price": 25 }
+                }),
+            ),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([
+                ("postal_code".to_owned(), json!("00100")),
+                ("price".to_owned(), json!(25)),
+                ("title".to_owned(), json!("Chair")),
+            ]),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "mutation.uncertain");
+    assert_eq!(error.details.as_ref().unwrap()["stage"], "apply_price");
+    assert_eq!(error.details.as_ref().unwrap()["content_type"], "text/html");
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.persisted_fields, ["title", "price"]);
+    assert!(recovery.absent_fields.is_empty());
+    assert!(recovery.indeterminate_fields.is_empty());
+    assert_eq!(recovery.unattempted_fields, ["postal_code"]);
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 4);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == Method::Patch)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn unchanged_etag_proves_an_ambiguous_field_absent_and_limits_recovery() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "one",
+                json!({ "values": { "trade_type": "1", "price": 10 } }),
+            ),
+        ),
+        html_response(502),
+        response(
+            200,
+            draft(
+                "one",
+                json!({ "values": { "trade_type": "1", "price": 10 } }),
+            ),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([("price".to_owned(), json!(25))]),
+        )
+        .await
+        .unwrap_err();
+
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.absent_fields, ["price"]);
+    assert!(recovery.persisted_fields.is_empty());
+    assert!(recovery.indeterminate_fields.is_empty());
+    assert!(!recovery.safe_to_retry);
+    assert_eq!(
+        recovery.next_safe_actions,
+        ["flea draft update draft-1 --price VALUE"]
+    );
+    assert_eq!(error.details.unwrap()["observation"]["etag_changed"], false);
+    assert_eq!(transport.requests().len(), 3);
+    assert_eq!(
+        transport
+            .requests()
+            .iter()
+            .filter(|request| request.method == Method::Patch)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn failed_observation_keeps_the_active_field_indeterminate() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "one",
+                json!({ "values": { "trade_type": "1", "price": 10 } }),
+            ),
+        ),
+        html_response(502),
+        response(503, json!({ "message": "observation unavailable" })),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([("price".to_owned(), json!(25))]),
+        )
+        .await
+        .unwrap_err();
+
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.active_step.as_deref(), Some("apply_price"));
+    assert_eq!(recovery.fields, ["price"]);
+    assert_eq!(recovery.indeterminate_fields, ["price"]);
+    assert!(recovery.absent_fields.is_empty());
+    assert!(recovery.manual_inspection_required);
+    assert!(!recovery.safe_to_retry);
+    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+    assert_eq!(transport.requests().len(), 3);
+    assert_eq!(
+        transport
+            .requests()
+            .iter()
+            .filter(|request| request.method == Method::Patch)
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -503,6 +789,26 @@ async fn creation_applies_fields_before_the_dedicated_sale_price() {
             200,
             draft(
                 "three",
+                json!({ "values": { "category": 258, "title": "Helmet" } }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "four",
+                json!({
+                    "values": {
+                        "category": 258,
+                        "title": "Helmet",
+                        "description": "Safe helmet"
+                    }
+                }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "five",
                 json!({
                     "values": {
                         "category": 258,
@@ -513,12 +819,12 @@ async fn creation_applies_fields_before_the_dedicated_sale_price() {
                 }),
             ),
         ),
-        response(200, item_update("draft-1", "four", json!(5))),
+        response(200, item_update("draft-1", "six", json!(5))),
         response(
             200,
             observed_draft(
                 "draft-1",
-                "five",
+                "seven",
                 json!({
                     "category": 258,
                     "title": "Helmet",
@@ -551,24 +857,147 @@ async fn creation_applies_fields_before_the_dedicated_sale_price() {
         [
             "create_draft",
             "apply_category",
-            "apply_fields",
+            "apply_title",
+            "apply_description",
+            "apply_trade_type",
             "apply_price",
             "observe_price"
         ]
     );
     let requests = transport.requests();
-    assert_eq!(requests.len(), 5);
-    assert_eq!(requests[1].method, Method::Put);
-    assert_eq!(requests[2].method, Method::Put);
-    let RequestBody::Json(fields) = &requests[2].body else {
+    assert_eq!(requests.len(), 7);
+    assert!(
+        requests[1..5]
+            .iter()
+            .all(|request| request.method == Method::Put)
+    );
+    let RequestBody::Json(fields) = &requests[4].body else {
         panic!("expected composer field update")
     };
     assert_eq!(fields["trade_type"], "1");
     assert!(fields.get("price").is_none());
-    assert_eq!(requests[3].method, Method::Patch);
-    assert_eq!(requests[3].path, "/items/draft-1");
-    assert_eq!(requests[3].retry, RetryPolicy::Never);
-    assert_eq!(requests[4].method, Method::Get);
+    assert_eq!(requests[5].method, Method::Patch);
+    assert_eq!(requests[5].path, "/items/draft-1");
+    assert_eq!(requests[5].retry, RetryPolicy::Never);
+    assert_eq!(requests[6].method, Method::Get);
+}
+
+#[tokio::test]
+async fn update_applies_field_groups_in_deterministic_protocol_order() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "one",
+                json!({
+                    "values": {
+                        "title": "Old",
+                        "trade_type": "1",
+                        "price": 10,
+                        "postal_code": "00000"
+                    }
+                }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "two",
+                json!({
+                    "values": {
+                        "title": "Chair",
+                        "trade_type": "1",
+                        "price": 10,
+                        "postal_code": "00000"
+                    }
+                }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "three",
+                json!({
+                    "values": {
+                        "title": "Chair",
+                        "trade_type": "1",
+                        "price": 10,
+                        "postal_code": "00000"
+                    }
+                }),
+            ),
+        ),
+        response(200, item_update("draft-1", "four", json!(25))),
+        response(
+            200,
+            draft(
+                "five",
+                json!({
+                    "values": {
+                        "title": "Chair",
+                        "trade_type": "1",
+                        "price": 25,
+                        "postal_code": "00000"
+                    }
+                }),
+            ),
+        ),
+        response(
+            200,
+            draft(
+                "six",
+                json!({
+                    "values": {
+                        "title": "Chair",
+                        "trade_type": "1",
+                        "price": 25,
+                        "postal_code": "00100"
+                    }
+                }),
+            ),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let result = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([
+                ("postal_code".to_owned(), json!("00100")),
+                ("price".to_owned(), json!(25)),
+                ("trade_type".to_owned(), json!("sell")),
+                ("title".to_owned(), json!("Chair")),
+            ]),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.completed_steps,
+        [
+            "fetch_draft",
+            "apply_title",
+            "apply_trade_type",
+            "apply_price",
+            "observe_price",
+            "apply_postal_code"
+        ]
+    );
+    let requests = transport.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| &request.method)
+            .collect::<Vec<_>>(),
+        [
+            &Method::Get,
+            &Method::Put,
+            &Method::Put,
+            &Method::Patch,
+            &Method::Get,
+            &Method::Put,
+        ]
+    );
 }
 
 #[tokio::test]
@@ -724,6 +1153,10 @@ async fn price_failure_preserves_transience_and_unsafe_recovery_details() {
             observed_draft("draft-1", "one", json!({ "trade_type": "1" })),
         ),
         failed,
+        response(
+            200,
+            observed_draft("draft-1", "one", json!({ "trade_type": "1" })),
+        ),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
@@ -746,7 +1179,12 @@ async fn price_failure_preserves_transience_and_unsafe_recovery_details() {
     assert_eq!(recovery.completed_steps, ["fetch_draft"]);
     assert!(recovery.upstream_transient);
     assert!(!recovery.safe_to_retry);
-    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+    assert_eq!(recovery.active_step.as_deref(), Some("apply_price"));
+    assert_eq!(recovery.absent_fields, ["price"]);
+    assert_eq!(
+        recovery.next_safe_actions,
+        ["flea draft update draft-1 --price VALUE"]
+    );
     let requests = transport.requests();
     assert_eq!(requests[1].method, Method::Patch);
     assert_eq!(requests[1].retry, RetryPolicy::Never);
@@ -922,6 +1360,7 @@ async fn dedicated_delivery_failure_requires_authoritative_recovery() {
         response(200, draft("one", json!({}))),
         response(200, delivery_page(None)),
         response(503, json!({ "message": "delivery unavailable" })),
+        response(200, delivery_page(None)),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
 
@@ -941,7 +1380,12 @@ async fn dedicated_delivery_failure_requires_authoritative_recovery() {
     );
     assert!(recovery.upstream_transient);
     assert!(!recovery.safe_to_retry);
-    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+    assert_eq!(recovery.active_step.as_deref(), Some("apply_delivery"));
+    assert_eq!(recovery.absent_fields, ["delivery"]);
+    assert_eq!(
+        recovery.next_safe_actions,
+        ["flea draft update draft-1 --delivery VALUE"]
+    );
 }
 
 #[tokio::test]
@@ -972,6 +1416,7 @@ async fn post_creation_failure_keeps_recovery_context() {
     let transport = FixtureTransport::new([
         response(201, draft("one", json!({}))),
         response(503, json!({ "message": "category service unavailable" })),
+        response(200, draft("one", json!({}))),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
 
@@ -988,7 +1433,12 @@ async fn post_creation_failure_keeps_recovery_context() {
     assert_eq!(recovery.completed_steps, ["create_draft"]);
     assert!(recovery.upstream_transient);
     assert!(!recovery.safe_to_retry);
-    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+    assert_eq!(recovery.active_step.as_deref(), Some("apply_category"));
+    assert_eq!(recovery.absent_fields, ["category"]);
+    assert_eq!(
+        recovery.next_safe_actions,
+        ["flea draft update draft-1 --category VALUE"]
+    );
 }
 
 #[tokio::test]
@@ -1000,6 +1450,7 @@ async fn copy_failure_identifies_both_source_listing_and_created_draft() {
         ),
         response(201, draft("one", json!({}))),
         response(503, json!({ "message": "copy failed" })),
+        response(200, draft("one", json!({}))),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
 

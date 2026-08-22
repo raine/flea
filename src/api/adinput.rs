@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     fmt,
     fs::File,
@@ -21,7 +21,10 @@ use crate::{
         HttpError, MultipartPart, RequestSpec, ToriClient, TransportErrorKind, compatibility,
     },
     diagnostics,
-    domain::field::Field,
+    domain::field::{
+        Field, FieldType, UpstreamValidationError, ValidationIssue, map_validation_errors,
+        stable_field_key,
+    },
     retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},
 };
 
@@ -207,6 +210,7 @@ impl ApiError {
         error.details = Some(Box::new(json!({
             "status": response.status,
             "content_type": response.content_type,
+            "body_is_unparseable": response.body_is_unparseable,
             "upstream": upstream
         })));
         error
@@ -1652,11 +1656,29 @@ pub struct Recovery {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing_id: Option<String>,
     pub completed_steps: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_step: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub persisted_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub absent_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub indeterminate_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unattempted_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub manual_inspection_required: bool,
     pub upstream_transient: bool,
     pub safe_to_retry: bool,
     pub next_safe_actions: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh_state: Option<DraftState>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Clone, PartialEq)]
@@ -1694,6 +1716,13 @@ impl WorkflowError {
                 draft_id,
                 listing_id: None,
                 completed_steps,
+                active_step: None,
+                fields: Vec::new(),
+                persisted_fields: Vec::new(),
+                absent_fields: Vec::new(),
+                indeterminate_fields: Vec::new(),
+                unattempted_fields: Vec::new(),
+                manual_inspection_required: false,
                 upstream_transient: error.upstream_transient,
                 safe_to_retry: false,
                 fresh_state: None,
@@ -1725,6 +1754,13 @@ impl WorkflowError {
                 draft_id: draft_id.to_owned(),
                 listing_id: None,
                 completed_steps: completed_steps.to_vec(),
+                active_step: None,
+                fields: Vec::new(),
+                persisted_fields: Vec::new(),
+                absent_fields: Vec::new(),
+                indeterminate_fields: Vec::new(),
+                unattempted_fields: Vec::new(),
+                manual_inspection_required: false,
                 upstream_transient,
                 safe_to_retry,
                 next_safe_actions: vec![format!("flea draft show {draft_id}")],
@@ -1741,27 +1777,11 @@ impl WorkflowError {
         self
     }
 
-    fn price_observation(
-        draft_id: &str,
-        completed_steps: &[String],
-        requested: &Value,
-        fresh_state: DraftState,
-    ) -> Self {
-        let observed = fresh_state.values.get("price").cloned();
-        let mut error = ApiError::new(
-            "mutation.uncertain",
-            "The authoritative draft price does not match the requested price",
-        );
-        error.details = Some(Box::new(json!({
-            "stage": "observe_price",
-            "requested_price": requested,
-            "observed_price": observed,
-        })));
-        let mut workflow = Self::for_draft(draft_id, completed_steps, error, false);
-        if let Some(recovery) = &mut workflow.recovery {
-            recovery.fresh_state = Some(fresh_state);
+    fn with_optional_listing_id(self, listing_id: Option<&str>) -> Self {
+        match listing_id {
+            Some(listing_id) => self.with_listing_id(listing_id),
+            None => self,
         }
-        workflow
     }
 
     fn validation(draft_id: &str, completed_steps: &[String], missing: Vec<String>) -> Self {
@@ -1773,6 +1793,13 @@ impl WorkflowError {
                 draft_id: draft_id.to_owned(),
                 listing_id: None,
                 completed_steps: completed_steps.to_vec(),
+                active_step: None,
+                fields: Vec::new(),
+                persisted_fields: Vec::new(),
+                absent_fields: Vec::new(),
+                indeterminate_fields: Vec::new(),
+                unattempted_fields: Vec::new(),
+                manual_inspection_required: false,
                 upstream_transient: false,
                 safe_to_retry: false,
                 next_safe_actions: vec![format!("flea draft update {draft_id} --input PATH")],
@@ -1812,6 +1839,13 @@ impl WorkflowError {
                 draft_id: draft_id.to_owned(),
                 listing_id: None,
                 completed_steps: completed_steps.to_vec(),
+                active_step: Some("validate_delivery".to_owned()),
+                fields: vec!["delivery".to_owned()],
+                persisted_fields: Vec::new(),
+                absent_fields: vec!["delivery".to_owned()],
+                indeterminate_fields: Vec::new(),
+                unattempted_fields: Vec::new(),
+                manual_inspection_required: false,
                 upstream_transient: false,
                 safe_to_retry: false,
                 next_safe_actions,
@@ -1836,8 +1870,7 @@ impl WorkflowError {
 pub(crate) fn completed_steps_have_mutation(completed_steps: &[String]) -> bool {
     completed_steps.iter().any(|step| {
         step == "create_draft"
-            || step == "apply_category"
-            || step == "apply_fields"
+            || step.starts_with("apply_")
             || step == "copy_fields"
             || step.starts_with("upload_image:")
             || matches!(
@@ -1916,6 +1949,514 @@ pub struct PublishResult {
     pub observed_listing: Value,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FieldMutationKind {
+    Composer,
+    Price,
+    Delivery,
+}
+
+#[derive(Clone, Debug)]
+struct FieldMutation {
+    key: String,
+    value: Value,
+    step: String,
+    fields: Vec<String>,
+    kind: FieldMutationKind,
+}
+
+#[derive(Default)]
+struct FieldProgress {
+    persisted: Vec<String>,
+    absent: Vec<String>,
+}
+
+struct AppliedFieldMutations {
+    draft: DraftState,
+    progress: FieldProgress,
+}
+
+struct FieldBoundary<'a> {
+    step: &'a str,
+    fields: &'a [String],
+}
+
+struct FieldOutcomes {
+    persisted: Vec<String>,
+    absent: Vec<String>,
+    indeterminate: Vec<String>,
+    unattempted: Vec<String>,
+}
+
+fn ordered_field_mutations(values: Map<String, Value>) -> Vec<FieldMutation> {
+    let order = [
+        "category",
+        "title",
+        "description",
+        "trade_type",
+        "price",
+        "postal_code",
+        "attributes",
+        "delivery",
+    ];
+    let mut values = values.into_iter().collect::<Vec<_>>();
+    values.sort_by(|(left, _), (right, _)| {
+        let rank = |key: &str| {
+            if key == "delivery" {
+                usize::MAX
+            } else {
+                order
+                    .iter()
+                    .position(|candidate| *candidate == key)
+                    .unwrap_or(order.len() - 1)
+            }
+        };
+        rank(left).cmp(&rank(right)).then_with(|| left.cmp(right))
+    });
+    values
+        .into_iter()
+        .map(|(key, value)| {
+            let value = if key == "category" {
+                normalize_category(value)
+            } else {
+                value
+            };
+            let stage_key: String = key
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() || character == '_' {
+                        character.to_ascii_lowercase()
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let fields = if key == "attributes" {
+                value
+                    .as_object()
+                    .filter(|attributes| !attributes.is_empty())
+                    .map(|attributes| {
+                        attributes
+                            .keys()
+                            .map(|field| format!("attributes.{field}"))
+                            .collect()
+                    })
+                    .unwrap_or_else(|| vec![key.clone()])
+            } else {
+                vec![key.clone()]
+            };
+            let kind = match key.as_str() {
+                "price" => FieldMutationKind::Price,
+                "delivery" => FieldMutationKind::Delivery,
+                _ => FieldMutationKind::Composer,
+            };
+            FieldMutation {
+                step: format!("apply_{stage_key}"),
+                fields,
+                key,
+                value,
+                kind,
+            }
+        })
+        .collect()
+}
+
+fn pending_fields(
+    mutations: &[FieldMutation],
+    progress: &FieldProgress,
+    active_fields: &[String],
+) -> Vec<String> {
+    let classified = progress
+        .persisted
+        .iter()
+        .chain(&progress.absent)
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let active = active_fields
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    mutations
+        .iter()
+        .flat_map(|mutation| mutation.fields.iter())
+        .filter(|field| !classified.contains(field.as_str()) && !active.contains(field.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn field_is_persisted(state: &DraftState, mutation: &FieldMutation, field: &str) -> bool {
+    if mutation.kind == FieldMutationKind::Delivery {
+        let requested = delivery_values(&mutation.value).unwrap_or_default();
+        return state
+            .delivery
+            .as_ref()
+            .is_some_and(|delivery| delivery.selected == requested);
+    }
+    if mutation.key == "attributes" {
+        let Some(attribute) = field.strip_prefix("attributes.") else {
+            return state.values.get(&mutation.key) == Some(&mutation.value);
+        };
+        return state
+            .values
+            .get("attributes")
+            .and_then(Value::as_object)
+            .and_then(|attributes| attributes.get(attribute))
+            == mutation
+                .value
+                .as_object()
+                .and_then(|attributes| attributes.get(attribute));
+    }
+    let Some(observed) = state.values.get(&mutation.key) else {
+        return false;
+    };
+    match mutation.key.as_str() {
+        "price" => prices_equal(observed, &mutation.value),
+        "trade_type" => {
+            observed
+                .as_str()
+                .zip(mutation.value.as_str())
+                .is_some_and(|(observed, requested)| {
+                    composer_trade_type(observed) == composer_trade_type(requested)
+                })
+        }
+        "category" => normalize_category(observed.clone()) == mutation.value,
+        _ => observed == &mutation.value,
+    }
+}
+
+fn classify_fields(state: &DraftState, mutation: &FieldMutation) -> (Vec<String>, Vec<String>) {
+    mutation
+        .fields
+        .iter()
+        .cloned()
+        .partition(|field| field_is_persisted(state, mutation, field))
+}
+
+fn retry_field_action(draft_id: &str, fields: &[String]) -> String {
+    let single_flag = match fields {
+        [field] => match field.as_str() {
+            "category" => Some("--category VALUE"),
+            "title" => Some("--title VALUE"),
+            "description" => Some("--description VALUE"),
+            "price" => Some("--price VALUE"),
+            "trade_type" => Some("--trade-type VALUE"),
+            "postal_code" => Some("--postal-code VALUE"),
+            "delivery" => Some("--delivery VALUE"),
+            _ => None,
+        },
+        _ => None,
+    };
+    single_flag.map_or_else(
+        || format!("flea draft update {draft_id} --input PATH_WITH_ONLY_ABSENT_FIELDS"),
+        |flag| format!("flea draft update {draft_id} {flag}"),
+    )
+}
+
+fn field_recovery(
+    draft_id: &str,
+    completed_steps: &[String],
+    boundary: FieldBoundary<'_>,
+    outcomes: FieldOutcomes,
+    upstream_transient: bool,
+    safe_to_retry: bool,
+    fresh_state: Option<DraftState>,
+    force_inspection: bool,
+) -> Recovery {
+    let manual_inspection_required = force_inspection || !outcomes.indeterminate.is_empty();
+    let next_safe_actions = if manual_inspection_required || outcomes.absent.is_empty() {
+        vec![format!("flea draft show {draft_id}")]
+    } else {
+        vec![retry_field_action(draft_id, &outcomes.absent)]
+    };
+    Recovery {
+        draft_id: draft_id.to_owned(),
+        listing_id: None,
+        completed_steps: completed_steps.to_vec(),
+        active_step: Some(boundary.step.to_owned()),
+        fields: boundary.fields.to_vec(),
+        persisted_fields: outcomes.persisted,
+        absent_fields: outcomes.absent,
+        indeterminate_fields: outcomes.indeterminate,
+        unattempted_fields: outcomes.unattempted,
+        manual_inspection_required,
+        upstream_transient,
+        safe_to_retry,
+        next_safe_actions,
+        fresh_state,
+    }
+}
+
+fn schema_validation_issues(state: &DraftState, mutation: &FieldMutation) -> Vec<ValidationIssue> {
+    let requested = if mutation.key == "attributes" {
+        mutation
+            .value
+            .as_object()
+            .map(|attributes| {
+                attributes
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![(mutation.key.as_str(), &mutation.value)])
+    } else {
+        vec![(mutation.key.as_str(), &mutation.value)]
+    };
+    requested
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let field = state.fields.iter().find(|field| field.key == key)?;
+            let mut issue = schema_validation_issue(state, field, value)?;
+            if mutation.key == "attributes" {
+                issue.field = format!("attributes.{}", issue.field);
+            }
+            Some(issue)
+        })
+        .collect()
+}
+
+fn schema_validation_issue(
+    state: &DraftState,
+    field: &Field,
+    value: &Value,
+) -> Option<ValidationIssue> {
+    if value.is_null() {
+        return None;
+    }
+    let valid_shape = match field.field_type {
+        FieldType::String | FieldType::Text | FieldType::Date => value.is_string(),
+        FieldType::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
+        FieldType::Decimal => value.as_f64().is_some_and(f64::is_finite),
+        FieldType::Boolean => value.is_boolean(),
+        FieldType::Select => !value.is_array() && !value.is_object(),
+        FieldType::MultiSelect => value.is_array(),
+        FieldType::Unknown(_) => true,
+    };
+    if !valid_shape {
+        return Some(ValidationIssue {
+            field: field.key.clone(),
+            code: "invalid_type".to_owned(),
+            message: format!("expected {}", field_type_name(&field.field_type)),
+            source: Some("local_schema".to_owned()),
+            raw: None,
+        });
+    }
+    if matches!(field.field_type, FieldType::Select | FieldType::MultiSelect) {
+        let allowed = state
+            .options
+            .iter()
+            .filter(|option| option.field == field.key)
+            .map(|option| option.value.as_str())
+            .collect::<BTreeSet<_>>();
+        let supplied = value
+            .as_array()
+            .map(|values| values.iter().collect::<Vec<_>>())
+            .unwrap_or_else(|| vec![value]);
+        if !allowed.is_empty()
+            && supplied.iter().any(|value| {
+                let candidate = match value {
+                    Value::String(value) => Some(value.clone()),
+                    Value::Number(value) => Some(value.to_string()),
+                    Value::Bool(value) => Some(value.to_string()),
+                    _ => None,
+                };
+                candidate.is_none_or(|value| !allowed.contains(value.as_str()))
+            })
+        {
+            return Some(ValidationIssue {
+                field: field.key.clone(),
+                code: "invalid_option".to_owned(),
+                message: "value is not present in the source-backed field options".to_owned(),
+                source: Some("local_schema".to_owned()),
+                raw: None,
+            });
+        }
+    }
+    None
+}
+
+fn field_type_name(field_type: &FieldType) -> &'static str {
+    match field_type {
+        FieldType::String | FieldType::Text => "a string",
+        FieldType::Integer => "an integer",
+        FieldType::Decimal => "a number",
+        FieldType::Boolean => "a boolean",
+        FieldType::Select => "one selectable value",
+        FieldType::MultiSelect => "an array of selectable values",
+        FieldType::Date => "a date string",
+        FieldType::Unknown(_) => "a value accepted by the composer",
+    }
+}
+
+fn structured_validation_issues(error: &ApiError, state: &DraftState) -> Vec<ValidationIssue> {
+    let Some(upstream) = error
+        .details
+        .as_deref()
+        .and_then(|details| details.get("upstream"))
+    else {
+        return Vec::new();
+    };
+    let mut errors = Vec::new();
+    collect_validation_errors(upstream, &mut errors);
+    let mut issues = map_validation_errors(errors, &state.fields);
+    for issue in &mut issues {
+        issue.field = stable_field_key(&issue.field);
+    }
+    issues.sort_by(|left, right| {
+        left.field
+            .cmp(&right.field)
+            .then_with(|| left.code.cmp(&right.code))
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    issues.dedup_by(|left, right| {
+        left.field == right.field && left.code == right.code && left.message == right.message
+    });
+    issues
+}
+
+fn collect_validation_errors(value: &Value, output: &mut Vec<UpstreamValidationError>) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    for key in [
+        "errors",
+        "field_errors",
+        "fieldErrors",
+        "validation_errors",
+        "validationErrors",
+        "invalid_params",
+        "invalid-params",
+        "violations",
+        "validation",
+        "fields",
+    ] {
+        let Some(errors) = object.get(key) else {
+            continue;
+        };
+        match errors {
+            Value::Array(errors) => {
+                for error in errors {
+                    collect_validation_error_item(error, None, output);
+                }
+            }
+            Value::Object(errors) => {
+                for (field, error) in errors {
+                    match error {
+                        Value::Array(errors) => {
+                            for error in errors {
+                                collect_validation_error_item(error, Some(field), output);
+                            }
+                        }
+                        error => collect_validation_error_item(error, Some(field), output),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for key in ["error", "details"] {
+        if let Some(nested) = object.get(key) {
+            collect_validation_errors(nested, output);
+        }
+    }
+}
+
+fn collect_validation_error_item(
+    value: &Value,
+    fallback_field: Option<&str>,
+    output: &mut Vec<UpstreamValidationError>,
+) {
+    if let Some(message) = value.as_str() {
+        if let Some(field) = fallback_field {
+            output.push(UpstreamValidationError {
+                source: field.to_owned(),
+                code: "invalid".to_owned(),
+                message: message.to_owned(),
+                raw: Some(value.clone()),
+            });
+        }
+        return;
+    }
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    let source = [
+        "field",
+        "path",
+        "name",
+        "property",
+        "parameter",
+        "attribute",
+        "key",
+        "source",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        object.get(key).and_then(|value| {
+            value.as_str().or_else(|| {
+                value.as_object().and_then(|source| {
+                    ["pointer", "parameter", "field", "path"]
+                        .into_iter()
+                        .find_map(|key| source.get(key).and_then(Value::as_str))
+                })
+            })
+        })
+    })
+    .or(fallback_field);
+    let Some(source) = source else {
+        return;
+    };
+    let message = ["message", "reason", "detail", "description"]
+        .into_iter()
+        .find_map(|key| object.get(key).and_then(Value::as_str))
+        .unwrap_or("Tori rejected the field");
+    let code = ["code", "type", "kind"]
+        .into_iter()
+        .find_map(|key| object.get(key).and_then(Value::as_str))
+        .unwrap_or("invalid");
+    output.push(UpstreamValidationError {
+        source: source.to_owned(),
+        code: code.to_owned(),
+        message: message.to_owned(),
+        raw: Some(value.clone()),
+    });
+}
+
+fn mutation_is_ambiguous(error: &ApiError) -> bool {
+    error.code == "mutation.uncertain"
+        || error.status.is_none()
+        || matches!(error.status, Some(408 | 425 | 500..=599))
+}
+
+fn field_error_details(
+    stage: &str,
+    fields: &[String],
+    error: &ApiError,
+    validation: &[ValidationIssue],
+    observation: Option<Value>,
+) -> Value {
+    let mut details = json!({
+        "stage": stage,
+        "fields": fields,
+        "status": error.status,
+        "content_type": error.details.as_deref().and_then(|details| details.get("content_type")),
+        "body_is_unparseable": error.details.as_deref().and_then(|details| details.get("body_is_unparseable")),
+        "upstream_error": error.details,
+    });
+    let object = details
+        .as_object_mut()
+        .expect("field error details are an object");
+    if !validation.is_empty() {
+        object.insert(
+            "field_errors".to_owned(),
+            serde_json::to_value(validation).expect("validation issues serialize"),
+        );
+    }
+    if let Some(observation) = observation {
+        object.insert("observation".to_owned(), observation);
+    }
+    details
+}
+
 pub struct DraftWorkflow<A> {
     api: A,
     config: WorkflowConfig,
@@ -1953,31 +2494,561 @@ fn prices_equal(left: &Value, right: &Value) -> bool {
 }
 
 impl<A: AdInputApi> DraftWorkflow<A> {
-    async fn observe_price(
+    fn local_field_validation_error(
         &self,
-        draft_id: &str,
-        requested: &Value,
+        draft: &DraftState,
+        mutations: &[FieldMutation],
+        mutation: &FieldMutation,
         completed: &[String],
-    ) -> Result<DraftState, WorkflowError> {
-        let fresh = self.api.get_draft(draft_id).await.map_err(|error| {
-            WorkflowError::for_draft(
-                draft_id,
+        progress: &FieldProgress,
+        issues: Vec<ValidationIssue>,
+    ) -> WorkflowError {
+        let (active_persisted, active_absent) = classify_fields(draft, mutation);
+        let mut persisted = progress.persisted.clone();
+        persisted.extend(active_persisted);
+        let mut absent = progress.absent.clone();
+        absent.extend(active_absent);
+        let stage = mutation.step.replacen("apply_", "validate_", 1);
+        let mut api = ApiError::new(
+            "draft.validation_failed",
+            "Draft fields do not match the source-backed composer schema",
+        );
+        api.details = Some(Box::new(json!({
+            "stage": stage,
+            "fields": mutation.fields,
+            "field_errors": issues,
+        })));
+        WorkflowError {
+            code: api.code.clone(),
+            message: api.message.clone(),
+            source: Some(api),
+            recovery: Some(field_recovery(
+                &draft.draft_id,
                 completed,
-                error_at_stage(error, "observe_price"),
-                true,
-            )
-        })?;
-        if fresh
-            .values
-            .get("price")
-            .is_some_and(|observed| prices_equal(observed, requested))
-        {
-            Ok(fresh)
-        } else {
-            Err(WorkflowError::price_observation(
-                draft_id, completed, requested, fresh,
-            ))
+                FieldBoundary {
+                    step: &stage,
+                    fields: &mutation.fields,
+                },
+                FieldOutcomes {
+                    persisted,
+                    absent,
+                    indeterminate: Vec::new(),
+                    unattempted: pending_fields(mutations, progress, &mutation.fields),
+                },
+                false,
+                false,
+                Some(draft.clone()),
+                false,
+            )),
+            details: Some(json!({
+                "stage": stage,
+                "fields": mutation.fields,
+                "field_errors": issues,
+            })),
         }
+    }
+
+    fn observed_field_error(
+        &self,
+        draft_before: &DraftState,
+        fresh: DraftState,
+        mutations: &[FieldMutation],
+        mutation: &FieldMutation,
+        completed: &[String],
+        progress: &FieldProgress,
+        error: ApiError,
+        code: &str,
+        message: &str,
+        validation: &[ValidationIssue],
+        safe_to_retry: bool,
+    ) -> WorkflowError {
+        let (active_persisted, active_absent) = classify_fields(&fresh, mutation);
+        let mut persisted = progress.persisted.clone();
+        persisted.extend(active_persisted);
+        let mut absent = progress.absent.clone();
+        absent.extend(active_absent);
+        let observation = json!({
+            "status": "succeeded",
+            "etag_before": draft_before.etag,
+            "etag_after": fresh.etag,
+            "etag_changed": draft_before.etag != fresh.etag,
+        });
+        WorkflowError {
+            code: code.to_owned(),
+            message: message.to_owned(),
+            source: Some(error.clone()),
+            recovery: Some(field_recovery(
+                &draft_before.draft_id,
+                completed,
+                FieldBoundary {
+                    step: &mutation.step,
+                    fields: &mutation.fields,
+                },
+                FieldOutcomes {
+                    persisted,
+                    absent,
+                    indeterminate: Vec::new(),
+                    unattempted: pending_fields(mutations, progress, &mutation.fields),
+                },
+                error.upstream_transient,
+                safe_to_retry,
+                Some(fresh),
+                false,
+            )),
+            details: Some(field_error_details(
+                &mutation.step,
+                &mutation.fields,
+                &error,
+                validation,
+                Some(observation),
+            )),
+        }
+    }
+
+    fn unavailable_field_observation(
+        &self,
+        draft: &DraftState,
+        mutations: &[FieldMutation],
+        mutation: &FieldMutation,
+        completed: &[String],
+        progress: &FieldProgress,
+        mutation_error: ApiError,
+        observation_error: ApiError,
+    ) -> WorkflowError {
+        let validation = structured_validation_issues(&mutation_error, draft);
+        let observation = json!({
+            "status": "failed",
+            "error": {
+                "code": observation_error.code,
+                "status": observation_error.status,
+                "details": observation_error.details,
+            },
+            "guidance": "Inspect the authoritative draft before retrying any indeterminate field",
+        });
+        WorkflowError {
+            code: "mutation.uncertain".to_owned(),
+            message: "A draft field mutation returned an ambiguous response and authoritative state is unavailable".to_owned(),
+            source: Some(mutation_error.clone()),
+            recovery: Some(field_recovery(
+                &draft.draft_id,
+                completed,
+                FieldBoundary {
+                    step: &mutation.step,
+                    fields: &mutation.fields,
+                },
+                FieldOutcomes {
+                    persisted: progress.persisted.clone(),
+                    absent: progress.absent.clone(),
+                    indeterminate: mutation.fields.clone(),
+                    unattempted: pending_fields(mutations, progress, &mutation.fields),
+                },
+                mutation_error.upstream_transient,
+                false,
+                None,
+                true,
+            )),
+            details: Some(field_error_details(
+                &mutation.step,
+                &mutation.fields,
+                &mutation_error,
+                &validation,
+                Some(observation),
+            )),
+        }
+    }
+
+    async fn field_mutation_error(
+        &self,
+        draft: &DraftState,
+        mutations: &[FieldMutation],
+        mutation: &FieldMutation,
+        completed: &[String],
+        progress: &FieldProgress,
+        error: ApiError,
+    ) -> WorkflowError {
+        let mut validation = structured_validation_issues(&error, draft);
+        for issue in &mut validation {
+            let candidate = stable_field_key(&issue.field);
+            if candidate == mutation.key {
+                issue.field = mutation.key.clone();
+            } else {
+                let attribute = format!("attributes.{candidate}");
+                if mutation.fields.contains(&attribute) {
+                    issue.field = attribute;
+                }
+            }
+        }
+        if error.status == Some(412) {
+            return match self.api.get_draft(&draft.draft_id).await {
+                Ok(fresh) => {
+                    let mut context = RetryContext::mutation(match mutation.kind {
+                        FieldMutationKind::Price => OperationMethod::Patch,
+                        FieldMutationKind::Delivery => OperationMethod::Post,
+                        FieldMutationKind::Composer => OperationMethod::Put,
+                    })
+                    .with_etag()
+                    .with_authoritative_observation();
+                    if completed_steps_have_mutation(completed) {
+                        context = context.with_completed_mutation_steps();
+                    }
+                    let classification = classify(FailureKind::PreconditionFailed, context);
+                    self.observed_field_error(
+                        draft,
+                        fresh,
+                        mutations,
+                        mutation,
+                        completed,
+                        progress,
+                        error,
+                        "draft.conflict",
+                        "The draft changed while the field update was being applied",
+                        &validation,
+                        classification.safe_to_retry,
+                    )
+                }
+                Err(observation_error) => self.unavailable_field_observation(
+                    draft,
+                    mutations,
+                    mutation,
+                    completed,
+                    progress,
+                    error,
+                    observation_error,
+                ),
+            };
+        }
+        if mutation_is_ambiguous(&error) {
+            return match self.api.get_draft(&draft.draft_id).await {
+                Ok(fresh) => self.observed_field_error(
+                    draft,
+                    fresh,
+                    mutations,
+                    mutation,
+                    completed,
+                    progress,
+                    error,
+                    "mutation.uncertain",
+                    "A draft field mutation returned an ambiguous response",
+                    &validation,
+                    false,
+                ),
+                Err(observation_error) => self.unavailable_field_observation(
+                    draft,
+                    mutations,
+                    mutation,
+                    completed,
+                    progress,
+                    error,
+                    observation_error,
+                ),
+            };
+        }
+
+        let (active_persisted, active_absent) = classify_fields(draft, mutation);
+        let mut persisted = progress.persisted.clone();
+        persisted.extend(active_persisted);
+        let mut absent = progress.absent.clone();
+        absent.extend(active_absent);
+        let is_validation = error
+            .status
+            .is_some_and(|status| (400..500).contains(&status))
+            && !validation.is_empty();
+        WorkflowError {
+            code: if is_validation {
+                "draft.validation_failed".to_owned()
+            } else {
+                error.code.clone()
+            },
+            message: if is_validation {
+                "Tori rejected one or more draft fields".to_owned()
+            } else {
+                error.message.clone()
+            },
+            source: Some(error.clone()),
+            recovery: Some(field_recovery(
+                &draft.draft_id,
+                completed,
+                FieldBoundary {
+                    step: &mutation.step,
+                    fields: &mutation.fields,
+                },
+                FieldOutcomes {
+                    persisted,
+                    absent,
+                    indeterminate: Vec::new(),
+                    unattempted: pending_fields(mutations, progress, &mutation.fields),
+                },
+                error.upstream_transient,
+                false,
+                Some(draft.clone()),
+                false,
+            )),
+            details: Some(field_error_details(
+                &mutation.step,
+                &mutation.fields,
+                &error,
+                &validation,
+                None,
+            )),
+        }
+    }
+
+    fn enrich_field_error(
+        &self,
+        mut error: WorkflowError,
+        draft: &DraftState,
+        mutations: &[FieldMutation],
+        mutation: &FieldMutation,
+        progress: &FieldProgress,
+    ) -> WorkflowError {
+        let validation_failure = matches!(
+            error.code.as_str(),
+            "draft.validation_failed"
+                | "draft.invalid_delivery"
+                | "draft.delivery_options_unavailable"
+        );
+        if let Some(recovery) = &mut error.recovery {
+            recovery.active_step = Some(if validation_failure {
+                "validate_delivery".to_owned()
+            } else {
+                mutation.step.clone()
+            });
+            recovery.fields = mutation.fields.clone();
+            let active_persisted = std::mem::take(&mut recovery.persisted_fields);
+            let active_absent = std::mem::take(&mut recovery.absent_fields);
+            let active_indeterminate = std::mem::take(&mut recovery.indeterminate_fields);
+            recovery.persisted_fields = progress.persisted.clone();
+            recovery.persisted_fields.extend(active_persisted);
+            recovery.absent_fields = progress.absent.clone();
+            recovery.absent_fields.extend(active_absent);
+            recovery.indeterminate_fields = active_indeterminate;
+            recovery.unattempted_fields = pending_fields(mutations, progress, &mutation.fields);
+            if validation_failure {
+                if !recovery
+                    .absent_fields
+                    .iter()
+                    .any(|field| mutation.fields.contains(field))
+                {
+                    recovery.absent_fields.extend(mutation.fields.clone());
+                }
+                recovery.next_safe_actions =
+                    vec![retry_field_action(&draft.draft_id, &recovery.absent_fields)];
+            } else if error.code == "mutation.uncertain" {
+                if recovery
+                    .persisted_fields
+                    .iter()
+                    .all(|field| !mutation.fields.contains(field))
+                    && recovery
+                        .absent_fields
+                        .iter()
+                        .all(|field| !mutation.fields.contains(field))
+                    && recovery.indeterminate_fields.is_empty()
+                {
+                    recovery.indeterminate_fields = mutation.fields.clone();
+                }
+                recovery.manual_inspection_required = !recovery.indeterminate_fields.is_empty();
+                if recovery.manual_inspection_required || recovery.absent_fields.is_empty() {
+                    recovery.next_safe_actions =
+                        vec![format!("flea draft show {}", draft.draft_id)];
+                } else {
+                    recovery.next_safe_actions =
+                        vec![retry_field_action(&draft.draft_id, &recovery.absent_fields)];
+                }
+            }
+            recovery.persisted_fields.sort();
+            recovery.persisted_fields.dedup();
+            recovery.absent_fields.sort();
+            recovery.absent_fields.dedup();
+        }
+        let details = error.details.get_or_insert_with(|| json!({}));
+        if let Some(details) = details.as_object_mut() {
+            details.insert(
+                "stage".to_owned(),
+                Value::String(if validation_failure {
+                    "validate_delivery".to_owned()
+                } else {
+                    mutation.step.clone()
+                }),
+            );
+            details.insert(
+                "fields".to_owned(),
+                Value::Array(mutation.fields.iter().cloned().map(Value::String).collect()),
+            );
+        }
+        error
+    }
+
+    async fn apply_field_mutations(
+        &self,
+        mut draft: DraftState,
+        mutations: Vec<FieldMutation>,
+        completed: &mut Vec<String>,
+        workflow: &str,
+        listing_id: Option<&str>,
+    ) -> Result<AppliedFieldMutations, WorkflowError> {
+        let mut progress = FieldProgress::default();
+        let category_first = mutations
+            .first()
+            .is_some_and(|mutation| mutation.key == "category");
+        let initial_validation_end = if category_first { 1 } else { mutations.len() };
+        for mutation in &mutations[..initial_validation_end] {
+            let issues = schema_validation_issues(&draft, mutation);
+            if !issues.is_empty() {
+                return Err(self
+                    .local_field_validation_error(
+                        &draft, &mutations, mutation, completed, &progress, issues,
+                    )
+                    .with_optional_listing_id(listing_id));
+            }
+        }
+
+        for (index, mutation) in mutations.iter().enumerate() {
+            if category_first && index == 1 {
+                for pending in &mutations[index..] {
+                    let issues = schema_validation_issues(&draft, pending);
+                    if !issues.is_empty() {
+                        return Err(self
+                            .local_field_validation_error(
+                                &draft, &mutations, pending, completed, &progress, issues,
+                            )
+                            .with_optional_listing_id(listing_id));
+                    }
+                }
+            }
+            let context = diagnostics::WorkflowContext {
+                workflow,
+                step: &mutation.step,
+                draft_id: Some(&draft.draft_id),
+                listing_id,
+                fields: &mutation.fields,
+            };
+            diagnostics::workflow_step(&context, "started");
+            match mutation.kind {
+                FieldMutationKind::Composer => {
+                    let mut values = draft.values.clone();
+                    values.insert(mutation.key.clone(), mutation.value.clone());
+                    match self
+                        .api
+                        .update_item(&draft.draft_id, &draft.etag, &values)
+                        .await
+                    {
+                        Ok(updated) => {
+                            diagnostics::workflow_step(&context, "completed");
+                            completed.push(mutation.step.clone());
+                            let (persisted, absent) = classify_fields(&updated, mutation);
+                            progress.persisted.extend(persisted);
+                            progress.absent.extend(absent);
+                            draft = updated;
+                        }
+                        Err(error) => {
+                            diagnostics::workflow_step(&context, "failed");
+                            return Err(self
+                                .field_mutation_error(
+                                    &draft, &mutations, mutation, completed, &progress, error,
+                                )
+                                .await
+                                .with_optional_listing_id(listing_id));
+                        }
+                    }
+                }
+                FieldMutationKind::Price => {
+                    match self
+                        .api
+                        .update_sale_price(&draft.draft_id, &draft.etag, &mutation.value)
+                        .await
+                    {
+                        Ok(_) => {
+                            completed.push(mutation.step.clone());
+                            match self.api.get_draft(&draft.draft_id).await {
+                                Ok(fresh) if field_is_persisted(&fresh, mutation, "price") => {
+                                    diagnostics::workflow_step(&context, "completed");
+                                    completed.push("observe_price".to_owned());
+                                    progress.persisted.push("price".to_owned());
+                                    draft = fresh;
+                                }
+                                Ok(fresh) => {
+                                    diagnostics::workflow_step(&context, "failed");
+                                    let mut error = ApiError::new(
+                                        "mutation.uncertain",
+                                        "The authoritative draft price does not match the requested price",
+                                    );
+                                    error.details = Some(Box::new(json!({
+                                        "stage": "observe_price",
+                                        "requested_price": mutation.value,
+                                        "observed_price": fresh.values.get("price"),
+                                    })));
+                                    return Err(self
+                                        .observed_field_error(
+                                            &draft,
+                                            fresh,
+                                            &mutations,
+                                            mutation,
+                                            completed,
+                                            &progress,
+                                            error,
+                                            "mutation.uncertain",
+                                            "The authoritative draft price does not match the requested price",
+                                            &[],
+                                            false,
+                                        )
+                                        .with_optional_listing_id(listing_id));
+                                }
+                                Err(observation_error) => {
+                                    diagnostics::workflow_step(&context, "failed");
+                                    let mutation_error = ApiError::new(
+                                        "mutation.uncertain",
+                                        "The price mutation succeeded but authoritative state is unavailable",
+                                    );
+                                    return Err(self
+                                        .unavailable_field_observation(
+                                            &draft,
+                                            &mutations,
+                                            mutation,
+                                            completed,
+                                            &progress,
+                                            mutation_error,
+                                            error_at_stage(observation_error, "observe_price"),
+                                        )
+                                        .with_optional_listing_id(listing_id));
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            diagnostics::workflow_step(&context, "failed");
+                            return Err(self
+                                .field_mutation_error(
+                                    &draft, &mutations, mutation, completed, &progress, error,
+                                )
+                                .await
+                                .with_optional_listing_id(listing_id));
+                        }
+                    }
+                }
+                FieldMutationKind::Delivery => {
+                    match self
+                        .apply_delivery_selection(draft.clone(), &mutation.value, completed)
+                        .await
+                    {
+                        Ok(updated) => {
+                            diagnostics::workflow_step(&context, "completed");
+                            progress.persisted.extend(mutation.fields.clone());
+                            draft = updated;
+                        }
+                        Err(error) => {
+                            diagnostics::workflow_step(&context, "failed");
+                            return Err(self
+                                .enrich_field_error(error, &draft, &mutations, mutation, &progress)
+                                .with_optional_listing_id(listing_id));
+                        }
+                    }
+                }
+            }
+        }
+        progress.persisted.sort();
+        progress.persisted.dedup();
+        progress.absent.sort();
+        progress.absent.dedup();
+        Ok(AppliedFieldMutations { draft, progress })
     }
 
     async fn delivery_composer(
@@ -2020,10 +3091,71 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     requested_values.clone(),
                 )
             })?;
-        self.api
+        if let Err(error) = self
+            .api
             .apply_delivery(&draft_id, &composer, &selected)
             .await
-            .map_err(|error| WorkflowError::for_draft(&draft_id, completed, error, false))?;
+        {
+            if mutation_is_ambiguous(&error) {
+                return match self.delivery_composer(&draft_id, completed).await {
+                    Ok(observed) => {
+                        let persisted = observed.state.selected == [selected.clone()];
+                        state.delivery = Some(observed.state);
+                        let mut workflow = WorkflowError::for_draft(
+                            &draft_id,
+                            completed,
+                            error_at_stage(error, "apply_delivery"),
+                            false,
+                        );
+                        if let Some(recovery) = &mut workflow.recovery {
+                            recovery.active_step = Some("apply_delivery".to_owned());
+                            recovery.fields = vec!["delivery".to_owned()];
+                            if persisted {
+                                recovery.persisted_fields = vec!["delivery".to_owned()];
+                            } else {
+                                recovery.absent_fields = vec!["delivery".to_owned()];
+                                recovery.next_safe_actions =
+                                    vec![retry_field_action(&draft_id, &recovery.absent_fields)];
+                            }
+                            recovery.fresh_state = Some(state);
+                        }
+                        Err(workflow)
+                    }
+                    Err(observation_error) => {
+                        let mut workflow = WorkflowError::for_draft(
+                            &draft_id,
+                            completed,
+                            error_at_stage(error, "apply_delivery"),
+                            false,
+                        );
+                        if let Some(recovery) = &mut workflow.recovery {
+                            recovery.active_step = Some("apply_delivery".to_owned());
+                            recovery.fields = vec!["delivery".to_owned()];
+                            recovery.indeterminate_fields = vec!["delivery".to_owned()];
+                            recovery.manual_inspection_required = true;
+                        }
+                        workflow.details = Some(json!({
+                            "stage": "apply_delivery",
+                            "fields": ["delivery"],
+                            "observation": {
+                                "status": "failed",
+                                "error": {
+                                    "code": observation_error.code,
+                                    "status": observation_error.source.as_ref().and_then(|source| source.status),
+                                }
+                            }
+                        }));
+                        Err(workflow)
+                    }
+                };
+            }
+            return Err(WorkflowError::for_draft(
+                &draft_id,
+                completed,
+                error_at_stage(error, "apply_delivery"),
+                false,
+            ));
+        }
         completed.push("apply_delivery".to_owned());
         let observed = self.delivery_composer(&draft_id, completed).await?;
         if observed.state.selected != [selected.clone()] {
@@ -2061,64 +3193,29 @@ impl<A: AdInputApi> DraftWorkflow<A> {
 
     pub async fn create_prepared(
         &self,
-        mut values: Map<String, Value>,
+        values: Map<String, Value>,
         images: Vec<PreparedImage>,
     ) -> Result<CreateResult, WorkflowError> {
-        let price = requested_sale_price(&values).map_err(WorkflowError::input)?;
-        values.remove("price");
-        let delivery = values.remove("delivery");
-        let mut draft = self
+        requested_sale_price(&values).map_err(WorkflowError::input)?;
+        let draft = self
             .api
             .create_draft()
             .await
             .map_err(WorkflowError::before_creation)?;
         let mut completed = vec!["create_draft".to_owned()];
-
-        if let Some(category) = values.remove("category") {
-            let mut category_values = draft.values.clone();
-            category_values.insert("category".to_owned(), normalize_category(category));
-            draft = self
-                .api
-                .update_item(&draft.draft_id, &draft.etag, &category_values)
-                .await
-                .map_err(|error| {
-                    WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                })?;
-            completed.push("apply_category".to_owned());
-        }
-        if !values.is_empty() {
-            let mut merged_values = draft.values.clone();
-            merged_values.extend(values);
-            draft = self
-                .api
-                .update_item(&draft.draft_id, &draft.etag, &merged_values)
-                .await
-                .map_err(|error| {
-                    WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                })?;
-            completed.push("apply_fields".to_owned());
-        }
-        if let Some(price) = price {
-            self.api
-                .update_sale_price(&draft.draft_id, &draft.etag, &price)
-                .await
-                .map_err(|error| {
-                    WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                })?;
-            completed.push("apply_price".to_owned());
-            draft = self
-                .observe_price(&draft.draft_id, &price, &completed)
-                .await?;
-            completed.push("observe_price".to_owned());
-        }
+        let applied = self
+            .apply_field_mutations(
+                draft,
+                ordered_field_mutations(values),
+                &mut completed,
+                "draft_create",
+                None,
+            )
+            .await?;
+        let mut draft = applied.draft;
         if !images.is_empty() {
             draft = self
                 .add_prepared_images(&draft, images, &mut completed)
-                .await?;
-        }
-        if let Some(delivery) = delivery {
-            draft = self
-                .apply_delivery_selection(draft, &delivery, &mut completed)
                 .await?;
         }
         Ok(CreateResult {
@@ -2131,47 +3228,28 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         &self,
         listing_id: &str,
     ) -> Result<CreateResult, WorkflowError> {
-        let mut seed = self
+        let seed = self
             .api
             .source_listing(listing_id)
             .await
             .map_err(WorkflowError::before_creation)?;
-        let price = requested_sale_price(&seed.values).map_err(WorkflowError::input)?;
-        seed.values.remove("price");
-        let mut draft = self
+        requested_sale_price(&seed.values).map_err(WorkflowError::input)?;
+        let draft = self
             .api
             .create_draft()
             .await
             .map_err(WorkflowError::before_creation)?;
         let mut completed = vec!["load_source_listing".to_owned(), "create_draft".to_owned()];
-        let mut seed_values = seed.values;
-        let delivery = seed_values.remove("delivery");
-        let mut copied_values = draft.values.clone();
-        copied_values.extend(seed_values);
-        draft = self
-            .api
-            .update_item(&draft.draft_id, &draft.etag, &copied_values)
-            .await
-            .map_err(|error| {
-                WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                    .with_listing_id(listing_id)
-            })?;
-        completed.push("copy_fields".to_owned());
-        if let Some(price) = price {
-            self.api
-                .update_sale_price(&draft.draft_id, &draft.etag, &price)
-                .await
-                .map_err(|error| {
-                    WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                        .with_listing_id(listing_id)
-                })?;
-            completed.push("apply_price".to_owned());
-            draft = self
-                .observe_price(&draft.draft_id, &price, &completed)
-                .await
-                .map_err(|error| error.with_listing_id(listing_id))?;
-            completed.push("observe_price".to_owned());
-        }
+        let applied = self
+            .apply_field_mutations(
+                draft,
+                ordered_field_mutations(seed.values),
+                &mut completed,
+                "draft_create_from_listing",
+                Some(listing_id),
+            )
+            .await?;
+        let mut draft = applied.draft;
 
         let mut ordered = Vec::new();
         for source in seed.images {
@@ -2207,12 +3285,6 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 })?;
             completed.push("attach_images".to_owned());
         }
-        if let Some(delivery) = delivery {
-            draft = self
-                .apply_delivery_selection(draft, &delivery, &mut completed)
-                .await
-                .map_err(|error| error.with_listing_id(listing_id))?;
-        }
         Ok(CreateResult {
             draft,
             completed_steps: completed,
@@ -2243,134 +3315,43 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         draft_id: &str,
         patch: &Map<String, Value>,
     ) -> Result<UpdateResult, WorkflowError> {
-        if let Some(price) = patch.get("price") {
-            validate_price(price).map_err(WorkflowError::input)?;
-        }
         let current = self
             .api
             .get_draft(draft_id)
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
         let mut completed = vec!["fetch_draft".to_owned()];
-        let mut values = current.values.clone();
-        values.extend(patch.clone());
-        values.remove("delivery");
-        let price = if patch.contains_key("price") {
-            requested_sale_price(&values)
-                .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?
-        } else {
-            None
-        };
-        let mut item_patch = patch.clone();
-        let delivery = item_patch.remove("delivery");
-        item_patch.remove("price");
-        let requested_delivery = delivery
-            .as_ref()
+        let mut requested_values = current.values.clone();
+        requested_values.extend(patch.clone());
+        requested_values.remove("delivery");
+        if patch.contains_key("price") {
+            requested_sale_price(&requested_values)
+                .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?;
+        }
+        let requested_delivery = patch
+            .get("delivery")
             .and_then(delivery_values)
             .unwrap_or_default();
-        let mut state = current.clone();
-        let mut persisted_fields = Vec::new();
-        let mut ignored_fields = Vec::new();
-
-        if !item_patch.is_empty() {
-            if price.is_some() {
-                values.remove("price");
-            }
-            state = match self.api.update_item(draft_id, &state.etag, &values).await {
-                Ok(state) => state,
-                Err(error) if error.status == Some(412) => {
-                    return Err(self
-                        .update_conflict(draft_id, &completed, OperationMethod::Put)
-                        .await);
-                }
-                Err(error) => {
-                    return Err(WorkflowError::for_draft(draft_id, &completed, error, false));
-                }
-            };
-            completed.push("update_item_fields".to_owned());
-            for (field, requested) in &item_patch {
-                if state.values.get(field) == Some(requested) {
-                    persisted_fields.push(field.clone());
-                } else {
-                    ignored_fields.push(field.clone());
-                }
-            }
-        }
-
-        if let Some(price) = price {
-            match self
-                .api
-                .update_sale_price(draft_id, &state.etag, &price)
-                .await
-            {
-                Ok(_) => {}
-                Err(error) if error.status == Some(412) => {
-                    return Err(self
-                        .update_conflict(draft_id, &completed, OperationMethod::Patch)
-                        .await);
-                }
-                Err(error) => {
-                    return Err(WorkflowError::for_draft(draft_id, &completed, error, false));
-                }
-            }
-            completed.push("apply_price".to_owned());
-            state = self.observe_price(draft_id, &price, &completed).await?;
-            completed.push("observe_price".to_owned());
-            persisted_fields.push("price".to_owned());
-        }
-
-        if let Some(delivery) = delivery {
-            state = self
-                .apply_delivery_selection(state, &delivery, &mut completed)
-                .await?;
-            persisted_fields.push("delivery".to_owned());
-        }
-        let etag_changed = state.etag != current.etag;
+        let applied = self
+            .apply_field_mutations(
+                current.clone(),
+                ordered_field_mutations(patch.clone()),
+                &mut completed,
+                "draft_update",
+                None,
+            )
+            .await?;
         let mut requested_fields = patch.keys().cloned().collect::<Vec<_>>();
         requested_fields.sort();
-        persisted_fields.sort();
-        ignored_fields.sort();
         Ok(UpdateResult {
-            draft: state,
+            etag_changed: applied.draft.etag != current.etag,
+            draft: applied.draft,
             requested_fields,
             requested_delivery,
-            persisted_fields,
-            ignored_fields,
-            etag_changed,
+            persisted_fields: applied.progress.persisted,
+            ignored_fields: applied.progress.absent,
             completed_steps: completed,
         })
-    }
-
-    async fn update_conflict(
-        &self,
-        draft_id: &str,
-        completed: &[String],
-        method: OperationMethod,
-    ) -> WorkflowError {
-        let fresh = match self.api.get_draft(draft_id).await {
-            Ok(fresh) => fresh,
-            Err(error) => return WorkflowError::for_draft(draft_id, completed, error, true),
-        };
-        let mut conflict = ApiError::new(
-            "draft.conflict",
-            "The draft changed while the update was being applied",
-        );
-        conflict.status = Some(412);
-        let mut context = RetryContext::mutation(method)
-            .with_etag()
-            .with_authoritative_observation();
-        if completed_steps_have_mutation(completed) {
-            context = context.with_completed_mutation_steps();
-        }
-        let classification = classify(FailureKind::PreconditionFailed, context);
-        let mut workflow = WorkflowError::for_draft(draft_id, completed, conflict, false);
-        if let Some(recovery) = &mut workflow.recovery {
-            recovery.upstream_transient = classification.upstream_transient;
-            recovery.safe_to_retry = classification.safe_to_retry;
-            recovery.fresh_state = Some(fresh);
-            recovery.next_safe_actions = vec![format!("flea draft show {draft_id}")];
-        }
-        workflow
     }
 
     pub async fn delete(&self, draft_id: &str) -> Result<(), WorkflowError> {

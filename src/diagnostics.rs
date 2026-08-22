@@ -632,6 +632,7 @@ pub struct WorkflowContext<'a> {
     pub step: &'a str,
     pub draft_id: Option<&'a str>,
     pub listing_id: Option<&'a str>,
+    pub fields: &'a [String],
 }
 
 pub fn workflow_step(context: &WorkflowContext<'_>, status: &str) {
@@ -641,6 +642,7 @@ pub fn workflow_step(context: &WorkflowContext<'_>, status: &str) {
         step = context.step,
         draft_id = context.draft_id,
         listing_id = context.listing_id,
+        fields = ?context.fields,
         status
     );
 }
@@ -767,6 +769,17 @@ mod tests {
             .expect("diagnostics should initialize");
         session.run("draft show", || {
             info!(authorization = "Bearer top-secret", "request");
+            let fields = vec!["price".to_owned()];
+            workflow_step(
+                &WorkflowContext {
+                    workflow: "draft_update",
+                    step: "apply_price",
+                    draft_id: Some("draft-1"),
+                    listing_id: None,
+                    fields: &fields,
+                },
+                "started",
+            );
             ((), 0)
         });
         let contents = fs::read_to_string(&session.context().log_path).expect("log should exist");
@@ -801,6 +814,13 @@ mod tests {
                 && event["status"] == "success"
                 && event["exit_code"] == 0
                 && event["duration_ms"].is_number()
+        }));
+        assert!(events.iter().any(|event| {
+            event["event"] == "workflow.step"
+                && event["workflow"] == "draft_update"
+                && event["step"] == "apply_price"
+                && event["fields"] == "[\"price\"]"
+                && event["status"] == "started"
         }));
         #[cfg(unix)]
         {

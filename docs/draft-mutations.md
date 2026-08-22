@@ -1,0 +1,86 @@
+# Draft field mutations and recovery
+
+Flea applies requested draft fields through deterministic atomic mutation
+groups. Composer groups contain one top-level field and use one upstream
+request. Price uses the dedicated item update endpoint. Delivery uses the
+dedicated delivery composer endpoint. The order is:
+
+1. `category`
+2. `title`
+3. `description`
+4. `trade_type`
+5. `price`
+6. `postal_code`
+7. `attributes`
+8. Other top-level composer fields in lexical order
+9. `delivery`
+
+Image upload and attachment follow the requested field groups during creation.
+Category is first because its composer response supplies the field schema for
+the selected category. Trade type precedes price because the dedicated sale
+price mutation requires sale intent. Flea validates requested values against
+source-backed field types and options before sending the applicable groups.
+
+A successful group is committed independently. A create or update command with
+multiple fields is therefore ordered but is not an all-or-nothing transaction.
+Flea stops at the first failed group. It does not repeat, bisect, or replay an
+uncertain mutation to diagnose the field.
+
+## Failure output
+
+A field failure identifies its boundary in `error.details` and `partial`:
+
+- `active_step` and `fields` identify the attempted group, such as
+  `apply_price` and `[price]`.
+- `persisted_fields` match the requested values in authoritative draft state.
+- `absent_fields` do not match the requested values in authoritative draft
+  state.
+- `indeterminate_fields` cannot be classified because authoritative inspection
+  failed.
+- `unattempted_fields` belong to groups after the failure boundary.
+
+An ambiguous response, including an HTML 5xx response, triggers a read-only
+`draft show` observation inside the workflow. This observation can classify the
+active field without repeating the mutation. An unchanged ETag and unchanged
+field value prove that the requested replacement is absent. If observation
+fails, the active field remains indeterminate and requires manual inspection.
+
+Mutation recovery actions include only fields listed in `absent_fields`.
+Persisted fields must not be included in a recovery update. An indeterminate
+field has only a read-only inspection action.
+
+## Recover one invalid field
+
+For an update containing title, price, and postal code, a rejected price can
+produce this state:
+
+```text
+persisted_fields: [title]
+absent_fields: [price]
+indeterminate_fields: []
+unattempted_fields: [postal_code]
+```
+
+Correct the price and submit only that proven-absent field:
+
+```sh
+cat >price-recovery.json <<'JSON'
+{
+  "price": 25
+}
+JSON
+
+flea draft update DRAFT_ID --input price-recovery.json
+flea draft show DRAFT_ID
+```
+
+After inspection, submit postal code separately if authoritative state proves it
+absent:
+
+```sh
+flea draft update DRAFT_ID --postal-code 00100
+```
+
+If `price` appears in `indeterminate_fields`, run the reported `flea draft show`
+action and compare the authoritative value with the requested value. Do not
+retry price while its state is indeterminate.

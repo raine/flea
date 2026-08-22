@@ -118,7 +118,7 @@ pub enum DraftCommand {
     },
     #[command(
         about = "Update a remote draft",
-        long_about = "Merge explicit fields into the latest remote draft while preserving unspecified values."
+        long_about = "Apply explicit fields to the latest remote draft in deterministic atomic field groups while preserving unspecified values. An uncertain mutation is inspected but never replayed automatically."
     )]
     Update {
         /// Tori draft identifier.
@@ -574,7 +574,9 @@ fn workflow_error(error: WorkflowError) -> AppError {
         .as_ref()
         .is_some_and(|recovery| completed_steps_have_mutation(&recovery.completed_steps));
     let exit_class = match error.code.as_str() {
+        "draft.conflict" if has_remote_mutation => ExitClass::Partial,
         "draft.conflict" => ExitClass::Conflict,
+        "draft.validation_failed" if has_remote_mutation => ExitClass::Partial,
         "draft.validation_failed"
         | "draft.invalid_delivery"
         | "draft.delivery_options_unavailable"

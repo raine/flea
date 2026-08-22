@@ -137,7 +137,7 @@ pub fn map_validation_errors(
         .collect()
 }
 
-fn stable_field_key(source: &str) -> String {
+pub(crate) fn stable_field_key(source: &str) -> String {
     let leaf = source
         .rsplit(['.', '/'])
         .next()
