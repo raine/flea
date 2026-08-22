@@ -26,6 +26,7 @@
             "children": [
               {
                 "id": "price_amount",
+                "type": "simple",
                 "sub-type": "number",
                 "exclusive-dependencies": {
                   "trade_type": ["1", "SELL"]

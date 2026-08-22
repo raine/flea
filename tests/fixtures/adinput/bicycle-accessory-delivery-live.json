@@ -1,0 +1,49 @@
+{
+  "context": {
+    "adId": 46000000,
+    "addressAutoComplete": false,
+    "buyNow": false,
+    "completeSellerInfo": true,
+    "defaultBuyNow": false,
+    "meetup": false,
+    "sellerPaysShipping": false,
+    "shipping": false,
+    "shippingProducts": []
+  },
+  "sections": {
+    "head": {
+      "title": "Tarjoa toimitustapa",
+      "text": "Valitse ostajalle tarjottava toimitustapa.",
+      "details": []
+    },
+    "deliveryOptions": {
+      "meetup": {
+        "title": "Voin neuvotella suoraan ostajan kanssa",
+        "text": "Sovi lähetyksestä tai noudosta",
+        "details": []
+      },
+      "shipping": {
+        "title": "ToriDiili maksu- ja kuljetuspalvelu",
+        "text": "Lähetä ja vastaanota rahat Torin kautta",
+        "details": []
+      }
+    },
+    "shipping": {
+      "packageSizes": {
+        "small": {
+          "title": "Pieni paketti",
+          "size": "SMALL"
+        },
+        "medium": {
+          "title": "Keskikokoinen paketti",
+          "size": "MEDIUM"
+        },
+        "large": {
+          "title": "Suuri paketti",
+          "size": "LARGE"
+        }
+      }
+    }
+  },
+  "validation": {}
+}

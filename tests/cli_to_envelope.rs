@@ -370,7 +370,8 @@ fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
                     "id": 46031010,
                     "etag": "one",
                     "values": { "trade_type": "1" }
-                }
+                },
+                "model": { "sections": [] }
             }),
         ),
         response(
@@ -392,7 +393,8 @@ fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
                         "trade_type": "1",
                         "price": [{ "price_amount": "5" }]
                     }
-                }
+                },
+                "model": { "sections": [] }
             }),
         ),
     ]);
@@ -438,7 +440,8 @@ fn html_price_failure_is_transient_but_unsafe_partial_envelope() {
                     "id": 46031010,
                     "etag": "one",
                     "values": { "trade_type": "1" }
-                }
+                },
+                "model": { "sections": [] }
             }),
         ),
         HttpResponse {
@@ -453,7 +456,8 @@ fn html_price_failure_is_transient_but_unsafe_partial_envelope() {
                     "id": 46031010,
                     "etag": "one",
                     "values": { "trade_type": "1" }
-                }
+                },
+                "model": { "sections": [] }
             }),
         ),
     ]);
@@ -676,6 +680,8 @@ fn publish_flows_through_every_http_step() {
         "draft_id": "draft-1",
         "etag": "one",
         "values": { "title": "Chair" },
+        "fields": [],
+        "options": [],
         "required_fields": ["title", "delivery"],
         "images": []
     });
@@ -1025,6 +1031,7 @@ fn response(status: StatusCode, body: Value) -> HttpResponse {
 fn delivery_page(selected: bool) -> Value {
     json!({
         "context": {
+            "adId": "draft-1",
             "shipping": false,
             "meetup": selected,
             "shippingProducts": []
@@ -1048,6 +1055,9 @@ fn draft_state(etag: &str) -> Value {
         "draft_id": "draft-1",
         "etag": etag,
         "values": {},
+        "fields": [],
+        "options": [],
+        "required_fields": [],
         "images": []
     })
 }
@@ -1057,6 +1067,9 @@ fn draft_with_images(etag: &str, state: &str) -> Value {
         "draft_id": "draft-1",
         "etag": etag,
         "values": {},
+        "fields": [],
+        "options": [],
+        "required_fields": [],
         "images": [{
             "image_id": "https://img.tori.net/dynamic/default/image-1.png",
             "url": "https://img.tori.net/dynamic/default/image-1.png",

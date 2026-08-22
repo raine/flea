@@ -1,0 +1,215 @@
+{
+  "ad": {
+    "id": "46000000",
+    "ad-type": "recommerce",
+    "etag": "W/\"12345\"",
+    "checkout-url": "https://apps-adinput.svc.tori.fi/adinput/product/recommerce/46000000/publish_free_ad?adRevision=12345",
+    "product-context-url": "https://apps-adinput.svc.tori.fi/adinput/product/recommerce/46000000/productcontext?adRevision=12345",
+    "values": {
+      "trade_type": "1",
+      "category": "258",
+      "title": "Polkupyörän vaijerilukko",
+      "description": "Siistikuntoinen vaijerilukko.",
+      "price": [
+        {
+          "price_amount": "25"
+        }
+      ],
+      "condition": "3",
+      "location": [
+        {
+          "country": "FI",
+          "postal-code": "00100",
+          "postal-name": "Helsinki"
+        }
+      ]
+    },
+    "meta-data": {},
+    "locked-fields": []
+  },
+  "model": {
+    "ad-type": "recommerce",
+    "etag": null,
+    "page-title": "Tori",
+    "market-id": "vertical-5",
+    "sections": [
+      {
+        "type": "images",
+        "content": [
+          {
+            "id": "multi_image",
+            "type": "multi-image",
+            "label": "Kuvat",
+            "required": false
+          }
+        ]
+      },
+      {
+        "type": "classification",
+        "content": [
+          {
+            "id": "trade_type",
+            "label": "Ilmoituksen tyyppi",
+            "required": true,
+            "multiple": false,
+            "type": "select",
+            "sub-type": "horizontal",
+            "validation-rules": [
+              { "type": "MANDATORY" }
+            ],
+            "items": [
+              { "label": "Myydään", "value": "1" },
+              { "label": "Annetaan", "value": "2" }
+            ]
+          },
+          {
+            "id": "category",
+            "label": "Osasto",
+            "required": true,
+            "multiple": false,
+            "type": "managed",
+            "level-titles": ["Osasto", "Alaosasto", "Alaosasto"],
+            "value-nodes": [
+              {
+                "id": "3963",
+                "label": "Pyöräily ja tarvikkeet",
+                "persistable": false,
+                "children": [
+                  { "id": "257", "label": "Polkupyörät", "persistable": true },
+                  { "id": "258", "label": "Pyöräilytarvikkeet", "persistable": true }
+                ]
+              }
+            ],
+            "validation-rules": [
+              { "type": "MANDATORY" }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "attributes",
+        "content": [
+          {
+            "id": "bikes_type",
+            "label": "Tyyppi",
+            "required": false,
+            "multiple": false,
+            "type": "select",
+            "items": [
+              { "label": "Maantiepyörät", "value": "3" },
+              { "label": "Maastopyörät", "value": "4" }
+            ],
+            "exclusive-dependencies": {
+              "category": ["257"]
+            }
+          },
+          {
+            "id": "condition",
+            "label": "Kunto",
+            "required": false,
+            "multiple": false,
+            "type": "select",
+            "items": [
+              { "label": "Uusi", "value": "1" },
+              { "label": "Kuin uusi", "value": "2" },
+              { "label": "Hyvä", "value": "3" },
+              { "label": "Kohtalainen", "value": "4" },
+              { "label": "Vaatii korjausta", "value": "5" }
+            ],
+            "exclusive-dependencies": {
+              "category": ["257", "258"]
+            }
+          }
+        ]
+      },
+      {
+        "type": "details",
+        "content": [
+          {
+            "id": "title",
+            "label": "Ilmoituksen otsikko",
+            "required": true,
+            "multiple": false,
+            "type": "simple",
+            "sub-type": "string",
+            "validation-rules": [
+              { "type": "MANDATORY" },
+              { "type": "MAX_LENGTH", "value": "80" }
+            ]
+          },
+          {
+            "id": "description",
+            "label": "Kuvaus",
+            "required": true,
+            "multiple": false,
+            "type": "simple",
+            "sub-type": "multiline",
+            "validation-rules": [
+              { "type": "MANDATORY" }
+            ]
+          },
+          {
+            "id": "price",
+            "type": "complex",
+            "label": "Hinta",
+            "required": false,
+            "multiple": false,
+            "dependencies": ["trade_type"],
+            "children": [
+              {
+                "id": "price_max",
+                "type": "simple",
+                "sub-type": "number",
+                "label": "Max. hinta",
+                "required": false,
+                "multiple": false,
+                "exclusive-dependencies": {
+                  "trade_type": ["3", "WANTED"]
+                },
+                "validation-rules": [
+                  { "type": "MIN_VALUE", "value": "0" }
+                ]
+              },
+              {
+                "id": "price_amount",
+                "type": "simple",
+                "sub-type": "number",
+                "label": "Hinta",
+                "required": false,
+                "multiple": false,
+                "exclusive-dependencies": {
+                  "trade_type": ["1", "SELL"]
+                },
+                "validation-rules": [
+                  { "type": "MIN_VALUE", "value": "1" }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "location",
+        "content": [
+          {
+            "id": "location",
+            "type": "complex",
+            "label": "Sijainti",
+            "required": false,
+            "multiple": false,
+            "children": [
+              {
+                "id": "postal-code",
+                "label": "Postinumero",
+                "required": true,
+                "multiple": false,
+                "type": "post-code",
+                "sub-type": "string"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

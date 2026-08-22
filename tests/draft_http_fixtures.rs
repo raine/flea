@@ -4,9 +4,12 @@ use std::{
     time::Duration,
 };
 
-use flea::api::adinput::{
-    AdInputApi, DraftWorkflow, HttpAdInputApi, HttpRequest, HttpResponse, HttpTransport,
-    ImageState, Method, RequestBody, RetryPolicy, WorkflowConfig,
+use flea::{
+    api::adinput::{
+        AdInputApi, DraftWorkflow, HttpAdInputApi, HttpRequest, HttpResponse, HttpTransport,
+        ImageState, Method, RequestBody, RetryPolicy, WorkflowConfig,
+    },
+    domain::field::{FieldStatus, FieldType, Requirement},
 };
 use serde_json::{Map, Value, json};
 
@@ -94,6 +97,8 @@ fn draft(etag: &str, extra: Value) -> Value {
         "draft_id": "draft-1",
         "etag": etag,
         "values": {},
+        "fields": [],
+        "options": [],
         "required_fields": [],
         "images": [],
         "cleared_fields": [],
@@ -262,7 +267,7 @@ fn observed_draft(id: &str, etag: &str, values: Value) -> Value {
             "meta-data": {},
             "locked-fields": []
         },
-        "model": {}
+        "model": { "sections": [] }
     })
 }
 
@@ -1337,11 +1342,21 @@ async fn invalid_and_missing_delivery_options_fail_before_mutation() {
     );
     assert_eq!(invalid_transport.requests().len(), 2);
 
-    let missing_transport = FixtureTransport::new([
+    let empty_transport = FixtureTransport::new([
         response(200, draft("one", json!({}))),
-        response(200, json!({ "context": {}, "sections": {} })),
+        response(
+            200,
+            json!({
+                "context": {
+                    "adId": "draft-1",
+                    "meetup": false,
+                    "shipping": false
+                },
+                "sections": { "deliveryOptions": {} }
+            }),
+        ),
     ]);
-    let workflow = DraftWorkflow::new(HttpAdInputApi::new(missing_transport.clone()), config());
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(empty_transport.clone()), config());
     let error = workflow
         .update(
             "draft-1",
@@ -1351,7 +1366,26 @@ async fn invalid_and_missing_delivery_options_fail_before_mutation() {
         .unwrap_err();
     assert_eq!(error.code, "draft.invalid_delivery");
     assert_eq!(error.details.unwrap()["allowed_values"], json!([]));
-    assert_eq!(missing_transport.requests().len(), 2);
+    assert_eq!(empty_transport.requests().len(), 2);
+
+    let malformed_transport = FixtureTransport::new([
+        response(200, draft("one", json!({}))),
+        response(200, json!({ "context": {}, "sections": {} })),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(malformed_transport.clone()), config());
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([("delivery".to_owned(), json!(["pickup"]))]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "upstream.unrecognized_model");
+    assert_eq!(
+        error.source.unwrap().details.unwrap()["path"],
+        "$.context.adId"
+    );
+    assert_eq!(malformed_transport.requests().len(), 2);
 }
 
 #[tokio::test]
@@ -2118,4 +2152,293 @@ async fn publish_timeout_is_bounded_and_recoverable() {
         ["fetch_draft", "fetch_delivery_options", "validate"]
     );
     assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+}
+
+fn composer_fixture() -> Value {
+    serde_json::from_str(include_str!(
+        "fixtures/adinput/bicycle-accessory-composer-live.json"
+    ))
+    .unwrap()
+}
+
+fn delivery_fixture() -> Value {
+    serde_json::from_str(include_str!(
+        "fixtures/adinput/bicycle-accessory-delivery-live.json"
+    ))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn source_observed_composer_exposes_required_fields_price_and_revision() {
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, composer_fixture())]));
+
+    let state = api.get_draft("46000000").await.unwrap();
+
+    assert_eq!(state.revision.as_deref(), Some("12345"));
+    assert_eq!(state.values["price"], 25);
+    assert_eq!(
+        state.required_fields,
+        [
+            "trade_type",
+            "category",
+            "title",
+            "description",
+            "postal-code"
+        ]
+    );
+    let title = state
+        .fields
+        .iter()
+        .find(|field| field.key == "title")
+        .unwrap();
+    assert_eq!(title.label, "Ilmoituksen otsikko");
+    assert_eq!(title.field_type, FieldType::String);
+    assert_eq!(title.requirement, Requirement::Required);
+    assert_eq!(title.status, FieldStatus::Set);
+    assert_eq!(title.value, Some(json!("Polkupyörän vaijerilukko")));
+    let price = state
+        .fields
+        .iter()
+        .find(|field| field.key == "price_amount")
+        .unwrap();
+    assert_eq!(price.field_type, FieldType::Decimal);
+    assert_eq!(price.value, Some(json!(25)));
+    let postal_code = state
+        .fields
+        .iter()
+        .find(|field| field.key == "postal-code")
+        .unwrap();
+    assert_eq!(postal_code.value, Some(json!("00100")));
+    assert!(state.fields.iter().all(|field| field.key != "price_max"));
+    assert!(state.fields.iter().all(|field| field.key != "bikes_type"));
+}
+
+#[tokio::test]
+async fn show_merges_source_observed_delivery_options_with_machine_values() {
+    let transport = FixtureTransport::new([
+        response(200, composer_fixture()),
+        response(200, delivery_fixture()),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let state = workflow.show("46000000").await.unwrap();
+
+    let delivery = state
+        .fields
+        .iter()
+        .find(|field| field.key == "delivery")
+        .unwrap();
+    assert_eq!(delivery.field_type, FieldType::MultiSelect);
+    assert_eq!(delivery.requirement, Requirement::Required);
+    assert_eq!(delivery.status, FieldStatus::Missing);
+    assert_eq!(delivery.value, Some(json!([])));
+    assert_eq!(delivery.option_count, 4);
+    assert_eq!(delivery.options_returned, 4);
+    assert!(!delivery.options_truncated);
+    assert!(state.required_fields.contains(&"delivery".to_owned()));
+    assert_eq!(state.values["delivery"], json!([]));
+    assert_eq!(
+        state
+            .options
+            .iter()
+            .filter(|option| option.field == "delivery")
+            .map(|option| option.value.clone())
+            .collect::<Vec<_>>(),
+        [
+            json!("pickup"),
+            json!("shipping:small"),
+            json!("shipping:medium"),
+            json!("shipping:large"),
+        ]
+    );
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[1].path,
+        "/ui/addelivery?adId=46000000&editMode=false"
+    );
+}
+
+#[tokio::test]
+async fn publish_validates_the_same_source_observed_model_as_show() {
+    let transport = FixtureTransport::new([
+        response(200, composer_fixture()),
+        response(200, delivery_fixture()),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow.publish("46000000").await.unwrap_err();
+
+    assert_eq!(error.code, "draft.validation_failed");
+    assert_eq!(
+        error.details.unwrap()["missing_fields"],
+        json!(["delivery"])
+    );
+    assert_eq!(transport.requests().len(), 2);
+    assert!(
+        transport
+            .requests()
+            .iter()
+            .all(|request| request.method == Method::Get)
+    );
+}
+
+#[tokio::test]
+async fn composer_bounds_options_and_reports_truncation() {
+    let mut fixture = composer_fixture();
+    fixture["model"]["sections"][2]["content"][1]["items"] = Value::Array(
+        (0..60)
+            .map(|index| json!({ "label": format!("Condition {index}"), "value": index }))
+            .collect(),
+    );
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, fixture)]));
+
+    let state = api.get_draft("46000000").await.unwrap();
+
+    let condition = state
+        .fields
+        .iter()
+        .find(|field| field.key == "condition")
+        .unwrap();
+    assert_eq!(condition.option_count, 60);
+    assert_eq!(condition.options_returned, 50);
+    assert!(condition.options_truncated);
+    assert_eq!(
+        state
+            .options
+            .iter()
+            .filter(|option| option.field == "condition")
+            .count(),
+        50
+    );
+}
+
+#[tokio::test]
+async fn composer_preserves_safe_unknown_types_without_protocol_details() {
+    let mut fixture = composer_fixture();
+    fixture["model"]["sections"][2]["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "future_gain",
+            "type": "future-slider",
+            "sub-type": "v2",
+            "label": "Future gain",
+            "required": false,
+            "owner": { "email": "owner@example.invalid" },
+            "protocol-token": "protocol-secret"
+        }));
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, fixture)]));
+
+    let state = api.get_draft("46000000").await.unwrap();
+
+    let unknown = state
+        .fields
+        .iter()
+        .find(|field| field.key == "future_gain")
+        .unwrap();
+    assert_eq!(
+        unknown.field_type,
+        FieldType::Unknown("future-slider".to_owned())
+    );
+    assert_eq!(
+        unknown.raw,
+        Some(json!({
+            "type": "future-slider",
+            "sub_type": "v2",
+            "has_children": false,
+            "has_options": false
+        }))
+    );
+    let output = serde_json::to_string(&state).unwrap();
+    assert!(!output.contains("owner@example.invalid"));
+    assert!(!output.contains("protocol-secret"));
+}
+
+#[tokio::test]
+async fn composer_distinguishes_empty_malformed_and_evolved_models() {
+    let mut malformed = composer_fixture();
+    malformed["model"]
+        .as_object_mut()
+        .unwrap()
+        .remove("sections");
+    malformed["owner"] = json!({ "email": "owner@example.invalid" });
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, malformed)]));
+
+    let error = api.get_draft("46000000").await.unwrap_err();
+
+    assert_eq!(error.code, "upstream.unrecognized_model");
+    assert_eq!(
+        error.details.as_deref().unwrap()["path"],
+        "$.model.sections"
+    );
+    assert!(!format!("{error:?}").contains("owner@example.invalid"));
+
+    let unavailable = json!({
+        "draft_id": "46000000",
+        "etag": "12345",
+        "values": {}
+    });
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, unavailable)]));
+    let error = api.get_draft("46000000").await.unwrap_err();
+    assert_eq!(error.code, "upstream.unrecognized_model");
+    assert_eq!(error.details.as_deref().unwrap()["path"], "$.fields");
+
+    let mut conflicting_revision = composer_fixture();
+    conflicting_revision["ad"]["etag"] = json!("W/\"54321\"");
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, conflicting_revision)]));
+    let error = api.get_draft("46000000").await.unwrap_err();
+    assert_eq!(error.code, "upstream.unrecognized_model");
+    assert_eq!(
+        error.details.as_deref().unwrap()["reason"],
+        "draft revision sources disagree"
+    );
+
+    let mut empty = composer_fixture();
+    empty["model"]["sections"] = json!([]);
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, empty)]));
+    let state = api.get_draft("46000000").await.unwrap();
+    assert!(state.fields.is_empty());
+    assert!(state.options.is_empty());
+    assert!(state.required_fields.is_empty());
+
+    let mut evolved = composer_fixture();
+    let condition = evolved["model"]["sections"][2]["content"][1]
+        .as_object_mut()
+        .unwrap();
+    let mut options = condition.remove("items").unwrap();
+    options[0]["value"] = json!(1);
+    condition.insert("options".to_owned(), options);
+    evolved["model"]["schema-version"] = json!(2);
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, evolved)]));
+    let state = api.get_draft("46000000").await.unwrap();
+    assert!(state.options.iter().any(|option| {
+        option.field == "condition" && option.value == json!(1) && option.label == "Uusi"
+    }));
+}
+
+#[tokio::test]
+async fn delivery_composer_bounds_options_and_reports_truncation() {
+    let mut fixture = delivery_fixture();
+    fixture["sections"]["shipping"]["packageSizes"] = Value::Object(
+        (0..60)
+            .map(|index| {
+                (
+                    format!("package-{index}"),
+                    json!({
+                        "title": format!("Package {index}"),
+                        "size": format!("SIZE_{index}")
+                    }),
+                )
+            })
+            .collect(),
+    );
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, fixture)]));
+
+    let composer = api.delivery_composer("46000000").await.unwrap();
+
+    assert_eq!(composer.state.option_count, 61);
+    assert_eq!(composer.state.options_returned, 50);
+    assert!(composer.state.options_truncated);
+    assert_eq!(composer.state.options.len(), 50);
 }
