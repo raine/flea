@@ -31,7 +31,7 @@ pub enum AuthCommand {
     Login,
     #[command(
         about = "Show authentication status",
-        long_about = "Report whether Tori credentials are stored and identify the authenticated account when available."
+        long_about = "Validate whether authenticated commands are usable. Bearer credentials with 30 seconds or less remaining are refreshed through the same locked atomic path used by authenticated commands."
     )]
     Status,
     #[command(
@@ -176,7 +176,9 @@ impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
             AuthCommand::Login => Err(AppError::unexpected(
                 "interactive browser login requires the production runtime",
             )),
-            AuthCommand::Status => self.status(),
+            AuthCommand::Status => Err(AppError::unexpected(
+                "authentication status requires the production runtime",
+            )),
             AuthCommand::Logout => self.logout(),
         }
     }
@@ -213,20 +215,6 @@ impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
         })
     }
 
-    fn status(&self) -> Result<Value, AppError> {
-        let output = match self.store.load_credentials().map_err(storage_error)? {
-            Some(credentials) => AuthStatusOutput {
-                authenticated: true,
-                user_id: Some(credentials.user_id),
-            },
-            None => AuthStatusOutput {
-                authenticated: false,
-                user_id: None,
-            },
-        };
-        serialize(output)
-    }
-
     fn logout(&self) -> Result<Value, AppError> {
         self.store.clear_auth().map_err(storage_error)?;
         serialize(AuthLogoutOutput {
@@ -239,13 +227,6 @@ impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
 struct AuthCompleteOutput {
     authenticated: bool,
     user_id: String,
-}
-
-#[derive(Serialize)]
-struct AuthStatusOutput {
-    authenticated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    user_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -409,28 +390,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn status_and_logout_are_idempotent_and_secret_free() {
+    async fn logout_is_idempotent() {
         let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
-        let initial = handler.dispatch(AuthCommand::Status).await.unwrap();
-        assert_eq!(initial, serde_json::json!({ "authenticated": false }));
-
-        let started = handler.start(1_000).unwrap();
-        let flow_id = started["flow_id"].as_str().unwrap().to_owned();
-        let flow = handler.store.load_flow(&flow_id).unwrap().unwrap();
-        let callback = format!(
-            "{}://login?code=code&state={}",
-            crate::api::auth::CALLBACK_SCHEME,
-            flow.state_for_adapter()
-        );
-        handler.complete(&flow_id, &callback, 1_001).await.unwrap();
-
-        let status = handler.dispatch(AuthCommand::Status).await.unwrap();
-        assert_eq!(
-            status,
-            serde_json::json!({ "authenticated": true, "user_id": "42" })
-        );
-        assert!(!status.to_string().contains("bearer"));
-        assert!(!status.to_string().contains("refresh"));
 
         assert_eq!(
             handler.dispatch(AuthCommand::Logout).await.unwrap(),

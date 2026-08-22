@@ -87,13 +87,6 @@ impl std::fmt::Debug for OAuthFlow {
     }
 }
 
-impl OAuthFlow {
-    #[cfg(test)]
-    pub(crate) fn state_for_adapter(&self) -> &str {
-        self.state.expose()
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AuthStart {
     pub flow_id: String,

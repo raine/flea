@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
@@ -16,8 +17,12 @@ use crate::{
         auth::{AuthCommandHandler, FileAuthStore, unix_time_now},
         auth_callback, category, draft, listing,
     },
+    domain::envelope::NextAction,
     error::{AppError, ExitClass},
-    storage::{StatePaths, credentials::CredentialStore},
+    storage::{
+        StatePaths,
+        credentials::{CredentialRecord, CredentialStore, CredentialStoreError},
+    },
 };
 
 #[derive(Default)]
@@ -62,13 +67,19 @@ impl CommandRuntime for ProductionRuntime {
 
 fn execute_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
     let paths = state_paths()?;
-    if matches!(args.command, super::auth::AuthCommand::Login) {
-        return execute_interactive_login(paths);
+    match args.command {
+        super::auth::AuthCommand::Login => execute_interactive_login(paths),
+        super::auth::AuthCommand::Status => auth_status(
+            paths,
+            &SchibstedToriAuthenticationApi::new(),
+            unix_time_now()?,
+        ),
+        command => {
+            let store = FileAuthStore::new(paths);
+            let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
+            block_on(handler.dispatch(command))
+        }
     }
-
-    let store = FileAuthStore::new(paths);
-    let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
-    block_on(handler.dispatch(args.command))
 }
 
 fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError> {
@@ -120,50 +131,54 @@ fn authenticated_client() -> Result<HttpClient<ReqwestTransport>, AppError> {
     )
 }
 
+const MINIMUM_BEARER_LIFETIME_SECONDS: u64 = 30;
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredBearerState {
+    Valid,
+    NearExpiry,
+    Expired,
+}
+
+struct ResolvedCredentials {
+    record: CredentialRecord,
+    refreshed_from: Option<StoredBearerState>,
+}
+
+struct CredentialResolutionFailure {
+    error: Box<AppError>,
+    stored_bearer_state: Option<StoredBearerState>,
+    bearer_expires_at_unix: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct AuthStatusOutput {
+    authenticated: bool,
+    health: &'static str,
+    validation: &'static str,
+    refresh_performed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stored_bearer_state: Option<StoredBearerState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bearer_expires_at_unix: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_in_seconds: Option<u64>,
+    #[serde(rename = "_next_actions", skip_serializing_if = "Vec::is_empty")]
+    next_actions: Vec<NextAction>,
+}
+
 fn authenticated_client_with<S: GatewaySigner>(
     paths: StatePaths,
     api: &SchibstedToriAuthenticationApi<S>,
     now: u64,
 ) -> Result<HttpClient<ReqwestTransport>, AppError> {
-    let store = CredentialStore::new(paths);
-    let locked = store.lock().map_err(|error| auth_storage(error, "lock"))?;
-    let mut record = locked
-        .load()
-        .map_err(|error| auth_storage(error, "read"))?
+    let resolved = resolve_credentials_with(paths, api, now)
+        .map_err(|failure| *failure.error)?
         .ok_or_else(auth_required)?;
-    if !record.bearer_is_valid_at(now, 30) {
-        let refresh_token = record.refresh_token.clone();
-        let id_token = record.id_token.clone();
-        let device_id = record.device_id.clone();
-        let installation_id = record.installation_id.clone();
-        let ab_test_device_id = record.ab_test_device_id.clone();
-        let credentials = block_on(api.refresh_credentials(
-            RefreshRequest {
-                refresh_token: &refresh_token,
-                id_token: id_token.as_deref(),
-                device_id: &device_id,
-                installation_id: &installation_id,
-                ab_test_device_id: &ab_test_device_id,
-                now_unix: now,
-            },
-            |rotated_refresh_token, refreshed_id_token| {
-                record.refresh_token = rotated_refresh_token.to_owned();
-                record.id_token = refreshed_id_token.map(str::to_owned);
-                locked
-                    .save(&record)
-                    .map_err(|error| auth_storage(error, "write_rotation"))
-            },
-        ))?;
-        record = serde_json::to_value(credentials)
-            .and_then(serde_json::from_value)
-            .map_err(|error| {
-                AppError::unexpected("authentication state types are incompatible")
-                    .with_source(error)
-            })?;
-        locked
-            .save(&record)
-            .map_err(|error| auth_storage(error, "write"))?;
-    }
+    let record = resolved.record;
     Ok(HttpClient::new(
         ClientConfig::default(),
         DeviceIdentity {
@@ -172,6 +187,188 @@ fn authenticated_client_with<S: GatewaySigner>(
         },
         Some(record.bearer_token),
     ))
+}
+
+fn resolve_credentials_with<S: GatewaySigner>(
+    paths: StatePaths,
+    api: &SchibstedToriAuthenticationApi<S>,
+    now: u64,
+) -> Result<Option<ResolvedCredentials>, CredentialResolutionFailure> {
+    let store = CredentialStore::new(paths);
+    let locked = store
+        .lock()
+        .map_err(|error| resolution_storage(error, "lock"))?;
+    let Some(mut record) = locked
+        .load()
+        .map_err(|error| resolution_storage(error, "read"))?
+    else {
+        return Ok(None);
+    };
+    let stored_bearer_state = bearer_state(&record, now);
+    if matches!(stored_bearer_state, StoredBearerState::Valid) {
+        return Ok(Some(ResolvedCredentials {
+            record,
+            refreshed_from: None,
+        }));
+    }
+
+    let expires_at = record.bearer_expires_at_unix;
+    let refresh_token = record.refresh_token.clone();
+    let id_token = record.id_token.clone();
+    let device_id = record.device_id.clone();
+    let installation_id = record.installation_id.clone();
+    let ab_test_device_id = record.ab_test_device_id.clone();
+    let credentials = block_on(api.refresh_credentials(
+        RefreshRequest {
+            refresh_token: &refresh_token,
+            id_token: id_token.as_deref(),
+            device_id: &device_id,
+            installation_id: &installation_id,
+            ab_test_device_id: &ab_test_device_id,
+            now_unix: now,
+        },
+        |rotated_refresh_token, refreshed_id_token| {
+            record.refresh_token = rotated_refresh_token.to_owned();
+            record.id_token = refreshed_id_token.map(str::to_owned);
+            locked
+                .save(&record)
+                .map_err(|error| auth_storage(error, "write_rotation"))
+        },
+    ))
+    .map_err(|error| CredentialResolutionFailure {
+        error: Box::new(error),
+        stored_bearer_state: Some(stored_bearer_state),
+        bearer_expires_at_unix: Some(expires_at),
+    })?;
+    record = serde_json::to_value(credentials)
+        .and_then(serde_json::from_value)
+        .map_err(|error| CredentialResolutionFailure {
+            error: Box::new(
+                AppError::unexpected("authentication state types are incompatible")
+                    .with_source(error),
+            ),
+            stored_bearer_state: Some(stored_bearer_state),
+            bearer_expires_at_unix: Some(expires_at),
+        })?;
+    locked
+        .save(&record)
+        .map_err(|error| resolution_storage(error, "write"))?;
+    Ok(Some(ResolvedCredentials {
+        record,
+        refreshed_from: Some(stored_bearer_state),
+    }))
+}
+
+fn bearer_state(record: &CredentialRecord, now: u64) -> StoredBearerState {
+    if record.bearer_expires_at_unix <= now {
+        StoredBearerState::Expired
+    } else if record.bearer_is_valid_at(now, MINIMUM_BEARER_LIFETIME_SECONDS) {
+        StoredBearerState::Valid
+    } else {
+        StoredBearerState::NearExpiry
+    }
+}
+
+fn auth_status<S: GatewaySigner>(
+    paths: StatePaths,
+    api: &SchibstedToriAuthenticationApi<S>,
+    now: u64,
+) -> Result<Value, AppError> {
+    let output = match resolve_credentials_with(paths, api, now) {
+        Ok(Some(resolved)) => AuthStatusOutput {
+            authenticated: true,
+            health: if resolved.refreshed_from.is_some() {
+                "refreshed"
+            } else {
+                "valid"
+            },
+            validation: if resolved.refreshed_from.is_some() {
+                "online_refresh"
+            } else {
+                "local_expiry"
+            },
+            refresh_performed: resolved.refreshed_from.is_some(),
+            stored_bearer_state: resolved.refreshed_from,
+            user_id: Some(resolved.record.user_id),
+            bearer_expires_at_unix: Some(resolved.record.bearer_expires_at_unix),
+            expires_in_seconds: Some(resolved.record.bearer_expires_at_unix.saturating_sub(now)),
+            next_actions: Vec::new(),
+        },
+        Ok(None) => unavailable_status("missing", "local_storage", None, None, true),
+        Err(failure) => status_from_failure(failure),
+    };
+    serde_json::to_value(output)
+        .map_err(|error| AppError::output("failed to serialize auth status").with_source(error))
+}
+
+fn status_from_failure(failure: CredentialResolutionFailure) -> AuthStatusOutput {
+    let (health, validation, login_required) = match failure.error.code.as_str() {
+        "auth.refresh_rejected" | "auth.exchange_rejected" => {
+            ("refresh_rejected", "online_refresh", true)
+        }
+        "auth.refresh_malformed"
+        | "auth.credentials_malformed"
+        | "upstream.unexpected_response" => ("malformed", "unverified", true),
+        _ => ("temporarily_unavailable", "unverified", false),
+    };
+    unavailable_status(
+        health,
+        validation,
+        failure.stored_bearer_state,
+        failure.bearer_expires_at_unix,
+        login_required,
+    )
+}
+
+fn unavailable_status(
+    health: &'static str,
+    validation: &'static str,
+    stored_bearer_state: Option<StoredBearerState>,
+    bearer_expires_at_unix: Option<u64>,
+    login_required: bool,
+) -> AuthStatusOutput {
+    AuthStatusOutput {
+        authenticated: false,
+        health,
+        validation,
+        refresh_performed: stored_bearer_state.is_some(),
+        stored_bearer_state,
+        user_id: None,
+        bearer_expires_at_unix,
+        expires_in_seconds: None,
+        next_actions: vec![NextAction {
+            command: if login_required {
+                "tori auth login"
+            } else {
+                "tori auth status"
+            }
+            .to_owned(),
+        }],
+    }
+}
+
+fn resolution_storage(
+    error: CredentialStoreError,
+    operation: &'static str,
+) -> CredentialResolutionFailure {
+    let error = match error {
+        CredentialStoreError::InvalidData(_) | CredentialStoreError::MissingRequiredValue => {
+            let mut malformed = AppError::authentication(
+                "auth.credentials_malformed",
+                "stored authentication credentials are malformed",
+            );
+            malformed.next_actions.push(NextAction {
+                command: "tori auth login".to_owned(),
+            });
+            malformed
+        }
+        error => auth_storage(error, operation),
+    };
+    CredentialResolutionFailure {
+        error: Box::new(error),
+        stored_bearer_state: None,
+        bearer_expires_at_unix: None,
+    }
 }
 
 fn state_paths() -> Result<StatePaths, AppError> {
@@ -227,21 +424,18 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::storage::credentials::CredentialRecord;
 
-    fn serve_refresh() -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+    type MockResponses = Vec<(&'static str, &'static str, &'static str)>;
+
+    fn serve_responses(
+        responses: MockResponses,
+    ) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
-        let paths = ["/oauth/token", "/api/2/oauth/exchange", "/public/login"];
-        let bodies = [
-            r#"{"access_token":"access-new","refresh_token":"refresh-new"}"#,
-            r#"{"data":{"code":"spid-new"}}"#,
-            r#"{"userId":42,"token":{"value":"bearer-new"}}"#,
-        ];
         let requests = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&requests);
         let worker = thread::spawn(move || {
-            for (expected_path, body) in paths.into_iter().zip(bodies) {
+            for (expected_path, status, body) in responses {
                 let (mut stream, _) = listener.accept().unwrap();
                 let mut request = Vec::new();
                 loop {
@@ -272,13 +466,33 @@ mod tests {
                 assert!(request.starts_with(&format!("POST {expected_path} ")));
                 captured.lock().unwrap().push(expected_path.to_owned());
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 stream.write_all(response.as_bytes()).unwrap();
             }
         });
         (base_url, requests, worker)
+    }
+
+    fn serve_refresh() -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+        serve_responses(vec![
+            (
+                "/oauth/token",
+                "200 OK",
+                r#"{"access_token":"access-new","refresh_token":"refresh-new"}"#,
+            ),
+            (
+                "/api/2/oauth/exchange",
+                "200 OK",
+                r#"{"data":{"code":"spid-new"}}"#,
+            ),
+            (
+                "/public/login",
+                "200 OK",
+                r#"{"userId":42,"token":{"value":"bearer-new"}}"#,
+            ),
+        ])
     }
 
     fn expired_credentials() -> CredentialRecord {
@@ -328,6 +542,156 @@ mod tests {
         assert_eq!(stored.refresh_token, "refresh-new");
         assert_eq!(stored.bearer_token, "bearer-new");
         assert_eq!(stored.bearer_expires_at_unix, 4_600);
+    }
+
+    #[test]
+    fn status_reports_missing_credentials_with_login_action() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+
+        let status = auth_status(paths, &SchibstedToriAuthenticationApi::new(), 1_000).unwrap();
+
+        assert_eq!(status["authenticated"], false);
+        assert_eq!(status["health"], "missing");
+        assert_eq!(status["_next_actions"][0]["command"], "tori auth login");
+        assert!(status.get("user_id").is_none());
+    }
+
+    #[test]
+    fn status_reports_locally_valid_credentials_without_network_access() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let mut credentials = expired_credentials();
+        credentials.bearer_expires_at_unix = 1_031;
+        CredentialStore::new(paths.clone())
+            .save(&credentials)
+            .unwrap();
+
+        let status = auth_status(paths, &SchibstedToriAuthenticationApi::new(), 1_000).unwrap();
+
+        assert_eq!(status["authenticated"], true);
+        assert_eq!(status["health"], "valid");
+        assert_eq!(status["validation"], "local_expiry");
+        assert_eq!(status["refresh_performed"], false);
+        assert_eq!(status["expires_in_seconds"], 31);
+        assert_eq!(status["user_id"], "user");
+    }
+
+    #[test]
+    fn status_refreshes_near_expiry_and_expired_credentials() {
+        for (expires_at, expected_state) in [(1_030, "near_expiry"), (999, "expired")] {
+            let temporary = tempdir().unwrap();
+            let paths = StatePaths::from_root(temporary.path().join("state"));
+            let mut credentials = expired_credentials();
+            credentials.bearer_expires_at_unix = expires_at;
+            CredentialStore::new(paths.clone())
+                .save(&credentials)
+                .unwrap();
+            let (base_url, requests, server) = serve_refresh();
+            let api =
+                SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url);
+
+            let status = auth_status(paths.clone(), &api, 1_000).unwrap();
+            server.join().unwrap();
+
+            assert_eq!(status["authenticated"], true);
+            assert_eq!(status["health"], "refreshed");
+            assert_eq!(status["validation"], "online_refresh");
+            assert_eq!(status["stored_bearer_state"], expected_state);
+            assert_eq!(status["bearer_expires_at_unix"], 4_600);
+            assert_eq!(requests.lock().unwrap().len(), 3);
+            assert_eq!(
+                CredentialStore::new(paths)
+                    .load()
+                    .unwrap()
+                    .unwrap()
+                    .bearer_token,
+                "bearer-new"
+            );
+        }
+    }
+
+    #[test]
+    fn status_distinguishes_refresh_rejection_without_exposing_secrets() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+        CredentialStore::new(paths.clone())
+            .save(&expired_credentials())
+            .unwrap();
+        let (base_url, _, server) = serve_responses(vec![(
+            "/oauth/token",
+            "400 Bad Request",
+            r#"{"error":"invalid_grant","refresh_token":"response-secret"}"#,
+        )]);
+        let api = SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url);
+
+        let status = auth_status(paths, &api, 1_000).unwrap();
+        server.join().unwrap();
+        let rendered = status.to_string();
+
+        assert_eq!(status["authenticated"], false);
+        assert_eq!(status["health"], "refresh_rejected");
+        assert_eq!(status["stored_bearer_state"], "expired");
+        assert_eq!(status["_next_actions"][0]["command"], "tori auth login");
+        for secret in ["user", "refresh-old", "bearer-old", "response-secret"] {
+            assert!(!rendered.contains(secret));
+        }
+    }
+
+    #[test]
+    fn status_distinguishes_malformed_refresh_and_stored_credentials() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+        CredentialStore::new(paths.clone())
+            .save(&expired_credentials())
+            .unwrap();
+        let (base_url, _, server) =
+            serve_responses(vec![("/oauth/token", "200 OK", r#"{"access_token":""}"#)]);
+        let api = SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url);
+
+        let refresh_status = auth_status(paths, &api, 1_000).unwrap();
+        server.join().unwrap();
+        assert_eq!(refresh_status["health"], "malformed");
+        assert_eq!(refresh_status["stored_bearer_state"], "expired");
+        assert_eq!(
+            refresh_status["_next_actions"][0]["command"],
+            "tori auth login"
+        );
+
+        let malformed_temporary = tempdir().unwrap();
+        let malformed_paths = StatePaths::from_root(malformed_temporary.path().join("state"));
+        malformed_paths.ensure().unwrap();
+        std::fs::write(malformed_paths.credentials_file(), b"not-json-secret").unwrap();
+        let stored_status = auth_status(
+            malformed_paths,
+            &SchibstedToriAuthenticationApi::new(),
+            1_000,
+        )
+        .unwrap();
+        assert_eq!(stored_status["authenticated"], false);
+        assert_eq!(stored_status["health"], "malformed");
+        assert!(!stored_status.to_string().contains("not-json-secret"));
+    }
+
+    #[test]
+    fn status_marks_network_failure_as_temporarily_unavailable() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+        CredentialStore::new(paths.clone())
+            .save(&expired_credentials())
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let api = SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url);
+
+        let status = auth_status(paths, &api, 1_000).unwrap();
+
+        assert_eq!(status["authenticated"], false);
+        assert_eq!(status["health"], "temporarily_unavailable");
+        assert_eq!(status["validation"], "unverified");
+        assert_eq!(status["stored_bearer_state"], "expired");
+        assert_eq!(status["_next_actions"][0]["command"], "tori auth status");
     }
 
     #[test]

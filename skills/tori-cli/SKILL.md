@@ -15,6 +15,7 @@ Use `tori` as the interface to Tori.fi. Keep the default TOON output for compact
 - Inspect remote state after mutations. Draft and listing responses are authoritative.
 - Do not repeat uncertain mutations. Use `partial`, error details, and returned IDs to recover.
 - A field cannot appear in both flags and `--input` JSON.
+- `tori auth status` applies the same 30-second bearer-validity policy as authenticated commands. It refreshes near-expiry or expired credentials through the locked atomic command path. Treat `authenticated: true` as usable under that policy, `temporarily_unavailable` as uncertain and retryable, and `refresh_rejected` or `malformed` as requiring the reported browser-login action.
 
 ## Marketplace discovery
 
