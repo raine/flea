@@ -552,6 +552,10 @@ fn html_price_failure_is_transient_but_unsafe_partial_envelope() {
     assert_eq!(value["partial"]["completed_steps"], json!(["fetch_draft"]));
     assert_eq!(
         value["next_actions"][0]["command"],
+        "flea draft show 46031010"
+    );
+    assert_eq!(
+        value["next_actions"][1]["command"],
         "flea draft update 46031010 --price VALUE"
     );
     assert_eq!(client.requests.lock().unwrap().len(), 3);
@@ -587,9 +591,19 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
     assert_eq!(value["error"]["safe_to_retry"], false);
     assert_eq!(value["partial"]["draft_id"], "draft-1");
     assert_eq!(value["partial"]["active_step"], "apply_category");
+    assert_eq!(value["partial"]["failed_stage"], "apply_category");
+    assert_eq!(value["partial"]["observed_etag"], "one");
+    assert_eq!(value["partial"]["observation"]["status"], "observed");
+    assert!(value["partial"]["observation"]["observed_at"].is_string());
     assert_eq!(value["partial"]["absent_fields"], json!(["category"]));
+    assert_eq!(value["partial"]["field_summary"][0]["field"], "category");
+    assert_eq!(value["partial"]["field_summary"][0]["status"], "absent");
     assert_eq!(
         value["next_actions"][0]["command"],
+        "flea draft show draft-1"
+    );
+    assert_eq!(
+        value["next_actions"][1]["command"],
         "flea draft update draft-1 --category VALUE"
     );
 }
@@ -679,6 +693,10 @@ fn bad_gateway_after_draft_mutation_is_transient_but_unsafe_to_retry() {
     );
     assert_eq!(
         value["next_actions"][0]["command"],
+        "flea draft show draft-1"
+    );
+    assert_eq!(
+        value["next_actions"][1]["command"],
         "flea draft update draft-1 --title VALUE"
     );
 }

@@ -11,6 +11,7 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use time::format_description::well_known::Rfc3339;
 
 use crate::{
     api::client::{
@@ -75,7 +76,7 @@ impl fmt::Debug for RequestBody {
             Self::Empty => formatter.write_str("Empty"),
             Self::Json(value) => {
                 let mut redacted = value.clone();
-                diagnostics::redact_value(&mut redacted);
+                diagnostics::redact_diagnostic_value(&mut redacted);
                 formatter.debug_tuple("Json").field(&redacted).finish()
             }
             Self::Image {
@@ -188,7 +189,7 @@ impl ApiError {
             .map(diagnostics::redact_text)
             .unwrap_or_else(|| "Tori rejected the request".to_owned());
         let mut upstream = response.body.clone();
-        diagnostics::redact_value(&mut upstream);
+        diagnostics::redact_diagnostic_value(&mut upstream);
         let classification = classify(FailureKind::HttpStatus(response.status), context);
         let (code, message) = if classification.upstream_transient
             && !classification.safe_to_retry
@@ -224,12 +225,15 @@ impl fmt::Debug for ApiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut details = self.details.as_deref().cloned();
         if let Some(details) = &mut details {
-            diagnostics::redact_value(details);
+            diagnostics::redact_diagnostic_value(details);
         }
         formatter
             .debug_struct("ApiError")
             .field("code", &self.code)
-            .field("message", &diagnostics::redact_text(&self.message))
+            .field(
+                "message",
+                &diagnostics::redact_diagnostic_text(&self.message),
+            )
             .field("upstream_transient", &self.upstream_transient)
             .field("safe_to_retry", &self.safe_to_retry)
             .field("status", &self.status)
@@ -3006,12 +3010,106 @@ impl Default for WorkflowConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryStatus {
+    Persisted,
+    Pending,
+    Absent,
+    Rejected,
+    Unattempted,
+    Indeterminate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationStatus {
+    Observed,
+    Unavailable,
+    ChangedByAnotherClient,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RecoveryObservation {
+    pub status: ObservationStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FieldRecovery {
+    pub field: String,
+    pub status: RecoveryStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub safe_text: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageRecoveryOperation {
+    Add,
+    Remove,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadRecoveryStatus {
+    Completed,
+    Failed,
+    Unattempted,
+    Indeterminate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentRecoveryStatus {
+    Attached,
+    Absent,
+    Unattempted,
+    Indeterminate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessingRecoveryStatus {
+    Ready,
+    Processing,
+    Failed,
+    Unattempted,
+    Indeterminate,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ImageRecovery {
+    pub index: usize,
+    pub operation: ImageRecoveryOperation,
+    pub status: RecoveryStatus,
+    pub upload: UploadRecoveryStatus,
+    pub attachment: AttachmentRecoveryStatus,
+    pub processing: ProcessingRecoveryStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Recovery {
     pub draft_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_listing_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_etag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_revision: Option<String>,
     pub completed_steps: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub completed_steps_omitted: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_stage: Option<String>,
+    pub observation: RecoveryObservation,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_step: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3024,17 +3122,216 @@ pub struct Recovery {
     pub indeterminate_fields: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unattempted_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub field_summary: Vec<FieldRecovery>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fields_omitted: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageRecovery>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub images_omitted: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<RecoveryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication: Option<RecoveryStatus>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub manual_inspection_required: bool,
     pub upstream_transient: bool,
     pub safe_to_retry: bool,
     pub next_safe_actions: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub destructive_actions: Vec<String>,
+    #[serde(skip)]
     pub fresh_state: Option<DraftState>,
+}
+
+const RECOVERY_FIELD_LIMIT: usize = 24;
+const RECOVERY_IMAGE_LIMIT: usize = 20;
+const RECOVERY_STEP_LIMIT: usize = 24;
+
+const fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+fn bounded_recovery_steps(steps: &[String]) -> (Vec<String>, usize) {
+    if steps.len() <= RECOVERY_STEP_LIMIT {
+        return (steps.to_vec(), 0);
+    }
+    const PREFIX: usize = 8;
+    let mut bounded = steps.iter().take(PREFIX).cloned().collect::<Vec<_>>();
+    bounded.extend(
+        steps
+            .iter()
+            .skip(steps.len() - (RECOVERY_STEP_LIMIT - PREFIX))
+            .cloned(),
+    );
+    (bounded, steps.len() - RECOVERY_STEP_LIMIT)
+}
+
+fn bounded_recovery_text(value: &str) -> String {
+    const LIMIT: usize = 160;
+    if value.chars().count() <= LIMIT {
+        return value.to_owned();
+    }
+    let mut bounded = value.chars().take(LIMIT - 3).collect::<String>();
+    bounded.push_str("...");
+    bounded
+}
+
+fn safe_listing_text(value: &str) -> String {
+    let normalized = value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    bounded_recovery_text(normalized.trim())
+}
+
+fn recovery_scalar(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(bounded_recovery_text(value)),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn bound_recovery_names(values: &mut Vec<String>) {
+    let mut seen = BTreeSet::new();
+    values.retain(|value| seen.insert(value.clone()));
+    values.truncate(RECOVERY_FIELD_LIMIT);
+}
+
+fn recovery_priority(status: RecoveryStatus) -> u8 {
+    match status {
+        RecoveryStatus::Absent => 0,
+        RecoveryStatus::Pending => 1,
+        RecoveryStatus::Indeterminate => 2,
+        RecoveryStatus::Rejected => 3,
+        RecoveryStatus::Persisted => 4,
+        RecoveryStatus::Unattempted => 5,
+    }
+}
+
+fn observation_timestamp() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .to_string()
+        })
+}
+
+impl Recovery {
+    fn base(draft_id: &str, completed_steps: &[String], error_code: Option<&str>) -> Self {
+        let (completed_steps, completed_steps_omitted) = bounded_recovery_steps(completed_steps);
+        Self {
+            draft_id: draft_id.to_owned(),
+            source_listing_id: None,
+            listing_id: None,
+            observed_etag: None,
+            observed_revision: None,
+            completed_steps,
+            completed_steps_omitted,
+            failed_stage: None,
+            observation: RecoveryObservation {
+                status: ObservationStatus::Unavailable,
+                observed_at: None,
+                error_code: error_code.map(str::to_owned),
+            },
+            active_step: None,
+            fields: Vec::new(),
+            persisted_fields: Vec::new(),
+            absent_fields: Vec::new(),
+            indeterminate_fields: Vec::new(),
+            unattempted_fields: Vec::new(),
+            field_summary: Vec::new(),
+            fields_omitted: 0,
+            images: Vec::new(),
+            images_omitted: 0,
+            delivery: None,
+            publication: None,
+            manual_inspection_required: false,
+            upstream_transient: false,
+            safe_to_retry: false,
+            next_safe_actions: vec![format!("flea draft show {draft_id}")],
+            destructive_actions: Vec::new(),
+            fresh_state: None,
+        }
+    }
+
+    fn observe(&mut self, state: &DraftState, status: ObservationStatus) {
+        self.observed_etag = (!state.etag.is_empty()).then(|| bounded_recovery_text(&state.etag));
+        self.observed_revision = state
+            .revision
+            .as_deref()
+            .map(bounded_recovery_text)
+            .or_else(|| state.values.get("revision").and_then(recovery_scalar));
+        self.observation = RecoveryObservation {
+            status,
+            observed_at: Some(observation_timestamp()),
+            error_code: None,
+        };
+        self.fresh_state = Some(state.clone());
+        if status == ObservationStatus::Observed && self.listing_id.is_none() {
+            self.destructive_actions = vec![format!("flea draft delete {}", self.draft_id)];
+        }
+    }
+
+    fn refresh_field_summary(&mut self) {
+        let state = self.fresh_state.as_ref();
+        let mut summary = Vec::new();
+        let groups = [
+            (&self.absent_fields, RecoveryStatus::Absent),
+            (&self.indeterminate_fields, RecoveryStatus::Indeterminate),
+            (&self.persisted_fields, RecoveryStatus::Persisted),
+            (&self.unattempted_fields, RecoveryStatus::Unattempted),
+        ];
+        for (fields, status) in groups {
+            for field in fields {
+                let safe_text = (status == RecoveryStatus::Persisted
+                    && matches!(field.as_str(), "title" | "description"))
+                .then(|| {
+                    state
+                        .and_then(|state| state.values.get(field))
+                        .and_then(Value::as_str)
+                        .map(safe_listing_text)
+                })
+                .flatten();
+                summary.push(FieldRecovery {
+                    field: bounded_recovery_text(field),
+                    status,
+                    safe_text,
+                });
+            }
+        }
+        summary.sort_by(|left, right| {
+            recovery_priority(left.status)
+                .cmp(&recovery_priority(right.status))
+                .then_with(|| left.field.cmp(&right.field))
+        });
+        summary.dedup_by(|left, right| left.field == right.field);
+        self.fields_omitted = summary.len().saturating_sub(RECOVERY_FIELD_LIMIT);
+        summary.truncate(RECOVERY_FIELD_LIMIT);
+        self.field_summary = summary;
+        bound_recovery_names(&mut self.fields);
+        bound_recovery_names(&mut self.persisted_fields);
+        bound_recovery_names(&mut self.absent_fields);
+        bound_recovery_names(&mut self.indeterminate_fields);
+        bound_recovery_names(&mut self.unattempted_fields);
+        self.failed_stage = self.active_step.clone();
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -3066,22 +3363,10 @@ impl WorkflowError {
                 .iter()
                 .filter_map(Value::as_str)
                 .map(str::to_owned)
-                .collect();
+                .collect::<Vec<_>>();
             Some(Recovery {
-                next_safe_actions: vec![format!("flea draft show {draft_id}")],
-                draft_id,
-                listing_id: None,
-                completed_steps,
-                active_step: None,
-                fields: Vec::new(),
-                persisted_fields: Vec::new(),
-                absent_fields: Vec::new(),
-                indeterminate_fields: Vec::new(),
-                unattempted_fields: Vec::new(),
-                manual_inspection_required: false,
                 upstream_transient: error.upstream_transient,
-                safe_to_retry: false,
-                fresh_state: None,
+                ..Recovery::base(&draft_id, &completed_steps, Some(&error.code))
             })
         });
         Self {
@@ -3102,76 +3387,121 @@ impl WorkflowError {
         let safe_to_retry =
             safe_to_retry && error.safe_to_retry && !completed_steps_have_mutation(completed_steps);
         let upstream_transient = error.upstream_transient;
+        let error_code = error.code.clone();
         Self {
             code: error.code.clone(),
             message: error.message.clone(),
             source: Some(error),
             recovery: Some(Recovery {
-                draft_id: draft_id.to_owned(),
-                listing_id: None,
-                completed_steps: completed_steps.to_vec(),
-                active_step: None,
-                fields: Vec::new(),
-                persisted_fields: Vec::new(),
-                absent_fields: Vec::new(),
-                indeterminate_fields: Vec::new(),
-                unattempted_fields: Vec::new(),
-                manual_inspection_required: false,
                 upstream_transient,
                 safe_to_retry,
-                next_safe_actions: vec![format!("flea draft show {draft_id}")],
-                fresh_state: None,
+                ..Recovery::base(draft_id, completed_steps, Some(&error_code))
             }),
             details: None,
         }
     }
 
-    fn with_listing_id(mut self, listing_id: &str) -> Self {
+    fn with_source_listing_id(mut self, listing_id: &str) -> Self {
         if let Some(recovery) = &mut self.recovery {
-            recovery.listing_id = Some(listing_id.to_owned());
+            recovery.source_listing_id = Some(listing_id.to_owned());
         }
         self
     }
 
-    fn with_optional_listing_id(self, listing_id: Option<&str>) -> Self {
+    fn with_optional_source_listing_id(self, listing_id: Option<&str>) -> Self {
         match listing_id {
-            Some(listing_id) => self.with_listing_id(listing_id),
+            Some(listing_id) => self.with_source_listing_id(listing_id),
             None => self,
         }
     }
 
     fn validation(completed_steps: &[String], report: PublicationValidation) -> Self {
         let repeatable = !report.pending.is_empty() || !report.unverifiable.is_empty();
-        let next_safe_actions = report
+        let mut next_safe_actions = report
             .missing
             .iter()
-            .chain(&report.invalid)
             .chain(&report.pending)
-            .chain(&report.unverifiable)
             .map(|requirement| requirement.command.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+            .collect::<Vec<_>>();
+        next_safe_actions.push(format!("flea draft show {}", report.draft_id));
+        let mut seen_actions = BTreeSet::new();
+        next_safe_actions.retain(|action| seen_actions.insert(action.clone()));
+        let absent_fields = report
+            .missing
+            .iter()
+            .map(|requirement| requirement.field.clone())
+            .take(RECOVERY_FIELD_LIMIT)
+            .collect::<Vec<_>>();
+        let rejected_fields = report
+            .invalid
+            .iter()
+            .map(|requirement| requirement.field.clone())
+            .take(RECOVERY_FIELD_LIMIT)
+            .collect::<Vec<_>>();
+        let indeterminate_fields = report
+            .unverifiable
+            .iter()
+            .map(|requirement| requirement.field.clone())
+            .take(RECOVERY_FIELD_LIMIT)
+            .collect::<Vec<_>>();
+        let pending_fields = report
+            .pending
+            .iter()
+            .map(|requirement| requirement.field.clone())
+            .take(RECOVERY_FIELD_LIMIT)
+            .collect::<Vec<_>>();
+        let mut field_summary = absent_fields
+            .iter()
+            .map(|field| (field, RecoveryStatus::Absent))
+            .chain(
+                rejected_fields
+                    .iter()
+                    .map(|field| (field, RecoveryStatus::Rejected)),
+            )
+            .chain(
+                indeterminate_fields
+                    .iter()
+                    .map(|field| (field, RecoveryStatus::Indeterminate)),
+            )
+            .chain(
+                pending_fields
+                    .iter()
+                    .map(|field| (field, RecoveryStatus::Pending)),
+            )
+            .map(|(field, status)| FieldRecovery {
+                field: bounded_recovery_text(field),
+                status,
+                safe_text: None,
+            })
+            .collect::<Vec<_>>();
+        field_summary.sort_by(|left, right| {
+            recovery_priority(left.status)
+                .cmp(&recovery_priority(right.status))
+                .then_with(|| left.field.cmp(&right.field))
+        });
+        field_summary.dedup_by(|left, right| left.field == right.field);
+        let fields_omitted = field_summary.len().saturating_sub(RECOVERY_FIELD_LIMIT);
+        field_summary.truncate(RECOVERY_FIELD_LIMIT);
         let details = serde_json::to_value(&report).ok();
         Self {
             code: "draft.validation_failed".to_owned(),
             message: "The draft is not ready for publication".to_owned(),
             source: None,
             recovery: Some(Recovery {
-                draft_id: report.draft_id,
-                listing_id: None,
-                completed_steps: completed_steps.to_vec(),
-                active_step: None,
-                fields: Vec::new(),
-                persisted_fields: Vec::new(),
-                absent_fields: Vec::new(),
-                indeterminate_fields: Vec::new(),
-                unattempted_fields: Vec::new(),
-                manual_inspection_required: false,
                 upstream_transient: repeatable,
                 safe_to_retry: repeatable,
                 next_safe_actions,
-                fresh_state: None,
+                failed_stage: Some("validate".to_owned()),
+                absent_fields,
+                indeterminate_fields,
+                field_summary,
+                fields_omitted,
+                observation: RecoveryObservation {
+                    status: ObservationStatus::Observed,
+                    observed_at: Some(observation_timestamp()),
+                    error_code: None,
+                },
+                ..Recovery::base(&report.draft_id, completed_steps, None)
             }),
             details,
         }
@@ -3204,20 +3534,23 @@ impl WorkflowError {
             },
             source: None,
             recovery: Some(Recovery {
-                draft_id: draft_id.to_owned(),
-                listing_id: None,
-                completed_steps: completed_steps.to_vec(),
                 active_step: Some("validate_delivery".to_owned()),
+                failed_stage: Some("validate_delivery".to_owned()),
                 fields: vec!["delivery".to_owned()],
-                persisted_fields: Vec::new(),
                 absent_fields: vec!["delivery".to_owned()],
-                indeterminate_fields: Vec::new(),
-                unattempted_fields: Vec::new(),
-                manual_inspection_required: false,
-                upstream_transient: false,
-                safe_to_retry: false,
+                field_summary: vec![FieldRecovery {
+                    field: "delivery".to_owned(),
+                    status: RecoveryStatus::Absent,
+                    safe_text: None,
+                }],
+                delivery: Some(RecoveryStatus::Absent),
+                observation: RecoveryObservation {
+                    status: ObservationStatus::Observed,
+                    observed_at: Some(observation_timestamp()),
+                    error_code: None,
+                },
                 next_safe_actions,
-                fresh_state: None,
+                ..Recovery::base(draft_id, completed_steps, None)
             }),
             details: Some(json!({
                 "missing_fields": if missing { vec!["delivery"] } else { Vec::<&str>::new() },
@@ -3263,15 +3596,18 @@ impl fmt::Debug for WorkflowError {
             .as_ref()
             .and_then(|recovery| serde_json::to_value(recovery).ok());
         if let Some(details) = &mut details {
-            diagnostics::redact_value(details);
+            diagnostics::redact_diagnostic_value(details);
         }
         if let Some(recovery) = &mut recovery {
-            diagnostics::redact_value(recovery);
+            diagnostics::redact_diagnostic_value(recovery);
         }
         formatter
             .debug_struct("WorkflowError")
             .field("code", &self.code)
-            .field("message", &diagnostics::redact_text(&self.message))
+            .field(
+                "message",
+                &diagnostics::redact_diagnostic_text(&self.message),
+            )
             .field("source", &self.source)
             .field("recovery", &recovery)
             .field("details", &details)
@@ -3552,13 +3888,14 @@ fn field_recovery(
     let next_safe_actions = if manual_inspection_required || outcomes.absent.is_empty() {
         vec![format!("flea draft show {draft_id}")]
     } else {
-        vec![retry_field_action(draft_id, &outcomes.absent)]
+        vec![
+            format!("flea draft show {draft_id}"),
+            retry_field_action(draft_id, &outcomes.absent),
+        ]
     };
-    Recovery {
-        draft_id: draft_id.to_owned(),
-        listing_id: None,
-        completed_steps: completed_steps.to_vec(),
+    let mut recovery = Recovery {
         active_step: Some(boundary.step.to_owned()),
+        failed_stage: Some(boundary.step.to_owned()),
         fields: boundary.fields.to_vec(),
         persisted_fields: outcomes.persisted,
         absent_fields: outcomes.absent,
@@ -3568,8 +3905,13 @@ fn field_recovery(
         upstream_transient,
         safe_to_retry,
         next_safe_actions,
-        fresh_state,
+        ..Recovery::base(draft_id, completed_steps, None)
+    };
+    if let Some(state) = fresh_state {
+        recovery.observe(&state, ObservationStatus::Observed);
     }
+    recovery.refresh_field_summary();
+    recovery
 }
 
 fn schema_validation_issues(state: &DraftState, mutation: &FieldMutation) -> Vec<ValidationIssue> {
@@ -3848,6 +4190,155 @@ fn field_error_details(
     details
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryAttempt {
+    Completed,
+    Attempting,
+    Unattempted,
+}
+
+#[derive(Clone, Debug)]
+struct RecoveryImageIntent {
+    index: usize,
+    operation: ImageRecoveryOperation,
+    image_id: Option<String>,
+    upload: RecoveryAttempt,
+    attachment: RecoveryAttempt,
+}
+
+impl RecoveryImageIntent {
+    fn additions(start: usize, count: usize) -> Vec<Self> {
+        (0..count)
+            .map(|offset| Self {
+                index: start + offset,
+                operation: ImageRecoveryOperation::Add,
+                image_id: None,
+                upload: RecoveryAttempt::Unattempted,
+                attachment: RecoveryAttempt::Unattempted,
+            })
+            .collect()
+    }
+
+    fn removals(image_ids: &[String]) -> Vec<Self> {
+        image_ids
+            .iter()
+            .enumerate()
+            .map(|(index, image_id)| Self {
+                index,
+                operation: ImageRecoveryOperation::Remove,
+                image_id: Some(image_id.clone()),
+                upload: RecoveryAttempt::Completed,
+                attachment: RecoveryAttempt::Attempting,
+            })
+            .collect()
+    }
+}
+
+fn summarize_recovery_images(
+    intent: &[RecoveryImageIntent],
+    observed: Option<&DraftState>,
+    uncertain: bool,
+) -> Vec<ImageRecovery> {
+    intent
+        .iter()
+        .map(|requested| {
+            let observed_image = requested.image_id.as_deref().and_then(|image_id| {
+                observed
+                    .and_then(|state| state.images.iter().find(|image| image.image_id == image_id))
+            });
+            let upload = match requested.upload {
+                RecoveryAttempt::Completed => UploadRecoveryStatus::Completed,
+                RecoveryAttempt::Attempting if uncertain => UploadRecoveryStatus::Indeterminate,
+                RecoveryAttempt::Attempting => UploadRecoveryStatus::Failed,
+                RecoveryAttempt::Unattempted => UploadRecoveryStatus::Unattempted,
+            };
+            let attachment = if observed_image.is_some() {
+                AttachmentRecoveryStatus::Attached
+            } else {
+                match requested.attachment {
+                    RecoveryAttempt::Completed | RecoveryAttempt::Attempting
+                        if observed.is_some() =>
+                    {
+                        AttachmentRecoveryStatus::Absent
+                    }
+                    RecoveryAttempt::Completed | RecoveryAttempt::Attempting => {
+                        AttachmentRecoveryStatus::Indeterminate
+                    }
+                    RecoveryAttempt::Unattempted
+                        if requested.upload == RecoveryAttempt::Completed && observed.is_some() =>
+                    {
+                        AttachmentRecoveryStatus::Absent
+                    }
+                    RecoveryAttempt::Unattempted => AttachmentRecoveryStatus::Unattempted,
+                }
+            };
+            let processing = match observed_image.map(|image| &image.state) {
+                Some(ImageState::Ready) => ProcessingRecoveryStatus::Ready,
+                Some(ImageState::Processing) => ProcessingRecoveryStatus::Processing,
+                Some(ImageState::Failed) => ProcessingRecoveryStatus::Failed,
+                None if attachment == AttachmentRecoveryStatus::Indeterminate => {
+                    ProcessingRecoveryStatus::Indeterminate
+                }
+                None => ProcessingRecoveryStatus::Unattempted,
+            };
+            let status = match requested.operation {
+                ImageRecoveryOperation::Remove
+                    if observed.is_some() && observed_image.is_none() =>
+                {
+                    RecoveryStatus::Persisted
+                }
+                ImageRecoveryOperation::Remove if observed_image.is_some() => {
+                    RecoveryStatus::Absent
+                }
+                ImageRecoveryOperation::Remove => RecoveryStatus::Indeterminate,
+                ImageRecoveryOperation::Add => match processing {
+                    ProcessingRecoveryStatus::Ready => RecoveryStatus::Persisted,
+                    ProcessingRecoveryStatus::Processing => RecoveryStatus::Pending,
+                    ProcessingRecoveryStatus::Failed => RecoveryStatus::Rejected,
+                    ProcessingRecoveryStatus::Indeterminate => RecoveryStatus::Indeterminate,
+                    ProcessingRecoveryStatus::Unattempted => match upload {
+                        UploadRecoveryStatus::Completed => RecoveryStatus::Absent,
+                        UploadRecoveryStatus::Failed => RecoveryStatus::Rejected,
+                        UploadRecoveryStatus::Indeterminate => RecoveryStatus::Indeterminate,
+                        UploadRecoveryStatus::Unattempted => RecoveryStatus::Unattempted,
+                    },
+                },
+            };
+            ImageRecovery {
+                index: requested.index,
+                operation: requested.operation,
+                status,
+                upload,
+                attachment,
+                processing,
+                image_id: requested.image_id.as_deref().map(bounded_recovery_text),
+            }
+        })
+        .collect()
+}
+
+fn observed_image_intent(state: &DraftState) -> Vec<RecoveryImageIntent> {
+    state
+        .images
+        .iter()
+        .map(|image| RecoveryImageIntent {
+            index: image.position,
+            operation: ImageRecoveryOperation::Add,
+            image_id: Some(image.image_id.clone()),
+            upload: RecoveryAttempt::Completed,
+            attachment: RecoveryAttempt::Completed,
+        })
+        .collect()
+}
+
+fn set_recovery_images(recovery: &mut Recovery, intent: &[RecoveryImageIntent], uncertain: bool) {
+    let mut images = summarize_recovery_images(intent, recovery.fresh_state.as_ref(), uncertain);
+    images.sort_by_key(|image| (recovery_priority(image.status), image.index));
+    recovery.images_omitted = images.len().saturating_sub(RECOVERY_IMAGE_LIMIT);
+    images.truncate(RECOVERY_IMAGE_LIMIT);
+    recovery.images = images;
+}
+
 pub struct DraftWorkflow<A> {
     api: A,
     config: WorkflowConfig,
@@ -3885,6 +4376,118 @@ fn prices_equal(left: &Value, right: &Value) -> bool {
 }
 
 impl<A: AdInputApi> DraftWorkflow<A> {
+    async fn recover_after_failure(
+        &self,
+        mut error: WorkflowError,
+        draft_id: &str,
+        failed_stage: &str,
+        expected_etag: Option<&str>,
+        images: &[RecoveryImageIntent],
+        delivery: Option<RecoveryStatus>,
+        publication: Option<RecoveryStatus>,
+    ) -> WorkflowError {
+        let mutation_status = error.source.as_ref().and_then(|source| source.status);
+        let observation = self.api.get_draft(draft_id).await;
+        let recovery = error
+            .recovery
+            .get_or_insert_with(|| Recovery::base(draft_id, &[], Some(&error.code)));
+        recovery.active_step = Some(failed_stage.to_owned());
+        recovery.failed_stage = Some(bounded_recovery_text(failed_stage));
+        recovery.delivery = delivery;
+        recovery.publication = publication;
+        match observation {
+            Ok(state) => {
+                let changed = mutation_status == Some(412)
+                    || expected_etag.is_some_and(|etag| {
+                        failed_stage.starts_with("validate_")
+                            && !state.etag.is_empty()
+                            && state.etag != etag
+                    });
+                recovery.observe(
+                    &state,
+                    if changed {
+                        ObservationStatus::ChangedByAnotherClient
+                    } else {
+                        ObservationStatus::Observed
+                    },
+                );
+                recovery.refresh_field_summary();
+                set_recovery_images(recovery, images, false);
+                let show = format!("flea draft show {draft_id}");
+                let mut actions = vec![show.clone()];
+                if !changed {
+                    actions.extend(
+                        recovery
+                            .next_safe_actions
+                            .iter()
+                            .filter(|action| **action != show)
+                            .cloned(),
+                    );
+                    if recovery.images.iter().any(|image| {
+                        image.operation == ImageRecoveryOperation::Remove
+                            && image.status == RecoveryStatus::Absent
+                    }) {
+                        actions.push(format!("flea draft image remove {draft_id} IMAGE_ID..."));
+                    }
+                    if failed_stage == "wait_for_images"
+                        && recovery.images.iter().any(|image| {
+                            image.operation == ImageRecoveryOperation::Add
+                                && image.status == RecoveryStatus::Pending
+                        })
+                    {
+                        actions.push(format!("flea draft publish {draft_id}"));
+                    }
+                } else {
+                    recovery.destructive_actions.clear();
+                }
+                actions.dedup();
+                recovery.next_safe_actions = actions;
+                if publication == Some(RecoveryStatus::Indeterminate) {
+                    recovery.destructive_actions.clear();
+                }
+            }
+            Err(observation_error) => {
+                recovery.observation = RecoveryObservation {
+                    status: ObservationStatus::Unavailable,
+                    observed_at: None,
+                    error_code: Some(observation_error.code),
+                };
+                recovery.fresh_state = None;
+                recovery.destructive_actions.clear();
+                recovery.next_safe_actions = vec![format!("flea draft show {draft_id}")];
+                recovery.refresh_field_summary();
+                set_recovery_images(recovery, images, true);
+            }
+        }
+        error
+    }
+
+    fn add_unattempted_images(error: &mut WorkflowError, start: usize, count: usize) {
+        if let Some(recovery) = &mut error.recovery {
+            let intent = RecoveryImageIntent::additions(start, count);
+            set_recovery_images(recovery, &intent, recovery.fresh_state.is_none());
+        }
+    }
+
+    fn enrich_validation_recovery(
+        mut error: WorkflowError,
+        state: &DraftState,
+        images: &[RecoveryImageIntent],
+    ) -> WorkflowError {
+        if let Some(recovery) = &mut error.recovery {
+            recovery.observe(state, ObservationStatus::Observed);
+            set_recovery_images(recovery, images, false);
+            recovery.delivery = recovery
+                .field_summary
+                .iter()
+                .find(|field| field.field == "delivery")
+                .map(|field| field.status)
+                .or(Some(RecoveryStatus::Persisted));
+            recovery.publication = Some(RecoveryStatus::Unattempted);
+        }
+        error
+    }
+
     fn local_field_validation_error(
         &self,
         draft: &DraftState,
@@ -3965,28 +4568,34 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             "etag_after": fresh.etag,
             "etag_changed": draft_before.etag != fresh.etag,
         });
+        let mut recovery = field_recovery(
+            &draft_before.draft_id,
+            completed,
+            FieldBoundary {
+                step: &mutation.step,
+                fields: &mutation.fields,
+            },
+            FieldOutcomes {
+                persisted,
+                absent,
+                indeterminate: Vec::new(),
+                unattempted: pending_fields(mutations, progress, &mutation.fields),
+            },
+            error.upstream_transient,
+            safe_to_retry,
+            Some(fresh),
+            false,
+        );
+        if code == "draft.conflict" {
+            recovery.observation.status = ObservationStatus::ChangedByAnotherClient;
+            recovery.next_safe_actions = vec![format!("flea draft show {}", draft_before.draft_id)];
+            recovery.destructive_actions.clear();
+        }
         WorkflowError {
             code: code.to_owned(),
             message: message.to_owned(),
             source: Some(error.clone()),
-            recovery: Some(field_recovery(
-                &draft_before.draft_id,
-                completed,
-                FieldBoundary {
-                    step: &mutation.step,
-                    fields: &mutation.fields,
-                },
-                FieldOutcomes {
-                    persisted,
-                    absent,
-                    indeterminate: Vec::new(),
-                    unattempted: pending_fields(mutations, progress, &mutation.fields),
-                },
-                error.upstream_transient,
-                safe_to_retry,
-                Some(fresh),
-                false,
-            )),
+            recovery: Some(recovery),
             details: Some(field_error_details(
                 &mutation.step,
                 &mutation.fields,
@@ -4224,8 +4833,10 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 {
                     recovery.absent_fields.extend(mutation.fields.clone());
                 }
-                recovery.next_safe_actions =
-                    vec![retry_field_action(&draft.draft_id, &recovery.absent_fields)];
+                recovery.next_safe_actions = vec![
+                    format!("flea draft show {}", draft.draft_id),
+                    retry_field_action(&draft.draft_id, &recovery.absent_fields),
+                ];
             } else if error.code == "mutation.uncertain" {
                 if recovery
                     .persisted_fields
@@ -4244,14 +4855,13 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     recovery.next_safe_actions =
                         vec![format!("flea draft show {}", draft.draft_id)];
                 } else {
-                    recovery.next_safe_actions =
-                        vec![retry_field_action(&draft.draft_id, &recovery.absent_fields)];
+                    recovery.next_safe_actions = vec![
+                        format!("flea draft show {}", draft.draft_id),
+                        retry_field_action(&draft.draft_id, &recovery.absent_fields),
+                    ];
                 }
             }
-            recovery.persisted_fields.sort();
-            recovery.persisted_fields.dedup();
-            recovery.absent_fields.sort();
-            recovery.absent_fields.dedup();
+            recovery.refresh_field_summary();
         }
         let details = error.details.get_or_insert_with(|| json!({}));
         if let Some(details) = details.as_object_mut() {
@@ -4291,7 +4901,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     .local_field_validation_error(
                         &draft, &mutations, mutation, completed, &progress, issues,
                     )
-                    .with_optional_listing_id(listing_id));
+                    .with_optional_source_listing_id(listing_id));
             }
         }
 
@@ -4304,7 +4914,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                             .local_field_validation_error(
                                 &draft, &mutations, pending, completed, &progress, issues,
                             )
-                            .with_optional_listing_id(listing_id));
+                            .with_optional_source_listing_id(listing_id));
                     }
                 }
             }
@@ -4340,7 +4950,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                                     &draft, &mutations, mutation, completed, &progress, error,
                                 )
                                 .await
-                                .with_optional_listing_id(listing_id));
+                                .with_optional_source_listing_id(listing_id));
                         }
                     }
                 }
@@ -4384,7 +4994,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                                             &[],
                                             false,
                                         )
-                                        .with_optional_listing_id(listing_id));
+                                        .with_optional_source_listing_id(listing_id));
                                 }
                                 Err(observation_error) => {
                                     diagnostics::workflow_step(&context, "failed");
@@ -4402,7 +5012,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                                             mutation_error,
                                             error_at_stage(observation_error, "observe_price"),
                                         )
-                                        .with_optional_listing_id(listing_id));
+                                        .with_optional_source_listing_id(listing_id));
                                 }
                             }
                         }
@@ -4413,7 +5023,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                                     &draft, &mutations, mutation, completed, &progress, error,
                                 )
                                 .await
-                                .with_optional_listing_id(listing_id));
+                                .with_optional_source_listing_id(listing_id));
                         }
                     }
                 }
@@ -4431,7 +5041,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                             diagnostics::workflow_step(&context, "failed");
                             return Err(self
                                 .enrich_field_error(error, &draft, &mutations, mutation, &progress)
-                                .with_optional_listing_id(listing_id));
+                                .with_optional_source_listing_id(listing_id));
                         }
                     }
                 }
@@ -4502,15 +5112,21 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                         );
                         if let Some(recovery) = &mut workflow.recovery {
                             recovery.active_step = Some("apply_delivery".to_owned());
+                            recovery.failed_stage = Some("apply_delivery".to_owned());
                             recovery.fields = vec!["delivery".to_owned()];
                             if persisted {
                                 recovery.persisted_fields = vec!["delivery".to_owned()];
+                                recovery.delivery = Some(RecoveryStatus::Persisted);
                             } else {
                                 recovery.absent_fields = vec!["delivery".to_owned()];
-                                recovery.next_safe_actions =
-                                    vec![retry_field_action(&draft_id, &recovery.absent_fields)];
+                                recovery.delivery = Some(RecoveryStatus::Absent);
+                                recovery.next_safe_actions = vec![
+                                    format!("flea draft show {draft_id}"),
+                                    retry_field_action(&draft_id, &recovery.absent_fields),
+                                ];
                             }
-                            recovery.fresh_state = Some(state);
+                            recovery.observe(&state, ObservationStatus::Observed);
+                            recovery.refresh_field_summary();
                         }
                         Err(workflow)
                     }
@@ -4523,9 +5139,13 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                         );
                         if let Some(recovery) = &mut workflow.recovery {
                             recovery.active_step = Some("apply_delivery".to_owned());
+                            recovery.failed_stage = Some("apply_delivery".to_owned());
                             recovery.fields = vec!["delivery".to_owned()];
                             recovery.indeterminate_fields = vec!["delivery".to_owned()];
+                            recovery.delivery = Some(RecoveryStatus::Indeterminate);
                             recovery.manual_inspection_required = true;
+                            recovery.observation.error_code = Some(observation_error.code.clone());
+                            recovery.refresh_field_summary();
                         }
                         workflow.details = Some(json!({
                             "stage": "apply_delivery",
@@ -4542,12 +5162,23 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     }
                 };
             }
-            return Err(WorkflowError::for_draft(
+            let workflow = WorkflowError::for_draft(
                 &draft_id,
                 completed,
                 error_at_stage(error, "apply_delivery"),
                 false,
-            ));
+            );
+            return Err(self
+                .recover_after_failure(
+                    workflow,
+                    &draft_id,
+                    "apply_delivery",
+                    Some(&state.etag),
+                    &[],
+                    Some(RecoveryStatus::Rejected),
+                    Some(RecoveryStatus::Unattempted),
+                )
+                .await);
         }
         completed.push("apply_delivery".to_owned());
         let observed = self.delivery_composer(&draft_id, completed).await?;
@@ -4596,7 +5227,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .await
             .map_err(WorkflowError::before_creation)?;
         let mut completed = vec!["create_draft".to_owned()];
-        let applied = self
+        let applied = match self
             .apply_field_mutations(
                 draft,
                 ordered_field_mutations(values),
@@ -4604,7 +5235,14 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 "draft_create",
                 None,
             )
-            .await?;
+            .await
+        {
+            Ok(applied) => applied,
+            Err(mut error) => {
+                Self::add_unattempted_images(&mut error, 0, images.len());
+                return Err(error);
+            }
+        };
         let mut draft = applied.draft;
         let mut image_processing = Vec::new();
         if !images.is_empty() {
@@ -4631,13 +5269,14 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .await
             .map_err(WorkflowError::before_creation)?;
         requested_sale_price(&seed.values).map_err(WorkflowError::input)?;
+        let source_image_count = seed.images.len();
         let draft = self
             .api
             .create_draft()
             .await
             .map_err(WorkflowError::before_creation)?;
         let mut completed = vec!["load_source_listing".to_owned(), "create_draft".to_owned()];
-        let applied = self
+        let applied = match self
             .apply_field_mutations(
                 draft,
                 ordered_field_mutations(seed.values),
@@ -4645,7 +5284,14 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 "draft_create_from_listing",
                 Some(listing_id),
             )
-            .await?;
+            .await
+        {
+            Ok(applied) => applied,
+            Err(mut error) => {
+                Self::add_unattempted_images(&mut error, 0, source_image_count);
+                return Err(error);
+            }
+        };
         let mut draft = applied.draft;
 
         let mut ordered = Vec::new();
@@ -4653,7 +5299,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         for source in seed.images {
             let image = prepare_image_bytes(source.bytes).map_err(|error| {
                 WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                    .with_listing_id(listing_id)
+                    .with_source_listing_id(listing_id)
             })?;
             image_processing.push(image.processing_report().clone());
             let uploaded = self
@@ -4668,7 +5314,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .await
                 .map_err(|error| {
                     WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                        .with_listing_id(listing_id)
+                        .with_source_listing_id(listing_id)
                 })?;
             ordered.push(uploaded);
             completed.push(format!("upload_image:{}", ordered.len() - 1));
@@ -4680,7 +5326,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .await
                 .map_err(|error| {
                     WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
-                        .with_listing_id(listing_id)
+                        .with_source_listing_id(listing_id)
                 })?;
             completed.push("attach_images".to_owned());
         }
@@ -4805,12 +5451,25 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         paths: &[impl AsRef<Path>],
         completed: &mut Vec<String>,
     ) -> Result<AddImagesResult, WorkflowError> {
+        let start = state.images.len();
         let mut images = Vec::with_capacity(paths.len());
-        for path in paths {
-            let image = prepare_image(path.as_ref()).map_err(|error| {
-                WorkflowError::for_draft(&state.draft_id, completed, error, false)
-            })?;
-            images.push(image);
+        for (offset, path) in paths.iter().enumerate() {
+            match prepare_image(path.as_ref()) {
+                Ok(image) => images.push(image),
+                Err(error) => {
+                    let mut intent = RecoveryImageIntent::additions(start, paths.len());
+                    intent[offset].upload = RecoveryAttempt::Attempting;
+                    let mut workflow =
+                        WorkflowError::for_draft(&state.draft_id, completed, error, false);
+                    if let Some(recovery) = &mut workflow.recovery {
+                        recovery.active_step = Some(format!("upload_image:{}", start + offset));
+                        recovery.failed_stage = recovery.active_step.clone();
+                        recovery.observe(state, ObservationStatus::Observed);
+                        set_recovery_images(recovery, &intent, false);
+                    }
+                    return Err(workflow);
+                }
+            }
         }
         self.add_prepared_images(state, images, completed).await
     }
@@ -4827,41 +5486,75 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .into_iter()
             .map(uploaded_from_draft_image)
             .collect();
+        let start = ordered.len();
+        let mut intent = RecoveryImageIntent::additions(start, images.len());
         let mut image_processing = Vec::with_capacity(images.len());
-        for image in images {
+        for (offset, image) in images.into_iter().enumerate() {
             image_processing.push(image.processing_report().clone());
-            let uploaded = self.upload_prepared_image(state, image, completed).await?;
+            intent[offset].upload = RecoveryAttempt::Attempting;
+            let image_index = start + offset;
+            let uploaded = match self
+                .api
+                .upload_image(
+                    &state.draft_id,
+                    &image.file_name,
+                    image.bytes,
+                    image.width,
+                    image.height,
+                )
+                .await
+            {
+                Ok(uploaded) => uploaded,
+                Err(error) => {
+                    let workflow =
+                        WorkflowError::for_draft(&state.draft_id, completed, error, false);
+                    return Err(self
+                        .recover_after_failure(
+                            workflow,
+                            &state.draft_id,
+                            &format!("upload_image:{image_index}"),
+                            Some(&state.etag),
+                            &intent,
+                            None,
+                            None,
+                        )
+                        .await);
+                }
+            };
+            intent[offset].upload = RecoveryAttempt::Completed;
+            intent[offset].image_id = Some(uploaded.image_id.clone());
             ordered.push(uploaded);
-            completed.push(format!("upload_image:{}", ordered.len() - 1));
+            completed.push(format!("upload_image:{image_index}"));
         }
-        let updated = self
+        for image in &mut intent {
+            image.attachment = RecoveryAttempt::Attempting;
+        }
+        let updated = match self
             .api
             .set_images(&state.draft_id, &state.etag, &state.values, &ordered)
             .await
-            .map_err(|error| WorkflowError::for_draft(&state.draft_id, completed, error, false))?;
+        {
+            Ok(updated) => updated,
+            Err(error) => {
+                let workflow = WorkflowError::for_draft(&state.draft_id, completed, error, false);
+                return Err(self
+                    .recover_after_failure(
+                        workflow,
+                        &state.draft_id,
+                        "attach_images",
+                        Some(&state.etag),
+                        &intent,
+                        None,
+                        None,
+                    )
+                    .await);
+            }
+        };
         completed.push("attach_images".to_owned());
         Ok(AddImagesResult {
             draft: updated,
             image_processing,
         })
-    }
-
-    async fn upload_prepared_image(
-        &self,
-        state: &DraftState,
-        image: PreparedImage,
-        completed: &[String],
-    ) -> Result<UploadedImage, WorkflowError> {
-        self.api
-            .upload_image(
-                &state.draft_id,
-                &image.file_name,
-                image.bytes,
-                image.width,
-                image.height,
-            )
-            .await
-            .map_err(|error| WorkflowError::for_draft(&state.draft_id, completed, error, false))
     }
 
     pub async fn remove_images(
@@ -4884,12 +5577,29 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .into_iter()
             .map(uploaded_from_draft_image)
             .collect();
-        self.api
+        match self
+            .api
             .set_images(draft_id, &state.etag, &state.values, &ordered)
             .await
-            .map_err(|error| {
-                WorkflowError::for_draft(draft_id, &["fetch_draft".to_owned()], error, false)
-            })
+        {
+            Ok(updated) => Ok(updated),
+            Err(error) => {
+                let workflow =
+                    WorkflowError::for_draft(draft_id, &["fetch_draft".to_owned()], error, false);
+                let intent = RecoveryImageIntent::removals(remove);
+                Err(self
+                    .recover_after_failure(
+                        workflow,
+                        draft_id,
+                        "remove_images",
+                        Some(&state.etag),
+                        &intent,
+                        None,
+                        None,
+                    )
+                    .await)
+            }
+        }
     }
 
     pub async fn publish(&self, draft_id: &str) -> Result<PublishResult, WorkflowError> {
@@ -4901,6 +5611,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
         let composer_model = publication.composer_model;
         let mut state = publication.draft;
+        let publication_images = observed_image_intent(&state);
         completed.push("fetch_draft".to_owned());
 
         let composer = self.api.delivery_composer(draft_id).await.ok();
@@ -4925,7 +5636,11 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             || !report.invalid.is_empty()
             || !report.unverifiable.is_empty()
         {
-            return Err(WorkflowError::validation(&completed, report));
+            return Err(Self::enrich_validation_recovery(
+                WorkflowError::validation(&completed, report),
+                &state,
+                &publication_images,
+            ));
         }
         completed.push("validate".to_owned());
 
@@ -4943,7 +5658,11 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             delivery_verifiable,
         );
         if !report.ready {
-            return Err(WorkflowError::validation(&completed, report));
+            return Err(Self::enrich_validation_recovery(
+                WorkflowError::validation(&completed, report),
+                &state,
+                &publication_images,
+            ));
         }
         let composer = composer.expect("ready publication has a delivery composer");
         let requested_delivery = composer.state.selected.clone();
@@ -4953,24 +5672,62 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .clone();
 
         state.values.remove("delivery");
-        self.api
+        if let Err(error) = self
+            .api
             .update_item(draft_id, &state.etag, &state.values)
             .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?;
+        {
+            let workflow = WorkflowError::for_draft(draft_id, &completed, error, false);
+            return Err(self
+                .recover_after_failure(
+                    workflow,
+                    draft_id,
+                    "patch_item_fields",
+                    Some(&state.etag),
+                    &publication_images,
+                    Some(RecoveryStatus::Pending),
+                    Some(RecoveryStatus::Unattempted),
+                )
+                .await);
+        }
         completed.push("patch_item_fields".to_owned());
 
-        state = self
-            .api
-            .get_draft(draft_id)
-            .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
+        state = match self.api.get_draft(draft_id).await {
+            Ok(state) => state,
+            Err(error) => {
+                let workflow = WorkflowError::for_draft(draft_id, &completed, error, true);
+                return Err(self
+                    .recover_after_failure(
+                        workflow,
+                        draft_id,
+                        "fetch_fresh_etag",
+                        Some(&state.etag),
+                        &publication_images,
+                        Some(RecoveryStatus::Pending),
+                        Some(RecoveryStatus::Unattempted),
+                    )
+                    .await);
+            }
+        };
         completed.push("fetch_fresh_etag".to_owned());
 
-        state = self
-            .api
-            .submit_adinput(draft_id, &state.etag, &state)
-            .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?;
+        state = match self.api.submit_adinput(draft_id, &state.etag, &state).await {
+            Ok(state) => state,
+            Err(error) => {
+                let workflow = WorkflowError::for_draft(draft_id, &completed, error, false);
+                return Err(self
+                    .recover_after_failure(
+                        workflow,
+                        draft_id,
+                        "submit_adinput",
+                        Some(&state.etag),
+                        &publication_images,
+                        Some(RecoveryStatus::Pending),
+                        Some(RecoveryStatus::Unattempted),
+                    )
+                    .await);
+            }
+        };
         completed.push("submit_adinput".to_owned());
 
         let revision = state.revision.clone().ok_or_else(|| {
@@ -4985,10 +5742,29 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 false,
             )
         })?;
-        self.api
+        if let Err(error) = self
+            .api
             .apply_delivery(draft_id, &composer, &delivery)
             .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?;
+        {
+            let delivery_status = if mutation_is_ambiguous(&error) {
+                RecoveryStatus::Indeterminate
+            } else {
+                RecoveryStatus::Rejected
+            };
+            let workflow = WorkflowError::for_draft(draft_id, &completed, error, false);
+            return Err(self
+                .recover_after_failure(
+                    workflow,
+                    draft_id,
+                    "apply_delivery",
+                    Some(&state.etag),
+                    &publication_images,
+                    Some(delivery_status),
+                    Some(RecoveryStatus::Unattempted),
+                )
+                .await);
+        }
         completed.push("apply_delivery".to_owned());
         let observed_delivery = self.delivery_composer(draft_id, &completed).await?;
         if observed_delivery.state.selected != [delivery.clone()] {
@@ -5002,22 +5778,62 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 "allowed_values": allowed_delivery_values(&observed_delivery.state),
                 "recovery_guidance": format!("Inspect the draft with `flea draft show {draft_id}`; do not repeat publication")
             })));
-            return Err(WorkflowError::for_draft(draft_id, &completed, error, false));
+            let workflow = WorkflowError::for_draft(draft_id, &completed, error, false);
+            return Err(self
+                .recover_after_failure(
+                    workflow,
+                    draft_id,
+                    "observe_delivery",
+                    Some(&state.etag),
+                    &publication_images,
+                    Some(RecoveryStatus::Indeterminate),
+                    Some(RecoveryStatus::Unattempted),
+                )
+                .await);
         }
         completed.push("observe_delivery".to_owned());
 
-        let context = self
-            .api
-            .product_context(draft_id, &revision)
-            .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
+        let context = match self.api.product_context(draft_id, &revision).await {
+            Ok(context) => context,
+            Err(error) => {
+                let workflow = WorkflowError::for_draft(draft_id, &completed, error, true);
+                return Err(self
+                    .recover_after_failure(
+                        workflow,
+                        draft_id,
+                        "fetch_product_context",
+                        Some(&state.etag),
+                        &publication_images,
+                        Some(RecoveryStatus::Persisted),
+                        Some(RecoveryStatus::Unattempted),
+                    )
+                    .await);
+            }
+        };
         completed.push("fetch_product_context".to_owned());
 
-        let publication = self
-            .api
-            .publish_basic(draft_id, &context)
-            .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?;
+        let publication = match self.api.publish_basic(draft_id, &context).await {
+            Ok(publication) => publication,
+            Err(error) => {
+                let publication_status = if mutation_is_ambiguous(&error) {
+                    RecoveryStatus::Indeterminate
+                } else {
+                    RecoveryStatus::Rejected
+                };
+                let workflow = WorkflowError::for_draft(draft_id, &completed, error, false);
+                return Err(self
+                    .recover_after_failure(
+                        workflow,
+                        draft_id,
+                        "publish_basic",
+                        Some(&state.etag),
+                        &publication_images,
+                        Some(RecoveryStatus::Persisted),
+                        Some(publication_status),
+                    )
+                    .await);
+            }
+        };
         completed.push("publish_basic".to_owned());
 
         let mut warnings = Vec::new();
@@ -5036,9 +5852,18 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         let observed_listing = match self.api.observed_listing(&publication.listing_id).await {
             Ok(listing) => listing,
             Err(error) => {
+                let observation_error_code = error.code.clone();
                 let mut workflow = WorkflowError::for_draft(draft_id, &completed, error, true);
                 if let Some(recovery) = &mut workflow.recovery {
                     recovery.listing_id = Some(publication.listing_id.clone());
+                    recovery.failed_stage = Some("fetch_observed_listing".to_owned());
+                    recovery.observe(&state, ObservationStatus::Observed);
+                    recovery.observation.status = ObservationStatus::Unavailable;
+                    recovery.observation.error_code = Some(observation_error_code);
+                    recovery.delivery = Some(RecoveryStatus::Persisted);
+                    recovery.publication = Some(RecoveryStatus::Persisted);
+                    recovery.destructive_actions.clear();
+                    set_recovery_images(recovery, &publication_images, false);
                     recovery.next_safe_actions =
                         vec![format!("flea listing show {}", publication.listing_id)];
                 }
@@ -5080,7 +5905,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             if poll == self.config.image_poll_limit
                 || started.elapsed() >= self.config.image_processing_timeout
             {
-                return Err(image_processing_timeout(&state.draft_id, completed));
+                return Err(image_processing_timeout(&state, completed, true, None));
             }
             let remaining = self
                 .config
@@ -5092,27 +5917,71 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .image_processing_timeout
                 .saturating_sub(started.elapsed());
             if remaining.is_zero() {
-                return Err(image_processing_timeout(&state.draft_id, completed));
+                return Err(image_processing_timeout(&state, completed, false, None));
             }
-            state = tokio::time::timeout(remaining, self.api.get_draft(&state.draft_id))
-                .await
-                .map_err(|_| image_processing_timeout(&state.draft_id, completed))?
-                .map_err(|error| {
-                    WorkflowError::for_draft(&state.draft_id, completed, error, true)
-                })?;
+            state = match tokio::time::timeout(remaining, self.api.get_draft(&state.draft_id)).await
+            {
+                Ok(Ok(state)) => state,
+                Ok(Err(error)) => {
+                    return Err(image_processing_timeout(
+                        &state,
+                        completed,
+                        false,
+                        Some(error.code),
+                    ));
+                }
+                Err(_) => {
+                    return Err(image_processing_timeout(&state, completed, false, None));
+                }
+            };
         }
         unreachable!("bounded image loop always returns")
     }
 }
 
-fn image_processing_timeout(draft_id: &str, completed: &[String]) -> WorkflowError {
+fn image_processing_timeout(
+    state: &DraftState,
+    completed: &[String],
+    observation_is_current: bool,
+    observation_error: Option<String>,
+) -> WorkflowError {
     let mut error = ApiError::new(
         "draft.image_processing",
         "Images did not finish processing before the bounded timeout",
     );
     error.upstream_transient = true;
     error.safe_to_retry = true;
-    WorkflowError::for_draft(draft_id, completed, error, true)
+    let mut workflow = WorkflowError::for_draft(&state.draft_id, completed, error, true);
+    if let Some(recovery) = &mut workflow.recovery {
+        recovery.active_step = Some("wait_for_images".to_owned());
+        recovery.failed_stage = Some("wait_for_images".to_owned());
+        recovery.publication = Some(RecoveryStatus::Pending);
+        if observation_is_current {
+            recovery.observe(state, ObservationStatus::Observed);
+            recovery.next_safe_actions = vec![
+                format!("flea draft show {}", state.draft_id),
+                format!("flea draft publish {}", state.draft_id),
+            ];
+        } else {
+            recovery.observed_etag =
+                (!state.etag.is_empty()).then(|| bounded_recovery_text(&state.etag));
+            recovery.observed_revision = state
+                .revision
+                .as_deref()
+                .map(bounded_recovery_text)
+                .or_else(|| state.values.get("revision").and_then(recovery_scalar));
+            recovery.observation = RecoveryObservation {
+                status: ObservationStatus::Unavailable,
+                observed_at: Some(observation_timestamp()),
+                error_code: observation_error.or_else(|| Some("draft.image_processing".to_owned())),
+            };
+            recovery.fresh_state = Some(state.clone());
+            recovery.destructive_actions.clear();
+            recovery.next_safe_actions = vec![format!("flea draft show {}", state.draft_id)];
+        }
+        set_recovery_images(recovery, &observed_image_intent(state), false);
+    }
+    workflow
 }
 
 pub struct PreparedImage {

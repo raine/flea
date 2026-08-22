@@ -17,6 +17,8 @@ Use `flea` as an independent interface to Tori.fi. Keep the default TOON output 
 - Read `upstream_transient` and `safe_to_retry` independently. A temporary upstream failure can leave a mutation unsafe to repeat.
 - Do not repeat uncertain mutations. Use `partial`, error details, returned IDs, and the authoritative command in `next_actions` to recover.
 - Draft field failures report persisted, absent, indeterminate, and unattempted fields. Retry only fields proven absent. Inspect the draft before acting on an indeterminate field.
+- Draft recovery summaries include bounded field and image lifecycle classifications, the failed stage, completed steps, observation status and time, and the latest ETag or revision. Treat indeterminate work as observation-only. Destructive cleanup commands require explicit intent.
+- Image recovery reports upload, attachment, and processing independently. A completed upload can remain unattached, and an attached image can remain processing or fail.
 - A field cannot appear in both flags and `--input` JSON.
 - `flea auth status` applies the same 30-second bearer-validity policy as authenticated commands. It refreshes near-expiry or expired credentials through the locked atomic command path. Treat `authenticated: true` as usable under that policy. Follow the reported browser-login action for `temporarily_unavailable`, `refresh_rejected`, or `malformed` because an attempted token mutation can have an uncertain outcome.
 

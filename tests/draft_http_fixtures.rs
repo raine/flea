@@ -6,8 +6,10 @@ use std::{
 
 use flea::{
     api::adinput::{
-        AdInputApi, DraftWorkflow, HttpAdInputApi, HttpRequest, HttpResponse, HttpTransport,
-        ImageState, Method, RequestBody, RetryPolicy, WorkflowConfig,
+        AdInputApi, AttachmentRecoveryStatus, DraftWorkflow, HttpAdInputApi, HttpRequest,
+        HttpResponse, HttpTransport, ImageRecoveryOperation, ImageState, Method, ObservationStatus,
+        ProcessingRecoveryStatus, RecoveryStatus, RequestBody, RetryPolicy, UploadRecoveryStatus,
+        WorkflowConfig,
     },
     domain::field::{FieldStatus, FieldType, Requirement},
 };
@@ -517,7 +519,10 @@ async fn structured_upstream_errors_name_the_active_field_and_preserve_progress(
     assert_eq!(recovery.unattempted_fields, ["postal_code"]);
     assert_eq!(
         recovery.next_safe_actions,
-        ["flea draft update draft-1 --price VALUE"]
+        [
+            "flea draft show draft-1",
+            "flea draft update draft-1 --price VALUE"
+        ]
     );
     let requests = transport.requests();
     assert_eq!(requests.len(), 3);
@@ -576,6 +581,22 @@ async fn html_5xx_observation_reports_partial_persistence_without_replaying() {
     assert_eq!(error.details.as_ref().unwrap()["content_type"], "text/html");
     let recovery = error.recovery.unwrap();
     assert_eq!(recovery.persisted_fields, ["title", "price"]);
+    assert_eq!(recovery.failed_stage.as_deref(), Some("apply_price"));
+    assert_eq!(recovery.observation.status, ObservationStatus::Observed);
+    assert!(recovery.observation.observed_at.is_some());
+    assert_eq!(recovery.observed_etag.as_deref(), Some("three"));
+    assert_eq!(
+        recovery
+            .field_summary
+            .iter()
+            .map(|field| (field.field.as_str(), field.status))
+            .collect::<Vec<_>>(),
+        [
+            ("price", RecoveryStatus::Persisted),
+            ("title", RecoveryStatus::Persisted),
+            ("postal_code", RecoveryStatus::Unattempted)
+        ]
+    );
     assert!(recovery.absent_fields.is_empty());
     assert!(recovery.indeterminate_fields.is_empty());
     assert_eq!(recovery.unattempted_fields, ["postal_code"]);
@@ -626,7 +647,10 @@ async fn unchanged_etag_proves_an_ambiguous_field_absent_and_limits_recovery() {
     assert!(!recovery.safe_to_retry);
     assert_eq!(
         recovery.next_safe_actions,
-        ["flea draft update draft-1 --price VALUE"]
+        [
+            "flea draft show draft-1",
+            "flea draft update draft-1 --price VALUE"
+        ]
     );
     assert_eq!(error.details.unwrap()["observation"]["etag_changed"], false);
     assert_eq!(transport.requests().len(), 3);
@@ -671,6 +695,12 @@ async fn failed_observation_keeps_the_active_field_indeterminate() {
     assert!(recovery.manual_inspection_required);
     assert!(!recovery.safe_to_retry);
     assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+    assert_eq!(recovery.observation.status, ObservationStatus::Unavailable);
+    assert!(recovery.destructive_actions.is_empty());
+    assert_eq!(
+        recovery.field_summary[0].status,
+        RecoveryStatus::Indeterminate
+    );
     assert_eq!(transport.requests().len(), 3);
     assert_eq!(
         transport
@@ -708,6 +738,13 @@ async fn update_conflict_fetches_and_returns_fresh_remote_state() {
     assert_eq!(recovery.completed_steps, ["fetch_draft"]);
     assert!(!recovery.upstream_transient);
     assert!(recovery.safe_to_retry);
+    assert_eq!(
+        recovery.observation.status,
+        ObservationStatus::ChangedByAnotherClient
+    );
+    assert_eq!(recovery.observed_etag.as_deref(), Some("two"));
+    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+    assert!(recovery.destructive_actions.is_empty());
     assert_eq!(recovery.fresh_state.unwrap().values["title"], "other agent");
     let requests = transport.requests();
     assert_eq!(requests[1].if_match.as_deref(), Some("one"));
@@ -1200,7 +1237,10 @@ async fn price_failure_preserves_transience_and_unsafe_recovery_details() {
     assert_eq!(recovery.absent_fields, ["price"]);
     assert_eq!(
         recovery.next_safe_actions,
-        ["flea draft update draft-1 --price VALUE"]
+        [
+            "flea draft show draft-1",
+            "flea draft update draft-1 --price VALUE"
+        ]
     );
     let requests = transport.requests();
     assert_eq!(requests[1].method, Method::Patch);
@@ -1427,10 +1467,16 @@ async fn dedicated_delivery_failure_requires_authoritative_recovery() {
     assert!(recovery.upstream_transient);
     assert!(!recovery.safe_to_retry);
     assert_eq!(recovery.active_step.as_deref(), Some("apply_delivery"));
+    assert_eq!(recovery.failed_stage.as_deref(), Some("apply_delivery"));
+    assert_eq!(recovery.observation.status, ObservationStatus::Observed);
+    assert_eq!(recovery.delivery, Some(RecoveryStatus::Absent));
     assert_eq!(recovery.absent_fields, ["delivery"]);
     assert_eq!(
         recovery.next_safe_actions,
-        ["flea draft update draft-1 --delivery VALUE"]
+        [
+            "flea draft show draft-1",
+            "flea draft update draft-1 --delivery VALUE"
+        ]
     );
 }
 
@@ -1483,8 +1529,47 @@ async fn post_creation_failure_keeps_recovery_context() {
     assert_eq!(recovery.absent_fields, ["category"]);
     assert_eq!(
         recovery.next_safe_actions,
-        ["flea draft update draft-1 --category VALUE"]
+        [
+            "flea draft show draft-1",
+            "flea draft update draft-1 --category VALUE"
+        ]
     );
+}
+
+#[tokio::test]
+async fn recovery_output_bounds_dynamic_fields_images_steps_and_local_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("private-recovery-image.png");
+    image::DynamicImage::new_rgb8(4, 6).save(&path).unwrap();
+    let paths = vec![path; 25];
+    let mut values = Map::from_iter([("category".to_owned(), json!("chairs"))]);
+    for index in 0..30 {
+        values.insert(
+            format!("dynamic_field_{index:02}"),
+            json!(format!("private-value-{index}")),
+        );
+    }
+    let transport = FixtureTransport::new([
+        response(201, draft("one", json!({}))),
+        response(503, json!({ "message": "category unavailable" })),
+        response(200, draft("observed", json!({}))),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow.create(values, &paths).await.unwrap_err();
+
+    let debug = format!("{error:?}");
+    let recovery = error.recovery.unwrap();
+    assert!(recovery.field_summary.len() <= 24);
+    assert!(recovery.fields_omitted > 0);
+    assert_eq!(recovery.images.len(), 20);
+    assert_eq!(recovery.images_omitted, 5);
+    assert!(recovery.completed_steps.len() <= 24);
+    let rendered = serde_json::to_string(&recovery).unwrap();
+    assert!(!rendered.contains("private-value"));
+    assert!(!rendered.contains("private-recovery-image"));
+    assert!(!debug.contains("private-value"));
+    assert!(!debug.contains("private-recovery-image"));
 }
 
 #[tokio::test]
@@ -1504,7 +1589,8 @@ async fn copy_failure_identifies_both_source_listing_and_created_draft() {
 
     let recovery = error.recovery.unwrap();
     assert_eq!(recovery.draft_id, "draft-1");
-    assert_eq!(recovery.listing_id.as_deref(), Some("listing-7"));
+    assert_eq!(recovery.source_listing_id.as_deref(), Some("listing-7"));
+    assert_eq!(recovery.listing_id, None);
     assert_eq!(
         recovery.completed_steps,
         ["load_source_listing", "create_draft"]
@@ -1624,6 +1710,170 @@ async fn image_upload_reads_dimensions_and_preserves_order() {
     assert_eq!(values["multi_image"].as_array().unwrap().len(), 2);
     assert_eq!(values["multi_image"][1]["width"], 7);
     assert_eq!(values["multi_image"][1]["height"], 11);
+}
+
+#[tokio::test]
+async fn image_failure_recovery_uses_absolute_positions_and_lifecycle_states() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = (0..3)
+        .map(|index| {
+            let path = directory.path().join(format!("private-{index}.png"));
+            image::DynamicImage::new_rgb8(4, 6).save(&path).unwrap();
+            path
+        })
+        .collect::<Vec<_>>();
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "one",
+                json!({
+                    "images": [
+                        image("existing-a", 0, "ready", 4, 6),
+                        image("existing-b", 1, "ready", 4, 6)
+                    ]
+                }),
+            ),
+        ),
+        response_with_location(201, "https://img.tori.net/dynamic/default/new-a.jpg"),
+        response(422, json!({ "message": "image rejected" })),
+        response(
+            200,
+            draft(
+                "observed",
+                json!({
+                    "images": [
+                        image("existing-a", 0, "ready", 4, 6),
+                        image("existing-b", 1, "ready", 4, 6)
+                    ]
+                }),
+            ),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow.add_images("draft-1", &paths).await.unwrap_err();
+
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.failed_stage.as_deref(), Some("upload_image:3"));
+    assert_eq!(recovery.completed_steps, ["fetch_draft", "upload_image:2"]);
+    assert_eq!(recovery.observation.status, ObservationStatus::Observed);
+    assert_eq!(recovery.observed_etag.as_deref(), Some("observed"));
+    let image = |index| {
+        recovery
+            .images
+            .iter()
+            .find(|image| image.index == index)
+            .unwrap()
+    };
+    assert_eq!(image(2).status, RecoveryStatus::Absent);
+    assert_eq!(image(2).upload, UploadRecoveryStatus::Completed);
+    assert_eq!(image(2).attachment, AttachmentRecoveryStatus::Absent);
+    assert_eq!(image(3).status, RecoveryStatus::Rejected);
+    assert_eq!(image(3).upload, UploadRecoveryStatus::Failed);
+    assert_eq!(image(4).status, RecoveryStatus::Unattempted);
+    assert_eq!(image(4).upload, UploadRecoveryStatus::Unattempted);
+    assert!(
+        recovery
+            .next_safe_actions
+            .iter()
+            .all(|action| !action.contains("image add"))
+    );
+    assert_eq!(recovery.destructive_actions, ["flea draft delete draft-1"]);
+}
+
+#[tokio::test]
+async fn attachment_recovery_distinguishes_processing_ready_and_failed_images() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = (0..3)
+        .map(|index| {
+            let path = directory.path().join(format!("private-{index}.png"));
+            image::DynamicImage::new_rgb8(4, 6).save(&path).unwrap();
+            path
+        })
+        .collect::<Vec<_>>();
+    let mut uncertain = response(200, Value::Null);
+    uncertain.body_is_unparseable = true;
+    let mut failed = image("third", 2, "failed", 4, 6);
+    failed["failure"] = json!("processing rejected");
+    let transport = FixtureTransport::new([
+        response(200, draft("one", json!({}))),
+        response_with_location(201, "https://img.tori.net/dynamic/default/first.jpg"),
+        response_with_location(201, "https://img.tori.net/dynamic/default/second.jpg"),
+        response_with_location(201, "https://img.tori.net/dynamic/default/third.jpg"),
+        uncertain,
+        response(
+            200,
+            draft(
+                "observed",
+                json!({
+                    "images": [
+                        image("first", 0, "ready", 4, 6),
+                        image("second", 1, "processing", 4, 6),
+                        failed
+                    ]
+                }),
+            ),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow.add_images("draft-1", &paths).await.unwrap_err();
+
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.failed_stage.as_deref(), Some("attach_images"));
+    let image = |index| {
+        recovery
+            .images
+            .iter()
+            .find(|image| image.index == index)
+            .unwrap()
+    };
+    assert_eq!(image(0).status, RecoveryStatus::Persisted);
+    assert_eq!(image(0).processing, ProcessingRecoveryStatus::Ready);
+    assert_eq!(image(1).status, RecoveryStatus::Pending);
+    assert_eq!(image(1).processing, ProcessingRecoveryStatus::Processing);
+    assert_eq!(image(2).status, RecoveryStatus::Rejected);
+    assert_eq!(image(2).processing, ProcessingRecoveryStatus::Failed);
+}
+
+#[tokio::test]
+async fn uncertain_image_removal_reports_only_retained_images_as_safe_work() {
+    let first = "https://img.tori.net/dynamic/default/first.jpg".to_owned();
+    let second = "https://img.tori.net/dynamic/default/second.jpg".to_owned();
+    let observed = json!({
+        "images": [
+            image("first", 0, "ready", 4, 6),
+            image("second", 1, "ready", 4, 6)
+        ]
+    });
+    let mut uncertain = response(200, Value::Null);
+    uncertain.body_is_unparseable = true;
+    let transport = FixtureTransport::new([
+        response(200, draft("one", observed.clone())),
+        uncertain,
+        response(200, draft("observed", observed)),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow
+        .remove_images("draft-1", &[first, second])
+        .await
+        .unwrap_err();
+
+    let recovery = error.recovery.unwrap();
+    assert!(recovery.images.iter().all(|image| {
+        image.operation == ImageRecoveryOperation::Remove
+            && image.status == RecoveryStatus::Absent
+            && image.attachment == AttachmentRecoveryStatus::Attached
+    }));
+    assert_eq!(
+        recovery.next_safe_actions,
+        [
+            "flea draft show draft-1",
+            "flea draft image remove draft-1 IMAGE_ID..."
+        ]
+    );
 }
 
 #[tokio::test]
@@ -2266,6 +2516,59 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
 }
 
 #[tokio::test]
+async fn uncertain_publication_observes_before_recommending_any_continuation() {
+    for observation_available in [true, false] {
+        let mut responses = successful_publish_responses();
+        responses.truncate(10);
+        responses[9] = response(503, json!({ "message": "publication unavailable" }));
+        responses.push(if observation_available {
+            response(
+                200,
+                draft(
+                    "observed-publication",
+                    json!({
+                        "values": {
+                            "category": "furniture/chairs",
+                            "title": "Chair",
+                            "delivery": ["pickup"],
+                            "revision": "revision-7"
+                        },
+                        "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+                    }),
+                ),
+            )
+        } else {
+            response(503, json!({ "message": "observation unavailable" }))
+        });
+        let workflow = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new(responses)),
+            config(),
+        );
+
+        let error = workflow.publish("draft-1").await.unwrap_err();
+
+        let recovery = error.recovery.unwrap();
+        assert_eq!(recovery.failed_stage.as_deref(), Some("publish_basic"));
+        assert_eq!(recovery.delivery, Some(RecoveryStatus::Persisted));
+        assert_eq!(recovery.publication, Some(RecoveryStatus::Indeterminate));
+        assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+        assert!(recovery.destructive_actions.is_empty());
+        if observation_available {
+            assert_eq!(recovery.observation.status, ObservationStatus::Observed);
+            assert!(recovery.observation.observed_at.is_some());
+            assert_eq!(
+                recovery.observed_etag.as_deref(),
+                Some("observed-publication")
+            );
+            assert_eq!(recovery.observed_revision.as_deref(), Some("revision-7"));
+        } else {
+            assert_eq!(recovery.observation.status, ObservationStatus::Unavailable);
+            assert!(recovery.observation.observed_at.is_none());
+        }
+    }
+}
+
+#[tokio::test]
 async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
     let mut confirmation_failure = successful_publish_responses();
     confirmation_failure[10] = response(503, json!({ "message": "confirmation unavailable" }));
@@ -2443,7 +2746,12 @@ async fn publish_timeout_is_bounded_and_recoverable() {
             "validate"
         ]
     );
-    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+    assert_eq!(
+        recovery.next_safe_actions,
+        ["flea draft show draft-1", "flea draft publish draft-1"]
+    );
+    assert_eq!(recovery.observation.status, ObservationStatus::Observed);
+    assert_eq!(recovery.images[0].status, RecoveryStatus::Pending);
 }
 
 fn composer_fixture() -> Value {

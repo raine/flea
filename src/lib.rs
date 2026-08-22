@@ -197,13 +197,22 @@ fn finish(
                 error.diagnostics = diagnostics.map(|context| Box::new(context.envelope()));
             }
             let exit_code = error.exit_class.code();
+            let diagnostic_chain = error
+                .internal_chain()
+                .into_iter()
+                .map(|message| diagnostics::redact_diagnostic_text(&message))
+                .collect::<Vec<_>>();
+            let mut diagnostic_partial = error.partial.as_deref().cloned();
+            if let Some(partial) = &mut diagnostic_partial {
+                diagnostics::redact_diagnostic_value(partial);
+            }
             tracing::error!(
                 event = "command.failed",
                 error.code = error.code,
                 error.upstream_transient = error.upstream_transient,
                 error.safe_to_retry = error.safe_to_retry,
-                error.chain = ?error.internal_chain(),
-                partial = ?error.partial
+                error.chain = ?diagnostic_chain,
+                partial = ?diagnostic_partial
             );
             (Envelope::failure(error), exit_code)
         }
@@ -217,9 +226,14 @@ fn finish(
         },
         Err(mut render_error) => {
             render_error.diagnostics = diagnostics.map(|context| Box::new(context.envelope()));
+            let diagnostic_chain = render_error
+                .internal_chain()
+                .into_iter()
+                .map(|message| diagnostics::redact_diagnostic_text(&message))
+                .collect::<Vec<_>>();
             tracing::error!(
                 event = "output.failed",
-                error.chain = ?render_error.internal_chain()
+                error.chain = ?diagnostic_chain
             );
             let fallback = Envelope::failure(render_error);
             let document = serde_json::to_string(&fallback).unwrap_or_else(|_| {

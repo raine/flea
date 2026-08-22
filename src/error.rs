@@ -54,15 +54,18 @@ impl fmt::Debug for AppError {
         let mut details = self.details.as_deref().cloned();
         let mut partial = self.partial.as_deref().cloned();
         if let Some(value) = &mut details {
-            crate::diagnostics::redact_value(value);
+            crate::diagnostics::redact_diagnostic_value(value);
         }
         if let Some(value) = &mut partial {
-            crate::diagnostics::redact_value(value);
+            crate::diagnostics::redact_diagnostic_value(value);
         }
         formatter
             .debug_struct("AppError")
             .field("code", &self.code)
-            .field("message", &crate::diagnostics::redact_text(&self.message))
+            .field(
+                "message",
+                &crate::diagnostics::redact_diagnostic_text(&self.message),
+            )
             .field("upstream_transient", &self.upstream_transient)
             .field("safe_to_retry", &self.safe_to_retry)
             .field("details", &details)

@@ -409,7 +409,7 @@ impl Drop for RedactingWriter {
 fn redact_json_line(line: &[u8]) -> Vec<u8> {
     match serde_json::from_slice::<Value>(line) {
         Ok(mut value) => {
-            redact_value(&mut value);
+            redact_diagnostic_value(&mut value);
             let mut output = serde_json::to_vec(&value).unwrap_or_else(|_| b"{}".to_vec());
             output.push(b'\n');
             output
@@ -443,12 +443,87 @@ pub fn redact_value(value: &mut Value) {
     }
 }
 
-fn is_secret_key(key: &str) -> bool {
-    let normalized: String = key
-        .chars()
+pub fn redact_diagnostic_value(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if is_secret_key(key) || is_local_path_key(key) {
+                    *value = Value::String(REDACTED.to_owned());
+                } else if normalized_key(key) == "values" {
+                    redact_listing_values(value);
+                } else if normalized_key(key) == "attributes" {
+                    redact_listing_value_container(value);
+                } else if is_listing_value_key(key) {
+                    *value = Value::String(REDACTED.to_owned());
+                } else {
+                    redact_diagnostic_value(value);
+                }
+            }
+        }
+        Value::Array(values) => values.iter_mut().for_each(redact_diagnostic_value),
+        Value::String(text) => *text = redact_diagnostic_text(text),
+        _ => {}
+    }
+}
+
+fn redact_listing_values(value: &mut Value) {
+    let Value::Object(values) = value else {
+        *value = Value::String(REDACTED.to_owned());
+        return;
+    };
+    for (key, value) in values {
+        let normalized = normalized_key(key);
+        if matches!(
+            normalized.as_str(),
+            "category" | "price" | "tradetype" | "delivery" | "revision" | "image" | "multiimage"
+        ) {
+            redact_value(value);
+        } else {
+            *value = Value::String(REDACTED.to_owned());
+        }
+    }
+}
+
+fn redact_listing_value_container(value: &mut Value) {
+    match value {
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                *value = Value::String(REDACTED.to_owned());
+            }
+        }
+        _ => *value = Value::String(REDACTED.to_owned()),
+    }
+}
+
+fn normalized_key(key: &str) -> String {
+    key.chars()
         .filter(|character| character.is_ascii_alphanumeric())
         .flat_map(char::to_lowercase)
-        .collect();
+        .collect()
+}
+
+fn is_local_path_key(key: &str) -> bool {
+    matches!(
+        normalized_key(key).as_str(),
+        "logpath"
+            | "imagepath"
+            | "imagepaths"
+            | "descriptionfile"
+            | "inputpath"
+            | "filepath"
+            | "filename"
+    )
+}
+
+fn is_listing_value_key(key: &str) -> bool {
+    matches!(
+        normalized_key(key).as_str(),
+        "title" | "description" | "postalcode" | "safetext"
+    )
+}
+
+fn is_secret_key(key: &str) -> bool {
+    let normalized = normalized_key(key);
     normalized.ends_with("authorization")
         || normalized.ends_with("token")
         || normalized.ends_with("cookie")
@@ -473,6 +548,48 @@ fn is_secret_key(key: &str) -> bool {
                 | "imagedata"
                 | "imagebytes"
         )
+}
+
+pub fn redact_diagnostic_text(text: &str) -> String {
+    redact_text(text)
+        .split_inclusive(char::is_whitespace)
+        .map(|part| {
+            let token = part.trim_matches(|character: char| {
+                character.is_whitespace()
+                    || matches!(character, '`' | '\'' | '"' | '(' | ')' | ',' | ';' | ':')
+            });
+            if looks_like_local_path(token) {
+                let whitespace = part
+                    .chars()
+                    .rev()
+                    .take_while(|character| character.is_whitespace())
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>();
+                format!("{REDACTED}{whitespace}")
+            } else {
+                part.to_owned()
+            }
+        })
+        .collect()
+}
+
+fn looks_like_local_path(token: &str) -> bool {
+    if token.is_empty() || token.contains("://") {
+        return false;
+    }
+    let lower = token.to_ascii_lowercase();
+    let has_file_extension = [".json", ".txt", ".jpg", ".jpeg", ".png", ".heic", ".webp"]
+        .iter()
+        .any(|extension| lower.ends_with(extension));
+    token.starts_with("./")
+        || token.starts_with("../")
+        || token.starts_with("~/")
+        || ["/users/", "/home/", "/tmp/", "/private/", "/var/folders/"]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+        || has_file_extension
 }
 
 pub fn redact_text(text: &str) -> String {
@@ -607,11 +724,11 @@ fn redact_data_images(text: &str) -> String {
 pub fn sanitized_upstream_body(body: &[u8]) -> String {
     let mut sanitized = match serde_json::from_slice::<Value>(body) {
         Ok(mut value) => {
-            redact_value(&mut value);
+            redact_diagnostic_value(&mut value);
             serde_json::to_string(&value).unwrap_or_else(|_| REDACTED.to_owned())
         }
         Err(_) => match std::str::from_utf8(body) {
-            Ok(text) => redact_text(text),
+            Ok(text) => redact_diagnostic_text(text),
             Err(_) => "[REDACTED_BINARY_BODY]".to_owned(),
         },
     };
@@ -921,6 +1038,38 @@ mod tests {
             OsString::from("60.1699"),
         ];
         assert_eq!(command_name(&args), "search");
+    }
+
+    #[test]
+    fn diagnostic_redaction_hides_listing_values_and_local_paths_only_in_logs() {
+        let public = json!({
+            "values": {
+                "title": "Safe listing title",
+                "description": "private description",
+                "category": "furniture/chairs",
+                "dynamic_field": "private dynamic value"
+            },
+            "http": {
+                "path": "/adinput/ad/recommerce/draft-1/update",
+                "content_type": "application/json"
+            },
+            "image_paths": ["/private/photos/chair.jpg"],
+            "message": "failed to read ./private/chair.json"
+        });
+        let mut diagnostic = public.clone();
+
+        redact_diagnostic_value(&mut diagnostic);
+
+        let diagnostic = diagnostic.to_string();
+        assert!(!diagnostic.contains("Safe listing title"));
+        assert!(!diagnostic.contains("private description"));
+        assert!(!diagnostic.contains("private dynamic value"));
+        assert!(!diagnostic.contains("/private/photos/chair.jpg"));
+        assert!(!diagnostic.contains("./private/chair.json"));
+        assert!(diagnostic.contains("furniture/chairs"));
+        assert!(diagnostic.contains("/adinput/ad/recommerce/draft-1/update"));
+        assert!(diagnostic.contains("application/json"));
+        assert_eq!(public["values"]["title"], "Safe listing title");
     }
 
     #[test]
