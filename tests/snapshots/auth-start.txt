@@ -1,0 +1,8 @@
+Open this URL in a browser to sign in to Tori:
+
+https://login.vend.fi/oauth/authorize?client_id=client&state=oauth-state
+
+Expires at Unix time 1700000600.
+
+After sign-in, run:
+tori auth complete flow-1 CALLBACK_URL

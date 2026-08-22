@@ -461,6 +461,8 @@ fn is_secret_key(key: &str) -> bool {
                 | "authorizationcode"
                 | "spidcode"
                 | "callbackurl"
+                | "loginurl"
+                | "authorizationurl"
                 | "redirecturi"
                 | "pkce"
                 | "pkceverifier"
@@ -494,6 +496,8 @@ pub fn redact_text(text: &str) -> String {
         "pkce_verifier",
         "pkce_challenge",
         "callback_url",
+        "login_url",
+        "authorization_url",
         "redirect_uri",
     ] {
         redacted = redact_assignment(&redacted, key);
@@ -725,6 +729,7 @@ mod tests {
             "hmac_signature": "secret-signature-value",
             "oauth_code": "secret-code-value",
             "callback_url": "tori://secret-callback-value",
+            "login_url": "https://login.vend.fi/oauth/authorize?state=secret-login-state",
             "code_verifier": "secret-verifier-value",
             "raw_image": "secret-image-value",
             "message": "Bearer secret-text-auth access_token=secret-text-token tori://oauth/callback?code=secret-callback-code data:image/png;base64,secret-image-data"
@@ -738,6 +743,7 @@ mod tests {
             "secret-signature-value",
             "secret-code-value",
             "secret-callback-value",
+            "secret-login-state",
             "secret-verifier-value",
             "secret-image-value",
             "secret-text-auth",

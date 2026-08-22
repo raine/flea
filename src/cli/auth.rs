@@ -24,12 +24,30 @@ pub struct AuthArgs {
 
 #[derive(Subcommand)]
 pub enum AuthCommand {
+    #[command(
+        about = "Start browser authentication",
+        long_about = "Create a short-lived OAuth flow and print the login URL and exact completion command."
+    )]
     Start,
+    #[command(
+        about = "Complete browser authentication",
+        long_about = "Validate an OAuth callback for a saved flow, exchange its code, and store Tori credentials."
+    )]
     Complete {
+        /// Flow identifier returned by `tori auth start`.
         flow_id: String,
+        /// Full callback URL received after browser authentication.
         callback_url: String,
     },
+    #[command(
+        about = "Show authentication status",
+        long_about = "Report whether Tori credentials are stored and identify the authenticated account when available."
+    )]
     Status,
+    #[command(
+        about = "Clear authentication state",
+        long_about = "Remove stored Tori credentials and any incomplete OAuth flows."
+    )]
     Logout,
 }
 

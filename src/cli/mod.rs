@@ -10,9 +10,14 @@ use serde_json::Value;
 use crate::{error::AppError, output::OutputFormat};
 
 #[derive(Debug, Parser)]
-#[command(name = "tori", about = "Agent CLI for Tori.fi listing workflows")]
+#[command(
+    name = "tori",
+    about = "Manage Tori.fi listing workflows",
+    long_about = "Manage Tori.fi authentication, categories, drafts, and published listings through deterministic agent workflows."
+)]
 #[command(version, propagate_version = true)]
 pub struct Cli {
+    /// Select the structured output format.
     #[arg(long, global = true, value_enum, default_value_t)]
     pub format: OutputFormat,
 
@@ -22,9 +27,25 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(
+        about = "Manage browser authentication",
+        long_about = "Start, complete, inspect, or clear the browser OAuth authentication session."
+    )]
     Auth(auth::AuthArgs),
+    #[command(
+        about = "Discover Tori category machine values",
+        long_about = "Search or browse Tori categories and return machine values suitable for listing input."
+    )]
     Category(category::CategoryArgs),
+    #[command(
+        about = "Create and manage remote drafts",
+        long_about = "Create, inspect, update, publish, or delete remote drafts and manage their images."
+    )]
     Draft(Box<draft::DraftArgs>),
+    #[command(
+        about = "Manage published listings",
+        long_about = "List, inspect, update, mark sold, or permanently delete published listings."
+    )]
     Listing(listing::ListingArgs),
 }
 

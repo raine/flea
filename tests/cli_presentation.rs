@@ -1,5 +1,8 @@
 use std::process::{Command, Output};
 
+use clap::{Command as ClapCommand, CommandFactory};
+use tori::cli::Cli;
+
 fn invoke(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_tori"))
         .args(args)
@@ -32,6 +35,37 @@ fn assert_no_envelope_fields(text: &str) {
     }
 }
 
+fn assert_complete_help(command: &ClapCommand, path: &str) {
+    let path = format!("{path} {}", command.get_name());
+    if !command.is_hide_set() {
+        assert!(
+            command.get_about().is_some(),
+            "visible command {path} lacks a summary"
+        );
+        if command.get_name() != "help" {
+            assert!(
+                command.get_long_about().is_some(),
+                "visible command {path} lacks long help"
+            );
+        }
+        for argument in command.get_arguments().filter(|arg| !arg.is_hide_set()) {
+            assert!(
+                argument.get_help().is_some(),
+                "visible argument {} on {path} lacks help",
+                argument.get_id()
+            );
+        }
+    }
+    for child in command.get_subcommands() {
+        assert_complete_help(child, &path);
+    }
+}
+
+#[test]
+fn every_visible_command_and_argument_has_help_metadata() {
+    assert_complete_help(&Cli::command(), "");
+}
+
 #[test]
 fn bare_invocation_uses_clap_help_on_stderr() {
     let output = invoke(&[]);
@@ -40,7 +74,7 @@ fn bare_invocation_uses_clap_help_on_stderr() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(out.is_empty());
-    assert!(err.contains("Agent CLI for Tori.fi listing workflows"));
+    assert!(err.contains("Manage Tori.fi listing workflows"));
     assert!(err.contains("Usage: tori [OPTIONS] <COMMAND>"));
     assert!(err.contains("Commands:"));
     assert_no_envelope_fields(&err);
@@ -77,6 +111,30 @@ fn nested_help_flags_and_commands_use_stdout() {
         assert!(out.contains("Usage: tori draft"), "args: {args:?}");
         assert_no_envelope_fields(&out);
     }
+}
+
+#[test]
+fn help_tables_include_agent_oriented_summaries() {
+    let top = stdout(&invoke(&["--help"]));
+    assert!(top.contains("auth      Manage browser authentication"));
+    assert!(top.contains("category  Discover Tori category machine values"));
+    assert!(top.contains("draft     Create and manage remote drafts"));
+    assert!(top.contains("listing   Manage published listings"));
+
+    let draft = stdout(&invoke(&["draft", "--help"]));
+    assert!(draft.contains("create   Create a remote draft"));
+    assert!(draft.contains("image    Manage draft images"));
+    assert!(draft.contains("publish  Publish a remote draft"));
+
+    let create = stdout(&invoke(&["draft", "create", "--help"]));
+    assert!(create.contains("--from-listing <FROM_LISTING>"));
+    assert!(create.contains("Listing ID to copy into a fresh draft for inspection"));
+    assert!(create.contains("--input <PATH>"));
+    assert!(create.contains("Read listing fields from a JSON object"));
+
+    let complete = stdout(&invoke(&["auth", "complete", "--help"]));
+    assert!(complete.contains("Flow identifier returned by `tori auth start`"));
+    assert!(complete.contains("Full callback URL received after browser authentication"));
 }
 
 #[test]

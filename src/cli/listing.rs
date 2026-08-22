@@ -25,19 +25,43 @@ pub struct ListingArgs {
 #[derive(Debug, Serialize, Subcommand)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum ListingCommand {
+    #[command(
+        about = "List published listings",
+        long_about = "Fetch all published listings across Tori result pages and return normalized summaries and facet totals."
+    )]
     List,
+    #[command(
+        about = "Show a published listing",
+        long_about = "Fetch a published listing with normalized values, state, statistics, and available actions."
+    )]
     Show {
+        /// Tori listing identifier.
         listing_id: String,
     },
+    #[command(
+        about = "Update a published listing",
+        long_about = "Merge explicit fields into the latest published listing while preserving unspecified values."
+    )]
     Update {
+        /// Tori listing identifier.
         listing_id: String,
         #[command(flatten)]
         values: Box<ListingInputArgs>,
     },
+    #[command(
+        about = "Mark a listing as sold",
+        long_about = "Mark a published listing as sold immediately without prompting for confirmation."
+    )]
     Dispose {
+        /// Tori listing identifier.
         listing_id: String,
     },
+    #[command(
+        about = "Delete a published listing",
+        long_about = "Permanently delete a published listing immediately without prompting for confirmation."
+    )]
     Delete {
+        /// Tori listing identifier.
         listing_id: String,
     },
 }

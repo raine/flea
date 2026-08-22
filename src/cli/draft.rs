@@ -41,24 +41,34 @@ impl TradeType {
 
 #[derive(Debug, Args, Serialize)]
 pub struct ListingInputArgs {
+    /// Category machine value returned by category discovery.
     #[arg(long)]
     pub category: Option<String>,
+    /// Listing title.
     #[arg(long)]
     pub title: Option<String>,
+    /// Listing description text.
     #[arg(long, conflicts_with = "description_file")]
     pub description: Option<String>,
+    /// Read the listing description from a UTF-8 file.
     #[arg(long, value_name = "PATH", conflicts_with = "description")]
     pub description_file: Option<PathBuf>,
+    /// Non-negative listing price.
     #[arg(long)]
     pub price: Option<String>,
+    /// Seller intent for the listing.
     #[arg(long, value_enum)]
     pub trade_type: Option<TradeType>,
+    /// Seller postal code.
     #[arg(long)]
     pub postal_code: Option<String>,
+    /// Delivery machine value. Repeat for multiple values.
     #[arg(long, value_name = "VALUE")]
     pub delivery: Vec<String>,
+    /// Image file path. Repeat to preserve image order.
     #[arg(long, value_name = "PATH")]
     pub image: Vec<PathBuf>,
+    /// Read listing fields from a JSON object at this path, or `-` for stdin.
     #[arg(long, value_name = "PATH")]
     pub input: Option<PathBuf>,
 }
@@ -66,25 +76,54 @@ pub struct ListingInputArgs {
 #[derive(Debug, Serialize, Subcommand)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum DraftCommand {
+    #[command(
+        about = "Create a remote draft",
+        long_about = "Create a remote draft from explicit listing input or copy an existing listing into a fresh draft."
+    )]
     Create {
+        /// Listing ID to copy into a fresh draft for inspection.
         #[arg(long, conflicts_with_all = ["category", "title", "description", "description_file", "price", "trade_type", "postal_code", "delivery", "image", "input"])]
         from_listing: Option<String>,
         #[command(flatten)]
         values: ListingInputArgs,
     },
+    #[command(
+        about = "Show current remote draft state",
+        long_about = "Fetch and normalize the latest draft values, field schema, image state, and available actions."
+    )]
     Show {
+        /// Tori draft identifier.
         draft_id: String,
     },
+    #[command(
+        about = "Update a remote draft",
+        long_about = "Merge explicit fields into the latest remote draft while preserving unspecified values."
+    )]
     Update {
+        /// Tori draft identifier.
         draft_id: String,
         #[command(flatten)]
         values: ListingInputArgs,
     },
+    #[command(
+        about = "Manage draft images",
+        long_about = "Add image files to a remote draft or remove attached images by their identifiers."
+    )]
     Image(ImageArgs),
+    #[command(
+        about = "Publish a remote draft",
+        long_about = "Validate the latest remote draft, wait for image processing, and publish it with the free Basic package."
+    )]
     Publish {
+        /// Tori draft identifier.
         draft_id: String,
     },
+    #[command(
+        about = "Delete a remote draft",
+        long_about = "Permanently delete a remote draft immediately without prompting for confirmation."
+    )]
     Delete {
+        /// Tori draft identifier.
         draft_id: String,
     },
 }
@@ -98,13 +137,25 @@ pub struct ImageArgs {
 #[derive(Debug, Serialize, Subcommand)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum ImageCommand {
+    #[command(
+        about = "Add images to a draft",
+        long_about = "Upload and attach one or more image files to a remote draft in argument order."
+    )]
     Add {
+        /// Tori draft identifier.
         draft_id: String,
+        /// Image file paths in the desired display order.
         #[arg(required = true)]
         paths: Vec<PathBuf>,
     },
+    #[command(
+        about = "Remove images from a draft",
+        long_about = "Remove one or more attached images from a remote draft by image identifier."
+    )]
     Remove {
+        /// Tori draft identifier.
         draft_id: String,
+        /// Image identifiers returned by draft inspection.
         #[arg(required = true)]
         image_ids: Vec<String>,
     },

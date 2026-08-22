@@ -16,10 +16,20 @@ pub struct CategoryArgs {
 #[derive(Debug, Serialize, Subcommand)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum CategoryCommand {
+    #[command(
+        about = "Search categories by text",
+        long_about = "Search Tori categories by text and return matching category machine values."
+    )]
     Search {
+        /// Text used to match category names.
         query: String,
     },
+    #[command(
+        about = "List categories",
+        long_about = "List root categories or the direct children of a parent category machine value."
+    )]
     List {
+        /// Parent category machine value whose children to list.
         #[arg(long)]
         parent: Option<String>,
     },
