@@ -174,7 +174,7 @@ impl AuthenticationApi for FakeAuthApi {
     async fn login_to_tori(
         &self,
         _spid_code: &str,
-        _id_token: &str,
+        _id_token: Option<&str>,
         _device_id: &str,
         _installation_id: &str,
         _ab_test_device_id: &str,

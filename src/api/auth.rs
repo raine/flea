@@ -107,6 +107,7 @@ pub struct AuthCredentials {
     pub user_id: String,
     pub(crate) refresh_token: SecretString,
     pub(crate) bearer_token: SecretString,
+    pub(crate) id_token: Option<SecretString>,
     pub bearer_expires_at_unix: u64,
     pub device_id: String,
     pub installation_id: String,
@@ -120,6 +121,7 @@ impl std::fmt::Debug for AuthCredentials {
             .field("user_id", &"<redacted>")
             .field("refresh_token", &self.refresh_token)
             .field("bearer_token", &self.bearer_token)
+            .field("id_token", &self.id_token)
             .field("bearer_expires_at_unix", &self.bearer_expires_at_unix)
             .field("device_id", &"<redacted>")
             .field("installation_id", &"<redacted>")
@@ -180,7 +182,7 @@ pub trait AuthenticationApi: Send + Sync {
     async fn login_to_tori(
         &self,
         spid_code: &str,
-        id_token: &str,
+        id_token: Option<&str>,
         device_id: &str,
         installation_id: &str,
         ab_test_device_id: &str,
@@ -249,27 +251,41 @@ impl<S> SchibstedToriAuthenticationApi<S> {
     }
 
     #[cfg(test)]
-    fn with_base_urls(mut self, login_base_url: String, tori_base_url: String) -> Self {
+    pub(crate) fn with_base_urls(mut self, login_base_url: String, tori_base_url: String) -> Self {
         self.login_base_url = login_base_url;
         self.tori_base_url = tori_base_url;
         self
     }
 }
 
+pub(crate) struct RefreshRequest<'a> {
+    pub refresh_token: &'a str,
+    pub id_token: Option<&'a str>,
+    pub device_id: &'a str,
+    pub installation_id: &'a str,
+    pub ab_test_device_id: &'a str,
+    pub now_unix: u64,
+}
+
 impl<S: GatewaySigner> SchibstedToriAuthenticationApi<S> {
-    pub async fn refresh_credentials(
+    pub(crate) async fn refresh_credentials(
         &self,
-        refresh_token: &str,
-        device_id: &str,
-        installation_id: &str,
-        ab_test_device_id: &str,
-        now_unix: u64,
+        request: RefreshRequest<'_>,
+        persist_rotation: impl FnOnce(&str, Option<&str>) -> Result<(), AppError>,
     ) -> Result<AuthCredentials, AppError> {
+        let RefreshRequest {
+            refresh_token,
+            id_token,
+            device_id,
+            installation_id,
+            ab_test_device_id,
+            now_unix,
+        } = request;
         #[derive(Deserialize)]
         struct TokenResponse {
             access_token: String,
-            refresh_token: String,
-            id_token: String,
+            refresh_token: Option<String>,
+            id_token: Option<String>,
         }
 
         let response = self
@@ -285,20 +301,26 @@ impl<S: GatewaySigner> SchibstedToriAuthenticationApi<S> {
             .timeout(AUTH_REQUEST_TIMEOUT)
             .send()
             .await
-            .map_err(|_| upstream_error("token_refresh", true))?;
-        ensure_success(response.status(), "token_refresh")?;
-        let tokens: TokenResponse = bounded_json(response, "token_refresh").await?;
+            .map_err(|error| refresh_transport_error().with_source(error))?;
+        ensure_refresh_success(response.status())?;
+        let tokens: TokenResponse = bounded_refresh_json(response).await?;
         if tokens.access_token.is_empty()
-            || tokens.refresh_token.is_empty()
-            || tokens.id_token.is_empty()
+            || tokens.refresh_token.as_deref() == Some("")
+            || tokens.id_token.as_deref() == Some("")
         {
-            return Err(unexpected_response("token_refresh"));
+            return Err(refresh_malformed_error());
+        }
+
+        let rotated_refresh_token = tokens.refresh_token.as_deref().unwrap_or(refresh_token);
+        let refreshed_id_token = tokens.id_token.as_deref().or(id_token);
+        if tokens.refresh_token.is_some() || tokens.id_token.is_some() {
+            persist_rotation(rotated_refresh_token, refreshed_id_token)?;
         }
         let spid = self.exchange_spid_code(&tokens.access_token).await?;
         let session = self
             .login_to_tori(
                 spid.expose(),
-                &tokens.id_token,
+                refreshed_id_token,
                 device_id,
                 installation_id,
                 ab_test_device_id,
@@ -306,8 +328,9 @@ impl<S: GatewaySigner> SchibstedToriAuthenticationApi<S> {
             .await?;
         Ok(AuthCredentials {
             user_id: session.user_id,
-            refresh_token: SecretString::new(tokens.refresh_token),
+            refresh_token: SecretString::new(rotated_refresh_token.to_owned()),
             bearer_token: session.bearer_token,
+            id_token: refreshed_id_token.map(|value| SecretString::new(value.to_owned())),
             bearer_expires_at_unix: now_unix.checked_add(TORI_BEARER_LIFETIME_SECS).ok_or_else(
                 || AppError::authentication("auth.clock_invalid", "credential expiry is invalid"),
             )?,
@@ -394,7 +417,7 @@ impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
     async fn login_to_tori(
         &self,
         spid_code: &str,
-        id_token: &str,
+        id_token: Option<&str>,
         device_id: &str,
         installation_id: &str,
         ab_test_device_id: &str,
@@ -403,7 +426,8 @@ impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
         #[serde(rename_all = "camelCase")]
         struct LoginRequest<'a> {
             device_id: &'a str,
-            id_token: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            id_token: Option<&'a str>,
             spid_code: &'a str,
         }
         #[derive(Deserialize)]
@@ -551,7 +575,7 @@ impl<A: AuthenticationApi> BrowserAuth<A> {
             .api
             .login_to_tori(
                 spid_code.expose(),
-                tokens.id_token.expose(),
+                Some(tokens.id_token.expose()),
                 &flow.device_id,
                 &flow.installation_id,
                 &flow.ab_test_device_id,
@@ -574,6 +598,7 @@ impl<A: AuthenticationApi> BrowserAuth<A> {
             user_id: session.user_id,
             refresh_token: tokens.refresh_token,
             bearer_token: session.bearer_token,
+            id_token: Some(tokens.id_token),
             bearer_expires_at_unix,
             device_id: flow.device_id.clone(),
             installation_id: flow.installation_id.clone(),
@@ -625,6 +650,29 @@ async fn bounded_json<T: DeserializeOwned>(
         body.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&body).map_err(|_| unexpected_response(stage))
+}
+
+async fn bounded_refresh_json<T: DeserializeOwned>(
+    mut response: reqwest::Response,
+) -> Result<T, AppError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_AUTH_RESPONSE_BYTES as u64)
+    {
+        return Err(refresh_malformed_error());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| refresh_transport_error().with_source(error))?
+    {
+        if body.len().saturating_add(chunk.len()) > MAX_AUTH_RESPONSE_BYTES {
+            return Err(refresh_malformed_error());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| refresh_malformed_error())
 }
 
 fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretString, AppError> {
@@ -726,6 +774,51 @@ fn ensure_success(status: StatusCode, stage: &'static str) -> Result<(), AppErro
     Err(error)
 }
 
+fn ensure_refresh_success(status: StatusCode) -> Result<(), AppError> {
+    if status.is_success() {
+        return Ok(());
+    }
+    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+        return Err(refresh_transport_error().with_details(serde_json::json!({
+            "stage": "token_refresh",
+            "status": status.as_u16()
+        })));
+    }
+    let mut error = AppError::authentication(
+        "auth.refresh_rejected",
+        "the saved sign-in session was rejected during refresh",
+    );
+    error.details = Some(Box::new(serde_json::json!({
+        "stage": "token_refresh",
+        "status": status.as_u16()
+    })));
+    error.next_actions.push(NextAction {
+        command: "tori auth login".to_owned(),
+    });
+    Err(error)
+}
+
+fn refresh_transport_error() -> AppError {
+    AppError::upstream(
+        "auth.refresh_transport_failed",
+        "the authentication refresh service could not be reached",
+    )
+    .retryable(true)
+    .with_details(serde_json::json!({ "stage": "token_refresh" }))
+}
+
+fn refresh_malformed_error() -> AppError {
+    let mut error = AppError::upstream(
+        "auth.refresh_malformed",
+        "the authentication refresh service returned an invalid success response",
+    )
+    .with_details(serde_json::json!({ "stage": "token_refresh" }));
+    error.next_actions.push(NextAction {
+        command: "tori auth login".to_owned(),
+    });
+    error
+}
+
 fn upstream_error(stage: &'static str, retryable: bool) -> AppError {
     let mut error = AppError::new(
         "auth.upstream_unavailable",
@@ -750,7 +843,65 @@ fn unexpected_response(stage: &'static str) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{Arc, Mutex},
+        thread,
+    };
+
+    fn mock_auth_service(
+        responses: Vec<(&'static str, &'static str)>,
+    ) -> (String, Arc<Mutex<Vec<String>>>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let worker = thread::spawn(move || {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = Vec::new();
+                let expected_length = loop {
+                    let mut buffer = [0_u8; 4096];
+                    let count = stream.read(&mut buffer).unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    let Some(headers_end) = request.windows(4).position(|part| part == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let headers = String::from_utf8_lossy(&request[..headers_end]);
+                    let content_length = headers
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>())
+                        })
+                        .transpose()
+                        .unwrap()
+                        .unwrap_or(0);
+                    if request.len() >= headers_end + 4 + content_length {
+                        break headers_end + 4 + content_length;
+                    }
+                };
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8(request[..expected_length].to_vec()).unwrap());
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (base_url, requests, worker)
+    }
+
+    fn test_api(base_url: String) -> SchibstedToriAuthenticationApi {
+        SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url)
+    }
 
     #[derive(Default)]
     struct FakeApi {
@@ -779,7 +930,7 @@ mod tests {
         async fn login_to_tori(
             &self,
             _spid_code: &str,
-            _id_token: &str,
+            _id_token: Option<&str>,
             _device_id: &str,
             _installation_id: &str,
             _ab_test_device_id: &str,
@@ -904,6 +1055,227 @@ mod tests {
             signature.expose(),
             "Aw2zCNu7AE+osoZMzrdsgUES2Bt/NB/eHco/NjUjWLbWxyfJu5ewT/PqDaLGusaEJSMCFJRUm77ICdQGg1W7TA=="
         );
+    }
+
+    #[tokio::test]
+    async fn refresh_accepts_live_shape_and_rotates_refresh_token() {
+        let (base_url, requests, worker) = mock_auth_service(vec![
+            (
+                "200 OK",
+                r#"{"access_token":"access-new","refresh_token":"refresh-new","token_type":"Bearer","expires_in":3600,"scope":"openid offline_access"}"#,
+            ),
+            ("200 OK", r#"{"data":{"code":"spid-new"}}"#),
+            (
+                "200 OK",
+                r#"{"userId":42,"token":{"type":"BEARER","value":"bearer-new"}}"#,
+            ),
+        ]);
+
+        let credentials = test_api(base_url)
+            .refresh_credentials(
+                RefreshRequest {
+                    refresh_token: "refresh-old",
+                    id_token: Some("id-old"),
+                    device_id: "device",
+                    installation_id: "installation",
+                    ab_test_device_id: "ab-test",
+                    now_unix: 1_000,
+                },
+                |_, _| Ok(()),
+            )
+            .await
+            .unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(credentials.refresh_token.expose(), "refresh-new");
+        assert_eq!(credentials.bearer_token.expose(), "bearer-new");
+        assert_eq!(credentials.id_token.unwrap().expose(), "id-old");
+        assert_eq!(credentials.bearer_expires_at_unix, 4_600);
+        let requests = requests.lock().unwrap();
+        assert!(requests[0].contains("grant_type=refresh_token"));
+        assert!(requests[2].contains(r#""idToken":"id-old""#));
+    }
+
+    #[tokio::test]
+    async fn refresh_retains_only_source_supported_omissions() {
+        let (base_url, _, worker) = mock_auth_service(vec![
+            ("200 OK", r#"{"access_token":"access-new"}"#),
+            ("200 OK", r#"{"data":{"code":"spid-new"}}"#),
+            (
+                "200 OK",
+                r#"{"userId":"42","token":{"value":"bearer-new"}}"#,
+            ),
+        ]);
+
+        let credentials = test_api(base_url)
+            .refresh_credentials(
+                RefreshRequest {
+                    refresh_token: "refresh-old",
+                    id_token: Some("id-old"),
+                    device_id: "device",
+                    installation_id: "installation",
+                    ab_test_device_id: "ab-test",
+                    now_unix: 1_000,
+                },
+                |_, _| Ok(()),
+            )
+            .await
+            .unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(credentials.refresh_token.expose(), "refresh-old");
+        assert_eq!(credentials.id_token.unwrap().expose(), "id-old");
+    }
+
+    #[tokio::test]
+    async fn refresh_allows_id_token_omission_when_no_prior_value_exists() {
+        let (base_url, requests, worker) = mock_auth_service(vec![
+            (
+                "200 OK",
+                r#"{"access_token":"access-new","refresh_token":"refresh-new"}"#,
+            ),
+            ("200 OK", r#"{"data":{"code":"spid-new"}}"#),
+            ("200 OK", r#"{"userId":42,"token":{"value":"bearer-new"}}"#),
+        ]);
+
+        let credentials = test_api(base_url)
+            .refresh_credentials(
+                RefreshRequest {
+                    refresh_token: "refresh-old",
+                    id_token: None,
+                    device_id: "device",
+                    installation_id: "installation",
+                    ab_test_device_id: "ab-test",
+                    now_unix: 1_000,
+                },
+                |_, _| Ok(()),
+            )
+            .await
+            .unwrap();
+        worker.join().unwrap();
+
+        assert!(credentials.id_token.is_none());
+        assert!(!requests.lock().unwrap()[2].contains("idToken"));
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_malformed_success_without_exposing_the_body() {
+        for body in [
+            "not-json-secret",
+            r#"{"refresh_token":"refresh-secret"}"#,
+            r#"{"access_token":""}"#,
+            r#"{"access_token":"access-secret","refresh_token":""}"#,
+            r#"{"access_token":"access-secret","id_token":""}"#,
+        ] {
+            let body: &'static str = Box::leak(body.to_owned().into_boxed_str());
+            let (base_url, _, worker) = mock_auth_service(vec![("200 OK", body)]);
+            let error = test_api(base_url)
+                .refresh_credentials(
+                    RefreshRequest {
+                        refresh_token: "refresh-old",
+                        id_token: None,
+                        device_id: "device",
+                        installation_id: "installation",
+                        ab_test_device_id: "ab-test",
+                        now_unix: 1_000,
+                    },
+                    |_, _| Ok(()),
+                )
+                .await
+                .unwrap_err();
+            worker.join().unwrap();
+
+            assert_eq!(error.code, "auth.refresh_malformed");
+            assert!(!format!("{error:?}").contains(body));
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_persists_rotation_before_follow_up_exchange() {
+        let (base_url, _, worker) = mock_auth_service(vec![
+            (
+                "200 OK",
+                r#"{"access_token":"access-new","refresh_token":"refresh-new"}"#,
+            ),
+            ("502 Bad Gateway", r#"{"error":"upstream"}"#),
+        ]);
+        let persisted = Mutex::new(None);
+
+        let error = test_api(base_url)
+            .refresh_credentials(
+                RefreshRequest {
+                    refresh_token: "refresh-old",
+                    id_token: None,
+                    device_id: "device",
+                    installation_id: "installation",
+                    ab_test_device_id: "ab-test",
+                    now_unix: 1_000,
+                },
+                |refresh_token, _| {
+                    *persisted.lock().unwrap() = Some(refresh_token.to_owned());
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap_err();
+        worker.join().unwrap();
+
+        assert_eq!(error.code, "auth.upstream_unavailable");
+        assert_eq!(persisted.into_inner().unwrap().unwrap(), "refresh-new");
+    }
+
+    #[tokio::test]
+    async fn refresh_distinguishes_protocol_rejection() {
+        let (base_url, _, worker) = mock_auth_service(vec![(
+            "400 Bad Request",
+            r#"{"error":"invalid_grant","error_description":"refresh-secret"}"#,
+        )]);
+
+        let error = test_api(base_url)
+            .refresh_credentials(
+                RefreshRequest {
+                    refresh_token: "refresh-old",
+                    id_token: None,
+                    device_id: "device",
+                    installation_id: "installation",
+                    ab_test_device_id: "ab-test",
+                    now_unix: 1_000,
+                },
+                |_, _| Ok(()),
+            )
+            .await
+            .unwrap_err();
+        worker.join().unwrap();
+
+        assert_eq!(error.code, "auth.refresh_rejected");
+        assert_eq!(error.exit_class, ExitClass::Authentication);
+        assert_eq!(error.next_actions[0].command, "tori auth login");
+        assert!(!format!("{error:?}").contains("refresh-secret"));
+    }
+
+    #[tokio::test]
+    async fn refresh_distinguishes_transport_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+
+        let error = test_api(base_url)
+            .refresh_credentials(
+                RefreshRequest {
+                    refresh_token: "refresh-old",
+                    id_token: None,
+                    device_id: "device",
+                    installation_id: "installation",
+                    ab_test_device_id: "ab-test",
+                    now_unix: 1_000,
+                },
+                |_, _| Ok(()),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "auth.refresh_transport_failed");
+        assert!(error.retryable);
     }
 
     #[test]

@@ -16,6 +16,8 @@ pub struct CredentialRecord {
     pub user_id: String,
     pub refresh_token: String,
     pub bearer_token: String,
+    #[serde(default)]
+    pub id_token: Option<String>,
     pub bearer_expires_at_unix: u64,
     pub device_id: String,
     pub installation_id: String,
@@ -26,6 +28,21 @@ impl CredentialRecord {
     pub fn bearer_is_valid_at(&self, now_unix: u64, minimum_remaining_seconds: u64) -> bool {
         self.bearer_expires_at_unix.saturating_sub(now_unix) > minimum_remaining_seconds
     }
+
+    fn validate(&self) -> Result<(), CredentialStoreError> {
+        let required = [
+            self.user_id.as_str(),
+            self.refresh_token.as_str(),
+            self.bearer_token.as_str(),
+            self.device_id.as_str(),
+            self.installation_id.as_str(),
+            self.ab_test_device_id.as_str(),
+        ];
+        if required.iter().any(|value| value.is_empty()) || self.id_token.as_deref() == Some("") {
+            return Err(CredentialStoreError::MissingRequiredValue);
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Debug for CredentialRecord {
@@ -35,6 +52,7 @@ impl fmt::Debug for CredentialRecord {
             .field("user_id", &"[REDACTED]")
             .field("refresh_token", &"[REDACTED]")
             .field("bearer_token", &"[REDACTED]")
+            .field("id_token", &"[REDACTED]")
             .field("bearer_expires_at_unix", &self.bearer_expires_at_unix)
             .field("device_id", &"[REDACTED]")
             .field("installation_id", &"[REDACTED]")
@@ -49,6 +67,8 @@ pub enum CredentialStoreError {
     Io(#[source] io::Error),
     #[error("credential data is invalid")]
     InvalidData(#[source] serde_json::Error),
+    #[error("credential data is missing a required value")]
+    MissingRequiredValue,
 }
 
 impl From<io::Error> for CredentialStoreError {
@@ -128,15 +148,19 @@ impl<W: AtomicFileStore> LockedCredentials<'_, W> {
         let path = self.store.paths.credentials_file();
         reject_symlink(&path)?;
         match fs::read(path) {
-            Ok(contents) => serde_json::from_slice(&contents)
-                .map(Some)
-                .map_err(CredentialStoreError::InvalidData),
+            Ok(contents) => {
+                let record: CredentialRecord =
+                    serde_json::from_slice(&contents).map_err(CredentialStoreError::InvalidData)?;
+                record.validate()?;
+                Ok(Some(record))
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
 
     pub fn save(&self, credentials: &CredentialRecord) -> Result<(), CredentialStoreError> {
+        credentials.validate()?;
         let contents =
             serde_json::to_vec(credentials).map_err(CredentialStoreError::InvalidData)?;
         self.store
@@ -214,6 +238,7 @@ mod tests {
             user_id: "user-secret".to_owned(),
             refresh_token: refresh_token.to_owned(),
             bearer_token: "bearer-secret".to_owned(),
+            id_token: Some("id-secret".to_owned()),
             bearer_expires_at_unix: 500,
             device_id: "device-secret".to_owned(),
             installation_id: "installation-secret".to_owned(),
@@ -238,6 +263,35 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn loads_credentials_created_before_id_token_persistence() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+        paths.ensure().unwrap();
+        fs::write(
+            paths.credentials_file(),
+            br#"{"user_id":"user","refresh_token":"refresh","bearer_token":"bearer","bearer_expires_at_unix":500,"device_id":"device","installation_id":"installation","ab_test_device_id":"ab"}"#,
+        )
+        .unwrap();
+
+        let loaded = CredentialStore::new(paths).load().unwrap().unwrap();
+
+        assert!(loaded.id_token.is_none());
+    }
+
+    #[test]
+    fn rejects_empty_required_values() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let mut record = credentials("refresh");
+        record.device_id.clear();
+
+        assert!(matches!(
+            CredentialStore::new(paths).save(&record),
+            Err(CredentialStoreError::MissingRequiredValue)
+        ));
     }
 
     #[test]
@@ -335,6 +389,7 @@ mod tests {
         for secret in [
             "refresh-secret",
             "bearer-secret",
+            "id-secret",
             "user-secret",
             "device-secret",
             "installation-secret",
