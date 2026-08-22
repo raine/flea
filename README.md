@@ -9,6 +9,7 @@ Marketplace websites are awkward for agents to use reliably. Flea provides
 focused commands and structured results for the complete listing workflow:
 
 - Search and inspect public listings without signing in
+- Save and remove favorites in Tori folders
 - Discover valid categories, locations, and listing options
 - Prepare and validate drafts before publishing
 - Process photos locally and remove embedded metadata
@@ -96,6 +97,7 @@ Public operations require no account authentication:
 Authenticated operations cover:
 
 - Browser authentication and local credential refresh
+- Favorites folder discovery and saved-listing management
 - Category and composer-option discovery
 - Offline draft preview and image preprocessing
 - Draft creation, copying, inspection, updates, image management, validation,
@@ -106,6 +108,7 @@ Run command help for current syntax, constraints, and examples:
 
 ```sh
 flea search --help
+flea favorite --help
 flea draft --help
 flea draft create --help
 flea listing update --help

@@ -1,6 +1,6 @@
 ---
 name: flea
-description: Operate Tori.fi through the flea CLI. Use for marketplace search, location and category discovery, authentication, draft creation and publishing, image management, and published listing management.
+description: Operate Tori.fi through the flea CLI. Use for marketplace search, favorites, location and category discovery, authentication, draft creation and publishing, image management, and published listing management.
 ---
 
 # Flea
@@ -38,14 +38,16 @@ named places, and coordinates with `--radius-km` define a distance boundary.
 Ask what an ambiguous phrase such as "Helsinki area" includes, or state the
 places chosen.
 
-Start with the requested product and filters. Use a few meaningful aliases when
-recall is poor. Merge searches by numeric `listing_id`; ranks from different
+Start with the requested filters. Use meaningful aliases when recall is poor.
+Merge searches by numeric `listing_id`; ranks from different
 queries are not comparable. Use `--explain N` for opaque matches and `item show`
 for full details. Call a match exact only when its title or public details
 confirm the requested identity.
 
 Return concise linked results with title, price, location, and URL. State the
-scope and ordering. Search summaries expose `price.amount` and
+scope and ordering. Save with `flea favorite add LISTING_ID`, optionally using
+a folder from `flea favorite folders`. Remove with `flea favorite remove LISTING_ID`.
+Search summaries expose `price.amount` and
 `price.currency`. Item, draft, and account-listing output also provide
 normalized `trade_type` and `price.kind`. Never parse `price.display`.
 

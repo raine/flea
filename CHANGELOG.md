@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Favorites folders and saved status can be inspected, and marketplace listings
+  can be saved to or removed from the default or an explicitly selected folder
+
 ## v0.1.1 (2026-08-22)
 
 - Browser login works on Linux, with clearer errors and retry instructions when

@@ -14,6 +14,7 @@ use flea::{
             SecretString, ToriSession,
         },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
+        favorites::HttpFavoritesApi,
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
         search::HttpPublicSearchApi,
@@ -21,7 +22,7 @@ use flea::{
     cli::{
         Command, CommandRuntime,
         auth::{AuthCommandHandler, AuthStore},
-        category, draft, item, listing, location, search,
+        category, draft, favorite, item, listing, location, search,
     },
     error::AppError,
     run_with_runtime,
@@ -98,6 +99,10 @@ impl CommandRuntime for TestRuntime {
                     WorkflowConfig::default(),
                 )),
             },
+            Command::Favorite(args) => {
+                let api = HttpFavoritesApi::new(Arc::new(self.client.clone()));
+                favorite::dispatch_with_api(args, &api)
+            }
             Command::Item(args) => {
                 let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
                 item::dispatch_with_api(args, &api)

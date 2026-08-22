@@ -3,6 +3,7 @@ mod auth_callback;
 pub mod category;
 pub mod draft;
 mod draft_input;
+pub mod favorite;
 pub mod item;
 pub mod listing;
 pub mod location;
@@ -48,6 +49,11 @@ pub enum Command {
         long_about = "Preview draft input locally, or create, inspect, update, publish, delete, and manage images for remote drafts."
     )]
     Draft(Box<draft::DraftArgs>),
+    #[command(
+        about = "Manage saved marketplace listings",
+        long_about = "List favorites folders and add or remove marketplace listings for the authenticated account."
+    )]
+    Favorite(favorite::FavoriteArgs),
     #[command(
         about = "Inspect public marketplace listings",
         long_about = "Inspect normalized public marketplace listing details by search result ID without account authentication."

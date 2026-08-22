@@ -8,6 +8,7 @@ use crate::{
         adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
         auth::{GatewaySigner, RefreshRequest, SchibstedToriAuthenticationApi},
         client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
+        favorites::HttpFavoritesApi,
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
         search::HttpPublicSearchApi,
@@ -15,7 +16,7 @@ use crate::{
     cli::{
         Command, CommandRuntime,
         auth::{AuthCommandHandler, FileAuthStore, unix_time_now},
-        auth_callback, category, draft, listing,
+        auth_callback, category, draft, favorite, listing,
     },
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
@@ -56,6 +57,11 @@ impl CommandRuntime for ProductionRuntime {
                     block_on(draft::execute(command, api, WorkflowConfig::default()))
                 }
             },
+            Command::Favorite(args) => {
+                let client = authenticated_client()?;
+                let api = HttpFavoritesApi::new(Arc::new(client));
+                favorite::dispatch_with_api(args, &api)
+            }
             Command::Item(args) => {
                 let api = HttpPublicItemApi::new(Arc::new(public_client()));
                 super::item::dispatch_with_api(args, &api)
