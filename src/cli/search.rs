@@ -13,8 +13,9 @@ use crate::{
     api::{
         item::{PublicItemApi, PublicItems},
         search::{
-            PublicSearch, PublicSearchApi, SEARCH_AREA_LOCATION_MAX, SEARCH_LIMIT_DEFAULT,
-            SEARCH_LIMIT_MAX, SEARCH_PAGE_MAX, SEARCH_RADIUS_MAX_KM, UpstreamSearchRequest,
+            PublicSearch, PublicSearchApi, SEARCH_AREA_LOCATION_MAX, SEARCH_FACET_OPTION_LIMIT,
+            SEARCH_FACET_OPTION_LIMIT_MAX, SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX, SEARCH_PAGE_MAX,
+            SEARCH_RADIUS_MAX_KM, UpstreamSearchRequest,
         },
     },
     domain::search::{
@@ -167,6 +168,10 @@ pub struct SearchArgs {
     #[arg(long)]
     pub include_facets: bool,
 
+    /// Maximum options returned per facet. Requires --include-facets.
+    #[arg(long, value_name = "LIMIT", requires = "include_facets")]
+    pub facet_option_limit: Option<usize>,
+
     /// JSON object containing search arguments. Duplicate JSON and flag fields fail.
     #[arg(long, value_name = "PATH")]
     pub input: Option<PathBuf>,
@@ -198,6 +203,7 @@ struct SearchInput {
     limit: Option<usize>,
     explain: Option<usize>,
     include_facets: bool,
+    facet_option_limit: Option<usize>,
     raw: bool,
 }
 
@@ -305,6 +311,7 @@ pub fn dispatch_with_apis(
         page: input.page.unwrap_or(1),
         limit: input.limit.unwrap_or(SEARCH_LIMIT_DEFAULT),
         include_filters: input.include_facets,
+        facet_option_limit: input.facet_option_limit,
         parameters,
     };
     let (mut result, raw) = search.execute_with_area(&request, resolved_location, resolved_area)?;
@@ -341,6 +348,47 @@ pub fn dispatch_with_apis(
                 input.explain,
             )
         }));
+    }
+    if let Some(option_count) = result
+        .facets
+        .iter()
+        .filter(|facet| facet.truncated)
+        .map(|facet| facet.option_count)
+        .max()
+    {
+        let current_limit = request
+            .facet_option_limit
+            .unwrap_or(SEARCH_FACET_OPTION_LIMIT);
+        if current_limit < SEARCH_FACET_OPTION_LIMIT_MAX {
+            let mut broader = request.clone();
+            broader.facet_option_limit = Some(
+                option_count
+                    .min(SEARCH_FACET_OPTION_LIMIT_MAX)
+                    .max(current_limit + 1),
+            );
+            actions.push(json!({
+                "command": next_page_command(
+                    &broader,
+                    request.page,
+                    result.resolved_area.as_ref(),
+                    input.explain,
+                ),
+                "reason": "facet_options_truncated"
+            }));
+        } else {
+            actions.push(json!({
+                "command": format!(
+                    "{} --raw",
+                    next_page_command(
+                        &request,
+                        request.page,
+                        result.resolved_area.as_ref(),
+                        None,
+                    )
+                ),
+                "reason": "facet_options_truncated"
+            }));
+        }
     }
     if !actions.is_empty() {
         value
@@ -569,6 +617,9 @@ fn next_page_command(
     if request.include_filters {
         parts.push("--include-facets".to_owned());
     }
+    if let Some(limit) = request.facet_option_limit {
+        parts.push(format!("--facet-option-limit {limit}"));
+    }
     if let Some(limit) = explain {
         parts.push(format!("--explain {limit}"));
     }
@@ -603,6 +654,11 @@ fn collect_input(args: SearchArgs) -> Result<SearchInput, AppError> {
     insert_flag(&mut object, "page", args.page.map(Value::from))?;
     insert_flag(&mut object, "limit", args.limit.map(Value::from))?;
     insert_flag(&mut object, "explain", args.explain.map(Value::from))?;
+    insert_flag(
+        &mut object,
+        "facet_option_limit",
+        args.facet_option_limit.map(Value::from),
+    )?;
     if !args.condition.is_empty() {
         insert_flag(&mut object, "condition", Some(json!(args.condition)))?;
     }
@@ -677,6 +733,18 @@ fn validate(input: &SearchInput) -> Result<(), AppError> {
         && !(1..=SEARCH_EXPLAIN_LIMIT_MAX).contains(&limit)
     {
         return Err(AppError::usage("--explain must be between 1 and 20"));
+    }
+    if let Some(limit) = input.facet_option_limit
+        && !(1..=SEARCH_FACET_OPTION_LIMIT_MAX).contains(&limit)
+    {
+        return Err(AppError::usage(
+            "--facet-option-limit must be between 1 and 5000",
+        ));
+    }
+    if input.facet_option_limit.is_some() && !input.include_facets {
+        return Err(AppError::usage(
+            "--facet-option-limit requires --include-facets",
+        ));
     }
     if input.explain.is_some() && input.query.trim().is_empty() {
         return Err(AppError::usage(

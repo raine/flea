@@ -95,6 +95,7 @@ pub struct SearchFacet {
     pub facet_type: String,
     pub options: Vec<SearchFacetOption>,
     pub option_count: usize,
+    pub returned_option_count: usize,
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<SearchFacetRange>,

@@ -122,6 +122,7 @@ fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
         page: 1,
         limit: 20,
         include_filters: true,
+        facet_option_limit: None,
         parameters: Default::default(),
     };
     let (result, _) = PublicSearch::new(&api)
@@ -303,38 +304,84 @@ fn omits_upstream_placeholder_zero_distance() {
 }
 
 #[test]
-fn bounds_large_dynamic_facet_output_transparently() {
-    let options: Vec<Value> = (0..SEARCH_FACET_OPTION_LIMIT + 3)
-        .map(|index| {
-            json!({
-                "display_name": format!("Brand {index}"),
-                "name": "brand",
-                "value": index.to_string(),
-                "hits": 1,
-                "selected": false,
-                "filter_items": []
+fn bounds_and_prioritizes_large_category_and_location_facets() {
+    let taxonomy_options = |name: &str| {
+        (0..SEARCH_FACET_OPTION_LIMIT + 3)
+            .map(|index| {
+                json!({
+                    "display_name": format!("{name} {index}"),
+                    "name": name,
+                    "value": index.to_string(),
+                    "hits": if index == SEARCH_FACET_OPTION_LIMIT + 1 { 7 } else { 0 },
+                    "selected": index == SEARCH_FACET_OPTION_LIMIT + 2,
+                    "filter_items": []
+                })
             })
-        })
-        .collect();
+            .collect::<Vec<_>>()
+    };
     let api = FixtureApi::new(json!({
         "docs": [],
-        "filters": [{"display_name":"Merkki","name":"brand","type":"STANDARD_FILTER","filter_items":options}],
+        "filters": [
+            {
+                "display_name": "Kategoria",
+                "name": "category",
+                "type": "STANDARD_FILTER",
+                "filter_items": taxonomy_options("category")
+            },
+            {
+                "display_name": "Sijainti",
+                "name": "location",
+                "type": "STANDARD_FILTER",
+                "filter_items": taxonomy_options("location")
+            }
+        ],
         "metadata": {"result_size":{"match_count":0},"paging":{"current":1,"last":1}}
     }));
-    let (result, _) = PublicSearch::new(&api)
-        .execute(
-            &UpstreamSearchRequest {
-                page: 1,
-                limit: 20,
-                include_filters: true,
-                ..Default::default()
-            },
-            None,
-        )
-        .unwrap();
-    assert_eq!(result.facets[0].options.len(), SEARCH_FACET_OPTION_LIMIT);
-    assert_eq!(result.facets[0].option_count, SEARCH_FACET_OPTION_LIMIT + 3);
-    assert!(result.facets[0].truncated);
+    let cli = Cli::parse_from(["flea", "search", "GPU", "--include-facets"]);
+    let Command::Search(args) = cli.command else {
+        unreachable!()
+    };
+    let output = search::dispatch_with_api(*args, &api).unwrap();
+
+    for facet in output["facets"].as_array().unwrap() {
+        assert_eq!(
+            facet["options"].as_array().unwrap().len(),
+            SEARCH_FACET_OPTION_LIMIT
+        );
+        assert_eq!(facet["option_count"], SEARCH_FACET_OPTION_LIMIT + 3);
+        assert_eq!(facet["returned_option_count"], SEARCH_FACET_OPTION_LIMIT);
+        assert_eq!(facet["truncated"], true);
+        assert_eq!(facet["options"][0]["selected"], true);
+        assert_eq!(facet["options"][1]["hits"], 7);
+    }
+    assert_eq!(
+        output["_next_actions"][0],
+        json!({
+            "command": "flea search 'GPU' --include-facets --facet-option-limit 103 --page 1 --limit 20",
+            "reason": "facet_options_truncated"
+        })
+    );
+
+    let cli = Cli::parse_from([
+        "flea",
+        "search",
+        "GPU",
+        "--include-facets",
+        "--facet-option-limit",
+        "103",
+    ]);
+    let Command::Search(args) = cli.command else {
+        unreachable!()
+    };
+    let broader = search::dispatch_with_api(*args, &api).unwrap();
+    for facet in broader["facets"].as_array().unwrap() {
+        assert_eq!(
+            facet["returned_option_count"],
+            SEARCH_FACET_OPTION_LIMIT + 3
+        );
+        assert_eq!(facet["truncated"], false);
+    }
+    assert!(broader.get("_next_actions").is_none());
 }
 
 #[test]

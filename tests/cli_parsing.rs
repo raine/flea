@@ -220,6 +220,9 @@ fn parses_public_search_coordinates_facets_and_pagination() {
         "2",
         "--limit",
         "75",
+        "--include-facets",
+        "--facet-option-limit",
+        "250",
     ]);
     let Command::Search(search) = cli.command else {
         panic!("expected search command");
@@ -231,6 +234,8 @@ fn parses_public_search_coordinates_facets_and_pagination() {
     assert!(matches!(search.sort, Some(SearchSort::PriceAsc)));
     assert_eq!(search.page, Some(2));
     assert_eq!(search.limit, Some(75));
+    assert!(search.include_facets);
+    assert_eq!(search.facet_option_limit, Some(250));
 }
 
 #[test]

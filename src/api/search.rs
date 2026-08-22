@@ -20,7 +20,8 @@ pub const SEARCH_PAGE_MAX: usize = 50;
 pub const SEARCH_LIMIT_DEFAULT: usize = 20;
 pub const SEARCH_LIMIT_MAX: usize = 300;
 pub const SEARCH_RADIUS_MAX_KM: f64 = 1000.0;
-pub const SEARCH_FACET_OPTION_LIMIT: usize = 500;
+pub const SEARCH_FACET_OPTION_LIMIT: usize = 100;
+pub const SEARCH_FACET_OPTION_LIMIT_MAX: usize = 5000;
 pub const LOCATION_RESULT_LIMIT: usize = 100;
 pub const SEARCH_AREA_LOCATION_MAX: usize = 20;
 
@@ -108,6 +109,7 @@ pub struct UpstreamSearchRequest {
     pub page: usize,
     pub limit: usize,
     pub include_filters: bool,
+    pub facet_option_limit: Option<usize>,
     pub parameters: BTreeMap<String, Vec<String>>,
 }
 
@@ -323,7 +325,15 @@ fn normalize_search(
         .include_filters
         .then(|| object.get("filters").and_then(Value::as_array))
         .flatten()
-        .map(|filters| filters.iter().map(normalize_facet).collect())
+        .map(|filters| {
+            let option_limit = request
+                .facet_option_limit
+                .unwrap_or(SEARCH_FACET_OPTION_LIMIT);
+            filters
+                .iter()
+                .map(|facet| normalize_facet(facet, option_limit))
+                .collect()
+        })
         .unwrap_or_default();
     let has_location_context = resolved_location.is_some() || resolved_area.is_some();
     let applied_filters = metadata
@@ -546,7 +556,7 @@ fn nonempty_string(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn normalize_facet(value: &Value) -> SearchFacet {
+fn normalize_facet(value: &Value, option_limit: usize) -> SearchFacet {
     let object = value.as_object();
     let name = object
         .and_then(|value| value.get("name"))
@@ -571,7 +581,14 @@ fn normalize_facet(value: &Value) -> SearchFacet {
         flatten_options(items, None, 0, &mut options);
     }
     let option_count = options.len();
-    options.truncate(SEARCH_FACET_OPTION_LIMIT);
+    options.sort_by_key(|option| match (option.selected, option.hits) {
+        (true, _) => 0,
+        (false, Some(hits)) if hits > 0 => 1,
+        (false, None) => 2,
+        (false, Some(_)) => 3,
+    });
+    options.truncate(option_limit);
+    let returned_option_count = options.len();
     let range = object.and_then(|value| {
         let has_range = ["min_value", "max_value", "step", "name_from", "name_to"]
             .iter()
@@ -597,7 +614,8 @@ fn normalize_facet(value: &Value) -> SearchFacet {
         facet_type,
         options,
         option_count,
-        truncated: option_count > SEARCH_FACET_OPTION_LIMIT,
+        returned_option_count,
+        truncated: option_count > option_limit,
         range,
     }
 }
