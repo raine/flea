@@ -10,12 +10,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::search::{
-        PublicSearch, PublicSearchApi, SEARCH_AREA_LOCATION_MAX, SEARCH_LIMIT_DEFAULT,
-        SEARCH_LIMIT_MAX, SEARCH_PAGE_MAX, SEARCH_RADIUS_MAX_KM, UpstreamSearchRequest,
+    api::{
+        item::{PublicItemApi, PublicItems},
+        search::{
+            PublicSearch, PublicSearchApi, SEARCH_AREA_LOCATION_MAX, SEARCH_LIMIT_DEFAULT,
+            SEARCH_LIMIT_MAX, SEARCH_PAGE_MAX, SEARCH_RADIUS_MAX_KM, UpstreamSearchRequest,
+        },
+    },
+    domain::search::{
+        SearchCollection, SearchExplainFailure, SearchExplainSummary, SearchMatchExplanation,
     },
     error::AppError,
 };
+
+pub const SEARCH_EXPLAIN_LIMIT_MAX: usize = 20;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -151,6 +159,10 @@ pub struct SearchArgs {
     #[arg(long)]
     pub limit: Option<usize>,
 
+    /// Explain opaque matches with at most LIMIT public item detail requests.
+    #[arg(long, value_name = "LIMIT")]
+    pub explain: Option<usize>,
+
     /// Include normalized available facet and option metadata.
     #[arg(long)]
     pub include_facets: bool,
@@ -184,11 +196,20 @@ struct SearchInput {
     sort: Option<SearchSort>,
     page: Option<usize>,
     limit: Option<usize>,
+    explain: Option<usize>,
     include_facets: bool,
     raw: bool,
 }
 
 pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<Value, AppError> {
+    dispatch_with_apis(args, api, None)
+}
+
+pub fn dispatch_with_apis(
+    args: SearchArgs,
+    api: &dyn PublicSearchApi,
+    item_api: Option<&dyn PublicItemApi>,
+) -> Result<Value, AppError> {
     let input = collect_input(args)?;
     validate(&input)?;
     let search = PublicSearch::new(api);
@@ -286,9 +307,15 @@ pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<
         include_filters: input.include_facets,
         parameters,
     };
-    let (result, raw) = search.execute_with_area(&request, resolved_location, resolved_area)?;
+    let (mut result, raw) = search.execute_with_area(&request, resolved_location, resolved_area)?;
     if input.raw {
         return Ok(raw);
+    }
+    if let Some(request_limit) = input.explain {
+        let item_api = item_api.ok_or_else(|| {
+            AppError::unexpected("search explanation requires the public item service")
+        })?;
+        explain_matches(&mut result, item_api, request_limit);
     }
     let mut value = serde_json::to_value(&result).map_err(|error| {
         AppError::output("failed to serialize search output").with_source(error)
@@ -296,13 +323,23 @@ pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<
     let mut actions = Vec::new();
     if let Some(next_page) = result.pagination.next_page {
         actions.push(json!({
-            "command": next_page_command(&request, next_page, result.resolved_area.as_ref())
+            "command": next_page_command(
+                &request,
+                next_page,
+                result.resolved_area.as_ref(),
+                input.explain,
+            )
         }));
     } else if result.pagination.capped {
         let mut refinement = request.clone();
         refinement.include_filters = true;
         actions.push(json!({
-            "command": next_page_command(&refinement, 1, result.resolved_area.as_ref())
+            "command": next_page_command(
+                &refinement,
+                1,
+                result.resolved_area.as_ref(),
+                input.explain,
+            )
         }));
     }
     if !actions.is_empty() {
@@ -314,10 +351,156 @@ pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<
     Ok(value)
 }
 
+fn explain_matches(
+    result: &mut SearchCollection,
+    item_api: &dyn PublicItemApi,
+    request_limit: usize,
+) {
+    let query_terms = normalized_terms(&result.query);
+    let candidates = result
+        .results
+        .iter()
+        .enumerate()
+        .filter(|(_, listing)| {
+            !query_terms.is_empty() && !contains_all_terms(&listing.title, &query_terms)
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let requested = candidates.len().min(request_limit);
+    let mut hydrated = 0;
+    let mut explained = 0;
+    let mut failures = Vec::new();
+    let items = PublicItems::new(item_api);
+
+    for index in candidates.iter().take(request_limit).copied() {
+        let listing_id = result.results[index].listing_id.clone();
+        match items.show(&listing_id) {
+            Ok((detail, _)) => {
+                hydrated += 1;
+                if let Some(explanation) = description_explanation(
+                    &result.results[index].title,
+                    &detail.description,
+                    &query_terms,
+                ) {
+                    result.results[index].match_explanation = Some(explanation);
+                    explained += 1;
+                }
+            }
+            Err(error) => failures.push(SearchExplainFailure {
+                listing_id,
+                code: error.code.to_owned(),
+                retryable: error.retryable,
+            }),
+        }
+    }
+
+    result.explain = Some(SearchExplainSummary {
+        request_limit,
+        requested,
+        hydrated,
+        explained,
+        truncated: candidates.len() > request_limit,
+        failures,
+    });
+}
+
+fn description_explanation(
+    title: &str,
+    description: &str,
+    query_terms: &[String],
+) -> Option<SearchMatchExplanation> {
+    let title_terms = normalized_terms(title);
+    let description_terms = normalized_terms(description);
+    let matched_terms = query_terms
+        .iter()
+        .filter(|term| !title_terms.contains(*term) && description_terms.contains(*term))
+        .cloned()
+        .collect::<Vec<_>>();
+    let all_terms_covered = query_terms
+        .iter()
+        .all(|term| title_terms.contains(term) || description_terms.contains(term));
+    if matched_terms.is_empty() || !all_terms_covered {
+        return None;
+    }
+
+    Some(SearchMatchExplanation {
+        source_field: "description".to_owned(),
+        evidence_origin: "public_item".to_owned(),
+        match_method: "cli_derived_token_match".to_owned(),
+        excerpt: excerpt(description, &matched_terms[0], 160),
+        matched_terms,
+    })
+}
+
+fn normalized_terms(value: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    for term in value
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .map(str::to_lowercase)
+    {
+        if !terms.contains(&term) {
+            terms.push(term);
+        }
+    }
+    terms
+}
+
+fn contains_all_terms(value: &str, terms: &[String]) -> bool {
+    let value_terms = normalized_terms(value);
+    terms.iter().all(|term| value_terms.contains(term))
+}
+
+fn excerpt(value: &str, matched_term: &str, limit: usize) -> String {
+    let sanitized = value
+        .chars()
+        .fold((String::new(), false), |(mut output, space), character| {
+            if character.is_whitespace() || character.is_control() {
+                if !space && !output.is_empty() {
+                    output.push(' ');
+                }
+                (output, true)
+            } else {
+                output.push(character);
+                (output, false)
+            }
+        })
+        .0
+        .trim()
+        .to_owned();
+    let characters = sanitized.chars().collect::<Vec<_>>();
+    if characters.len() <= limit {
+        return sanitized;
+    }
+
+    let lowercase = sanitized.to_lowercase();
+    let match_index = lowercase
+        .find(matched_term)
+        .map(|byte_index| lowercase[..byte_index].chars().count())
+        .unwrap_or(0);
+    let start = match_index.saturating_sub(limit / 3);
+    let end = (start + limit).min(characters.len());
+    let start = end.saturating_sub(limit);
+    let mut excerpt_characters = characters[start..end].to_vec();
+    if start > 0 {
+        excerpt_characters.splice(..3.min(excerpt_characters.len()), ['.', '.', '.']);
+    }
+    if end < characters.len() {
+        let suffix_start = excerpt_characters.len().saturating_sub(3);
+        excerpt_characters.splice(suffix_start.., ['.', '.', '.']);
+    }
+    excerpt_characters
+        .into_iter()
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
 fn next_page_command(
     request: &UpstreamSearchRequest,
     page: usize,
     resolved_area: Option<&crate::domain::search::SearchAreaContext>,
+    explain: Option<usize>,
 ) -> String {
     let mut parts = vec!["tori search".to_owned()];
     if !request.query.is_empty() {
@@ -385,6 +568,9 @@ fn next_page_command(
     if request.include_filters {
         parts.push("--include-facets".to_owned());
     }
+    if let Some(limit) = explain {
+        parts.push(format!("--explain {limit}"));
+    }
     parts.push(format!("--page {page}"));
     parts.push(format!("--limit {}", request.limit));
     parts.join(" ")
@@ -415,6 +601,7 @@ fn collect_input(args: SearchArgs) -> Result<SearchInput, AppError> {
     insert_flag(&mut object, "sort", args.sort.map(enum_value))?;
     insert_flag(&mut object, "page", args.page.map(Value::from))?;
     insert_flag(&mut object, "limit", args.limit.map(Value::from))?;
+    insert_flag(&mut object, "explain", args.explain.map(Value::from))?;
     if !args.condition.is_empty() {
         insert_flag(&mut object, "condition", Some(json!(args.condition)))?;
     }
@@ -484,6 +671,19 @@ fn validate(input: &SearchInput) -> Result<(), AppError> {
         && !(1..=SEARCH_LIMIT_MAX).contains(&limit)
     {
         return Err(AppError::usage("--limit must be between 1 and 300"));
+    }
+    if let Some(limit) = input.explain
+        && !(1..=SEARCH_EXPLAIN_LIMIT_MAX).contains(&limit)
+    {
+        return Err(AppError::usage("--explain must be between 1 and 20"));
+    }
+    if input.explain.is_some() && input.query.trim().is_empty() {
+        return Err(AppError::usage(
+            "--explain requires a non-empty search query",
+        ));
+    }
+    if input.explain.is_some() && input.raw {
+        return Err(AppError::usage("--explain cannot be combined with --raw"));
     }
     if let (Some(from), Some(to)) = (input.price_from, input.price_to)
         && from > to

@@ -141,6 +141,8 @@ fn help_tables_include_agent_oriented_summaries() {
 
     let search = stdout(&invoke(&["search", "--help"]));
     assert!(search.contains("--area <PLACE,PLACE,...>"));
+    assert!(search.contains("--explain <LIMIT>"));
+    assert!(search.contains("at most LIMIT public item detail requests"));
     assert!(search.contains("Helsinki-area example:"));
     assert!(search.contains("--area Helsinki,Espoo,Vantaa"));
 

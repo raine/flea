@@ -1,11 +1,14 @@
-use std::sync::Mutex;
+use std::{collections::BTreeMap, sync::Mutex};
 
 use clap::Parser;
 use serde_json::{Value, json};
 use tori::{
-    api::search::{
-        PublicSearch, PublicSearchApi, SEARCH_FACET_OPTION_LIMIT, SearchApiError,
-        UpstreamSearchRequest,
+    api::{
+        item::{PublicItemApi, PublicItemApiError},
+        search::{
+            PublicSearch, PublicSearchApi, SEARCH_FACET_OPTION_LIMIT, SearchApiError,
+            UpstreamSearchRequest,
+        },
     },
     cli::{Cli, Command, search},
 };
@@ -34,6 +37,21 @@ impl PublicSearchApi for FixtureApi {
 
     fn location_metadata(&self) -> Result<Value, SearchApiError> {
         Ok(self.location_response.clone())
+    }
+}
+
+struct ExplainItemApi {
+    responses: BTreeMap<String, Result<Value, PublicItemApiError>>,
+    requests: Mutex<Vec<String>>,
+}
+
+impl PublicItemApi for ExplainItemApi {
+    fn item(&self, listing_id: &str) -> Result<Value, PublicItemApiError> {
+        self.requests.lock().unwrap().push(listing_id.to_owned());
+        self.responses
+            .get(listing_id)
+            .cloned()
+            .unwrap_or(Err(PublicItemApiError::NotFound))
     }
 }
 
@@ -442,12 +460,18 @@ fn page_cap_action_requests_facets_for_executable_refinement() {
 #[test]
 fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
     let api = FixtureApi::new(full_fixture());
+    let item_api = ExplainItemApi {
+        responses: BTreeMap::new(),
+        requests: Mutex::default(),
+    };
     let cli = Cli::parse_from(["tori", "search", "tuoli"]);
     let Command::Search(args) = cli.command else {
         unreachable!()
     };
-    let output = search::dispatch_with_api(*args, &api).unwrap();
+    let output = search::dispatch_with_apis(*args, &api, Some(&item_api)).unwrap();
     let listing = output["results"][0].as_object().unwrap();
+
+    assert!(item_api.requests.lock().unwrap().is_empty());
 
     assert_eq!(
         listing.keys().cloned().collect::<Vec<_>>(),
@@ -472,6 +496,119 @@ fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
     assert_eq!(output["pagination"]["next_page"], 2);
     assert!(output.get("applied_filters").is_none());
     assert!(output.get("facets").is_none());
+}
+
+#[test]
+fn explains_a_generic_title_from_bounded_public_description_evidence() {
+    let search_api = FixtureApi::new(json!({
+        "docs": [
+            {"id": "45917182", "heading": "Potkulauta"},
+            {"id": "2", "heading": "Micro Mini potkulauta"}
+        ],
+        "metadata": {"result_size":{"match_count":2},"paging":{"current":1,"last":1}}
+    }));
+    let description = format!(
+        "{}\nMicro Mini lasten potkulauta.\u{0} {}",
+        "Siisti ja hyväkuntoinen. ".repeat(5),
+        "Kaukaisen kuvauksen loppu. ".repeat(5)
+    );
+    let item_api = ExplainItemApi {
+        responses: BTreeMap::from([(
+            "45917182".to_owned(),
+            Ok(json!({
+                "ad": {
+                    "title": "Potkulauta",
+                    "description": description
+                },
+                "meta": {"adId": 45917182}
+            })),
+        )]),
+        requests: Mutex::default(),
+    };
+    let cli = Cli::parse_from(["tori", "search", "micro mini potkulauta", "--explain", "1"]);
+    let Command::Search(args) = cli.command else {
+        unreachable!()
+    };
+    let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api)).unwrap();
+
+    assert_eq!(item_api.requests.lock().unwrap().as_slice(), ["45917182"]);
+    let explanation = &output["results"][0]["match_explanation"];
+    assert_eq!(explanation["source_field"], "description");
+    assert_eq!(explanation["evidence_origin"], "public_item");
+    assert_eq!(explanation["match_method"], "cli_derived_token_match");
+    assert_eq!(explanation["matched_terms"], json!(["micro", "mini"]));
+    let excerpt = explanation["excerpt"].as_str().unwrap();
+    assert!(excerpt.contains("Micro Mini lasten potkulauta"));
+    assert!(excerpt.chars().count() <= 160);
+    assert!(!excerpt.contains(['\n', '\0']));
+    assert_ne!(excerpt, description);
+    assert!(output["results"][1].get("match_explanation").is_none());
+    assert_eq!(output["explain"]["request_limit"], 1);
+    assert_eq!(output["explain"]["requested"], 1);
+    assert_eq!(output["explain"]["hydrated"], 1);
+    assert_eq!(output["explain"]["explained"], 1);
+    assert_eq!(output["explain"]["truncated"], false);
+}
+
+#[test]
+fn explain_enforces_its_request_bound_and_reports_partial_failures() {
+    let search_api = FixtureApi::new(json!({
+        "docs": [
+            {"id": "1", "heading": "Potkulauta"},
+            {"id": "2", "heading": "Potkulauta"},
+            {"id": "3", "heading": "Potkulauta"}
+        ],
+        "metadata": {"result_size":{"match_count":3},"paging":{"current":1,"last":1}}
+    }));
+    let item_api = ExplainItemApi {
+        responses: BTreeMap::from([
+            (
+                "1".to_owned(),
+                Ok(json!({
+                    "ad": {"title":"Potkulauta", "description":"Micro Mini potkulauta"},
+                    "meta": {"adId": 1}
+                })),
+            ),
+            ("2".to_owned(), Err(PublicItemApiError::Upstream(503))),
+        ]),
+        requests: Mutex::default(),
+    };
+    let cli = Cli::parse_from(["tori", "search", "micro mini potkulauta", "--explain", "2"]);
+    let Command::Search(args) = cli.command else {
+        unreachable!()
+    };
+    let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api)).unwrap();
+
+    assert_eq!(item_api.requests.lock().unwrap().as_slice(), ["1", "2"]);
+    assert_eq!(output["results"].as_array().unwrap().len(), 3);
+    assert_eq!(output["explain"]["requested"], 2);
+    assert_eq!(output["explain"]["hydrated"], 1);
+    assert_eq!(output["explain"]["explained"], 1);
+    assert_eq!(output["explain"]["truncated"], true);
+    assert_eq!(output["explain"]["failures"][0]["listing_id"], "2");
+    assert_eq!(
+        output["explain"]["failures"][0]["code"],
+        "upstream.request_failed"
+    );
+    assert_eq!(output["explain"]["failures"][0]["retryable"], true);
+}
+
+#[test]
+fn explain_bounds_and_mode_combinations_fail_before_search_requests() {
+    let api = FixtureApi::new(empty_fixture());
+    for arguments in [
+        vec!["tori", "search", "query", "--explain", "0"],
+        vec!["tori", "search", "query", "--explain", "21"],
+        vec!["tori", "search", "--explain", "1"],
+        vec!["tori", "search", "query", "--explain", "1", "--raw"],
+    ] {
+        let cli = Cli::parse_from(arguments);
+        let Command::Search(args) = cli.command else {
+            unreachable!()
+        };
+        assert!(search::dispatch_with_api(*args, &api).is_err());
+    }
+    assert!(api.requests.lock().unwrap().is_empty());
 }
 
 #[test]

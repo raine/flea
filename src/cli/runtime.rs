@@ -47,8 +47,9 @@ impl CommandRuntime for ProductionRuntime {
                 listing::dispatch_with_api(args, &api)
             }
             Command::Search(args) => {
-                let api = HttpPublicSearchApi::new(Arc::new(public_client()));
-                super::search::dispatch_with_api(*args, &api)
+                let search_api = HttpPublicSearchApi::new(Arc::new(public_client()));
+                let item_api = HttpPublicItemApi::new(Arc::new(public_client()));
+                super::search::dispatch_with_apis(*args, &search_api, Some(&item_api))
             }
             Command::Location(args) => {
                 let api = HttpPublicSearchApi::new(Arc::new(public_client()));

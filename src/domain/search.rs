@@ -14,6 +14,8 @@ pub struct SearchCollection {
     pub facets: Vec<SearchFacet>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved_area: Option<SearchAreaContext>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explain: Option<SearchExplainSummary>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -37,6 +39,35 @@ pub struct SearchListing {
     pub shipping: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seller: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_explanation: Option<SearchMatchExplanation>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchMatchExplanation {
+    pub source_field: String,
+    pub evidence_origin: String,
+    pub match_method: String,
+    pub matched_terms: Vec<String>,
+    pub excerpt: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchExplainSummary {
+    pub request_limit: usize,
+    pub requested: usize,
+    pub hydrated: usize,
+    pub explained: usize,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub failures: Vec<SearchExplainFailure>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SearchExplainFailure {
+    pub listing_id: String,
+    pub code: String,
+    pub retryable: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

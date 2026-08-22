@@ -14,15 +14,33 @@ tori search "takki" --shipping --sort newest --page 2 --limit 20
 
 The positional query is optional when filters identify the desired listings.
 
-## Inspect a search result
+## Explain or inspect a search result
 
-Search summaries can omit the description and other details that caused a match. Pass the numeric
-`listing_id` from a search result to the public item command:
+Search summaries can omit the description that caused a generic-title result to match. Search
+protocol documents do not provide per-result match fields or snippets. Use `--explain LIMIT` to
+hydrate at most `LIMIT` opaque results from the public item service, in search result order:
 
 ```sh
-tori search "Micro Mini" --limit 20
-tori item show 42346404
-tori item show 42346404 --format json
+tori search "micro mini potkulauta" --explain 5 --format json
+```
+
+`LIMIT` must be from 1 through 20. The default search makes no item detail requests. Results whose
+titles already contain every normalized query token need no explanation and consume no requests.
+Each explained result has a `match_explanation` with `source_field: description`, a sanitized
+excerpt of at most 160 characters, and the matching query terms. `evidence_origin: public_item`
+identifies the source document, while `match_method: cli_derived_token_match` makes clear that the
+CLI compared normalized tokens rather than receiving match evidence from the search service.
+
+The top-level `explain` summary reports the request limit, attempted requests, successful
+hydrations, explanations, and whether additional opaque results were left unhydrated by the bound.
+A failed detail request appears in `failures` with its listing ID, structured error code, and retry
+classification. Other search results and successful explanations remain in the response.
+
+For the full public detail, pass the numeric `listing_id` from a search result to the item command:
+
+```sh
+tori item show 45917182
+tori item show 45917182 --format json
 ```
 
 `tori item show` uses the public listing-detail service and does not read account credentials or
@@ -151,7 +169,7 @@ query, category, price, facets, or location can be narrowed to reach additional 
 `--input PATH` accepts a JSON object. Use `-` to read at most 1 MiB from standard input. Supported
 keys use flag names with underscores, including `query`, `category`, `location`, `area`,
 `latitude`, `longitude`, `radius_km`, `price_from`, `price_to`, `trade_type`, `condition`,
-`seller`, `shipping`, `facets`, `sort`, `page`, `limit`, `include_facets`, and `raw`.
+`seller`, `shipping`, `facets`, `sort`, `page`, `limit`, `explain`, `include_facets`, and `raw`.
 
 ```sh
 cat >search.json <<'JSON'
@@ -192,6 +210,7 @@ by the parser. Repeated `--facet` and `--condition` values are intentional multi
 - `--sort VALUE`: `relevance`, `newest`, `price-asc`, or `price-desc`
 - `--page INTEGER`: page 1 through 50
 - `--limit INTEGER`: results 1 through 300, default 20
+- `--explain LIMIT`: hydrate and explain at most 1 through 20 opaque results
 - `--include-facets`: include normalized available facets and options
 - `--input PATH`: JSON input object or `-` for standard input
 - `--raw`: return bounded upstream JSON inside the standard envelope

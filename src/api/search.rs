@@ -357,6 +357,7 @@ fn normalize_search(
                 })
                 .collect(),
         }),
+        explain: None,
     })
 }
 
@@ -466,6 +467,7 @@ fn normalize_listing(doc: &Value) -> Result<SearchListing, AppError> {
         condition,
         shipping,
         seller,
+        match_explanation: None,
     })
 }
 
