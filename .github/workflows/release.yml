@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: raine/homebrew-flea
-          token: ${{ secrets.RELEASE_TOKEN }}
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
           path: tap
       - name: Generate formula and push to tap
         env:
