@@ -31,7 +31,7 @@ pub fn render_auth_start(data: &Value) -> Result<String, AppError> {
     let completion_command = required_string(data, "completion_command")?;
 
     Ok(format!(
-        "Sign in to Tori\n\n1. Open this URL:\n\n{login_url}\n\n2. Finish signing in.\n3. When the browser asks, choose Open ToriAuthHelper.app. The Vend tab may keep showing ‘Kirjaudutaan’; you can close it after the helper opens.\n4. Return here and run:\n\n{completion_command}\n\nComplete these steps within 10 minutes.\n"
+        "Sign in to Tori\n\n1. Open this URL:\n\n{login_url}\n\n2. Finish signing in.\n3. When the browser asks, choose Open Tori CLI Auth. This callback receiver belongs to the tori CLI. The Vend tab may keep showing ‘Kirjaudutaan’; you can close it after the receiver opens.\n4. Return here and run:\n\n{completion_command}\n\nComplete these steps within 10 minutes.\n"
     ))
 }
 

@@ -53,6 +53,14 @@ impl StatePaths {
         self.auth_dir().join("credentials.lock")
     }
 
+    pub fn oauth_callback_file(&self) -> PathBuf {
+        self.auth_dir().join("oauth-callback")
+    }
+
+    pub fn auth_callback_app(&self) -> PathBuf {
+        self.auth_dir().join("Tori CLI Auth.app")
+    }
+
     pub fn logs_dir(&self) -> PathBuf {
         self.root.join("logs")
     }

@@ -38,7 +38,7 @@ pub enum AuthCommand {
         flow_id: String,
         /// Full callback URL received after browser authentication.
         ///
-        /// On macOS this is read from ToriAuthHelper when omitted.
+        /// On macOS this is read from the Tori CLI Auth receiver when omitted.
         callback_url: Option<String>,
     },
     #[command(

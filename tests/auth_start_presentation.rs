@@ -59,7 +59,8 @@ fn binary_default_stdout_is_plain_and_json_is_machine_readable() {
     let plain_stdout = String::from_utf8(plain.stdout).expect("UTF-8 stdout");
     assert!(plain_stdout.contains("Sign in to Tori"));
     assert!(plain_stdout.contains("https://login.vend.fi/oauth/authorize?"));
-    assert!(plain_stdout.contains("Open ToriAuthHelper.app"));
+    assert!(plain_stdout.contains("Open Tori CLI Auth"));
+    assert!(plain_stdout.contains("belongs to the tori CLI"));
     assert!(plain_stdout.contains("tori auth complete"));
     assert!(!plain_stdout.contains("CALLBACK_URL"));
     assert!(!plain_stdout.contains("ok:"));
@@ -88,6 +89,7 @@ fn invoke_auth_start(state: &std::path::Path, extra_args: &[&str]) -> std::proce
         .args(["auth", "start"])
         .args(extra_args)
         .env("XDG_STATE_HOME", state)
+        .env("TORI_AUTH_CALLBACK_RECEIVER", "disabled")
         .output()
         .expect("tori auth start should run")
 }
