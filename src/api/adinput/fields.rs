@@ -1,0 +1,712 @@
+use super::{images::*, recovery::*, validation::*, *};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum FieldMutationKind {
+    Composer,
+    Price,
+    Delivery,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct FieldMutation {
+    pub(super) key: String,
+    pub(super) value: Value,
+    pub(super) step: String,
+    pub(super) fields: Vec<String>,
+    pub(super) kind: FieldMutationKind,
+}
+
+#[derive(Default)]
+pub(super) struct FieldProgress {
+    pub(super) persisted: Vec<String>,
+    pub(super) absent: Vec<String>,
+}
+
+pub(super) struct AppliedFieldMutations {
+    pub(super) draft: DraftState,
+    pub(super) progress: FieldProgress,
+}
+
+pub(super) struct FieldBoundary<'a> {
+    pub(super) step: &'a str,
+    pub(super) fields: &'a [String],
+}
+
+pub(super) struct FieldOutcomes {
+    pub(super) persisted: Vec<String>,
+    pub(super) absent: Vec<String>,
+    pub(super) indeterminate: Vec<String>,
+    pub(super) unattempted: Vec<String>,
+}
+
+pub(super) fn requested_sale_price(values: &Map<String, Value>) -> Result<Option<Value>, ApiError> {
+    let Some(price) = values.get("price") else {
+        return Ok(None);
+    };
+    validate_price(price)?;
+    let trade_type = values
+        .get("trade_type")
+        .and_then(Value::as_str)
+        .map(composer_trade_type);
+    if trade_type != Some("1") {
+        return Err(ApiError::new(
+            "draft.price_trade_type_conflict",
+            "Sale price requires the sale trade type",
+        ));
+    }
+    Ok(Some(price.clone()))
+}
+
+fn prices_equal(left: &Value, right: &Value) -> bool {
+    match (left.as_f64(), right.as_f64()) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+pub(super) fn ordered_field_mutations(values: Map<String, Value>) -> Vec<FieldMutation> {
+    let order = [
+        "category",
+        "title",
+        "description",
+        "trade_type",
+        "price",
+        "postal_code",
+        "attributes",
+        "delivery",
+    ];
+    let mut values = values.into_iter().collect::<Vec<_>>();
+    values.sort_by(|(left, _), (right, _)| {
+        let rank = |key: &str| {
+            if key == "delivery" {
+                usize::MAX
+            } else {
+                order
+                    .iter()
+                    .position(|candidate| *candidate == key)
+                    .unwrap_or(order.len() - 1)
+            }
+        };
+        rank(left).cmp(&rank(right)).then_with(|| left.cmp(right))
+    });
+    values
+        .into_iter()
+        .map(|(key, value)| {
+            let value = if key == "category" {
+                normalize_category(value)
+            } else {
+                value
+            };
+            let stage_key: String = key
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() || character == '_' {
+                        character.to_ascii_lowercase()
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let fields = if key == "attributes" {
+                value
+                    .as_object()
+                    .filter(|attributes| !attributes.is_empty())
+                    .map(|attributes| {
+                        attributes
+                            .keys()
+                            .map(|field| format!("attributes.{field}"))
+                            .collect()
+                    })
+                    .unwrap_or_else(|| vec![key.clone()])
+            } else {
+                vec![key.clone()]
+            };
+            let kind = match key.as_str() {
+                "price" => FieldMutationKind::Price,
+                "delivery" => FieldMutationKind::Delivery,
+                _ => FieldMutationKind::Composer,
+            };
+            FieldMutation {
+                step: format!("apply_{stage_key}"),
+                fields,
+                key,
+                value,
+                kind,
+            }
+        })
+        .collect()
+}
+
+pub(super) fn pending_fields(
+    mutations: &[FieldMutation],
+    progress: &FieldProgress,
+    active_fields: &[String],
+) -> Vec<String> {
+    let classified = progress
+        .persisted
+        .iter()
+        .chain(&progress.absent)
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let active = active_fields
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    mutations
+        .iter()
+        .flat_map(|mutation| mutation.fields.iter())
+        .filter(|field| !classified.contains(field.as_str()) && !active.contains(field.as_str()))
+        .cloned()
+        .collect()
+}
+
+pub(super) fn field_is_persisted(
+    state: &DraftState,
+    mutation: &FieldMutation,
+    field: &str,
+) -> bool {
+    if mutation.kind == FieldMutationKind::Delivery {
+        let requested = delivery_values(&mutation.value).unwrap_or_default();
+        return state
+            .delivery
+            .as_ref()
+            .is_some_and(|delivery| delivery.selected == requested);
+    }
+    if mutation.key == "attributes" {
+        let Some(attribute) = field.strip_prefix("attributes.") else {
+            return state.values.get(&mutation.key) == Some(&mutation.value);
+        };
+        return state
+            .values
+            .get("attributes")
+            .and_then(Value::as_object)
+            .and_then(|attributes| attributes.get(attribute))
+            == mutation
+                .value
+                .as_object()
+                .and_then(|attributes| attributes.get(attribute));
+    }
+    let Some(observed) = state.values.get(&mutation.key) else {
+        return false;
+    };
+    match mutation.key.as_str() {
+        "price" => prices_equal(observed, &mutation.value),
+        "trade_type" => {
+            observed
+                .as_str()
+                .zip(mutation.value.as_str())
+                .is_some_and(|(observed, requested)| {
+                    composer_trade_type(observed) == composer_trade_type(requested)
+                })
+        }
+        "category" => normalize_category(observed.clone()) == mutation.value,
+        _ => observed == &mutation.value,
+    }
+}
+
+pub(super) fn classify_fields(
+    state: &DraftState,
+    mutation: &FieldMutation,
+) -> (Vec<String>, Vec<String>) {
+    mutation
+        .fields
+        .iter()
+        .cloned()
+        .partition(|field| field_is_persisted(state, mutation, field))
+}
+
+pub(super) fn retry_field_action(draft_id: &str, fields: &[String]) -> String {
+    let single_flag = match fields {
+        [field] => match field.as_str() {
+            "category" => Some("--category VALUE"),
+            "title" => Some("--title VALUE"),
+            "description" => Some("--description VALUE"),
+            "price" => Some("--price VALUE"),
+            "trade_type" => Some("--trade-type VALUE"),
+            "postal_code" => Some("--postal-code VALUE"),
+            "delivery" => Some("--delivery VALUE"),
+            _ => None,
+        },
+        _ => None,
+    };
+    single_flag.map_or_else(
+        || format!("flea draft update {draft_id} --input PATH_WITH_ONLY_ABSENT_FIELDS"),
+        |flag| format!("flea draft update {draft_id} {flag}"),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn field_recovery(
+    draft_id: &str,
+    completed_steps: &[String],
+    boundary: FieldBoundary<'_>,
+    outcomes: FieldOutcomes,
+    upstream_transient: bool,
+    safe_to_retry: bool,
+    fresh_state: Option<DraftState>,
+    force_inspection: bool,
+) -> Recovery {
+    let manual_inspection_required = force_inspection || !outcomes.indeterminate.is_empty();
+    let next_safe_actions = if manual_inspection_required || outcomes.absent.is_empty() {
+        vec![format!("flea draft show {draft_id}")]
+    } else {
+        vec![
+            format!("flea draft show {draft_id}"),
+            retry_field_action(draft_id, &outcomes.absent),
+        ]
+    };
+    let mut recovery = Recovery {
+        active_step: Some(boundary.step.to_owned()),
+        failed_stage: Some(boundary.step.to_owned()),
+        fields: boundary.fields.to_vec(),
+        persisted_fields: outcomes.persisted,
+        absent_fields: outcomes.absent,
+        indeterminate_fields: outcomes.indeterminate,
+        unattempted_fields: outcomes.unattempted,
+        manual_inspection_required,
+        upstream_transient,
+        safe_to_retry,
+        next_safe_actions,
+        ..Recovery::base(draft_id, completed_steps, None)
+    };
+    if let Some(state) = fresh_state {
+        recovery.observe(&state, ObservationStatus::Observed);
+    }
+    recovery.refresh_field_summary();
+    recovery
+}
+
+pub(super) fn schema_validation_issues(
+    state: &DraftState,
+    mutation: &FieldMutation,
+) -> Vec<ValidationIssue> {
+    let requested = if mutation.key == "attributes" {
+        mutation
+            .value
+            .as_object()
+            .map(|attributes| {
+                attributes
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![(mutation.key.as_str(), &mutation.value)])
+    } else {
+        vec![(mutation.key.as_str(), &mutation.value)]
+    };
+    requested
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let field = state.fields.iter().find(|field| field.key == key)?;
+            let mut issue = schema_validation_issue(state, field, value)?;
+            if mutation.key == "attributes" {
+                issue.field = format!("attributes.{}", issue.field);
+            }
+            Some(issue)
+        })
+        .collect()
+}
+
+pub(super) fn schema_validation_issue(
+    state: &DraftState,
+    field: &Field,
+    value: &Value,
+) -> Option<ValidationIssue> {
+    if value.is_null() {
+        return None;
+    }
+    let valid_shape = match field.field_type {
+        FieldType::String | FieldType::Text | FieldType::Date => value.is_string(),
+        FieldType::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
+        FieldType::Decimal => value.as_f64().is_some_and(f64::is_finite),
+        FieldType::Boolean => value.is_boolean(),
+        FieldType::Select => !value.is_array() && !value.is_object(),
+        FieldType::MultiSelect => value.is_array(),
+        FieldType::Unknown(_) => true,
+    };
+    if !valid_shape {
+        return Some(ValidationIssue {
+            field: field.key.clone(),
+            code: "invalid_type".to_owned(),
+            message: format!("expected {}", field_type_name(&field.field_type)),
+            source: Some("local_schema".to_owned()),
+            raw: None,
+        });
+    }
+    if matches!(field.field_type, FieldType::Select | FieldType::MultiSelect) {
+        let allowed = state
+            .options
+            .iter()
+            .filter(|option| option.field == field.key)
+            .filter_map(|option| match &option.value {
+                Value::String(value) => Some(value.clone()),
+                Value::Number(value) => Some(value.to_string()),
+                Value::Bool(value) => Some(value.to_string()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let supplied = value
+            .as_array()
+            .map(|values| values.iter().collect::<Vec<_>>())
+            .unwrap_or_else(|| vec![value]);
+        if !allowed.is_empty()
+            && supplied.iter().any(|value| {
+                let candidate = match value {
+                    Value::String(value) => Some(value.clone()),
+                    Value::Number(value) => Some(value.to_string()),
+                    Value::Bool(value) => Some(value.to_string()),
+                    _ => None,
+                };
+                candidate.is_none_or(|value| !allowed.contains(value.as_str()))
+            })
+        {
+            return Some(ValidationIssue {
+                field: field.key.clone(),
+                code: "invalid_option".to_owned(),
+                message: "value is not present in the source-backed field options".to_owned(),
+                source: Some("local_schema".to_owned()),
+                raw: None,
+            });
+        }
+    }
+    None
+}
+
+fn field_type_name(field_type: &FieldType) -> &'static str {
+    match field_type {
+        FieldType::String | FieldType::Text => "a string",
+        FieldType::Integer => "an integer",
+        FieldType::Decimal => "a number",
+        FieldType::Boolean => "a boolean",
+        FieldType::Select => "one selectable value",
+        FieldType::MultiSelect => "an array of selectable values",
+        FieldType::Date => "a date string",
+        FieldType::Unknown(_) => "a value accepted by the composer",
+    }
+}
+
+pub(super) fn structured_validation_issues(
+    error: &ApiError,
+    state: &DraftState,
+) -> Vec<ValidationIssue> {
+    let Some(upstream) = error
+        .details
+        .as_deref()
+        .and_then(|details| details.get("upstream"))
+    else {
+        return Vec::new();
+    };
+    let mut errors = Vec::new();
+    collect_validation_errors(upstream, &mut errors);
+    let mut issues = map_validation_errors(errors, &state.fields);
+    for issue in &mut issues {
+        issue.field = stable_field_key(&issue.field);
+    }
+    issues.sort_by(|left, right| {
+        left.field
+            .cmp(&right.field)
+            .then_with(|| left.code.cmp(&right.code))
+            .then_with(|| left.message.cmp(&right.message))
+    });
+    issues.dedup_by(|left, right| {
+        left.field == right.field && left.code == right.code && left.message == right.message
+    });
+    issues
+}
+
+fn collect_validation_errors(value: &Value, output: &mut Vec<UpstreamValidationError>) {
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    for key in [
+        "errors",
+        "field_errors",
+        "fieldErrors",
+        "validation_errors",
+        "validationErrors",
+        "invalid_params",
+        "invalid-params",
+        "violations",
+        "validation",
+        "fields",
+    ] {
+        let Some(errors) = object.get(key) else {
+            continue;
+        };
+        match errors {
+            Value::Array(errors) => {
+                for error in errors {
+                    collect_validation_error_item(error, None, output);
+                }
+            }
+            Value::Object(errors) => {
+                for (field, error) in errors {
+                    match error {
+                        Value::Array(errors) => {
+                            for error in errors {
+                                collect_validation_error_item(error, Some(field), output);
+                            }
+                        }
+                        error => collect_validation_error_item(error, Some(field), output),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for key in ["error", "details"] {
+        if let Some(nested) = object.get(key) {
+            collect_validation_errors(nested, output);
+        }
+    }
+}
+
+fn collect_validation_error_item(
+    value: &Value,
+    fallback_field: Option<&str>,
+    output: &mut Vec<UpstreamValidationError>,
+) {
+    if let Some(message) = value.as_str() {
+        if let Some(field) = fallback_field {
+            output.push(UpstreamValidationError {
+                source: field.to_owned(),
+                code: "invalid".to_owned(),
+                message: message.to_owned(),
+                raw: Some(value.clone()),
+            });
+        }
+        return;
+    }
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    let source = [
+        "field",
+        "path",
+        "name",
+        "property",
+        "parameter",
+        "attribute",
+        "key",
+        "source",
+    ]
+    .into_iter()
+    .find_map(|key| {
+        object.get(key).and_then(|value| {
+            value.as_str().or_else(|| {
+                value.as_object().and_then(|source| {
+                    ["pointer", "parameter", "field", "path"]
+                        .into_iter()
+                        .find_map(|key| source.get(key).and_then(Value::as_str))
+                })
+            })
+        })
+    })
+    .or(fallback_field);
+    let Some(source) = source else {
+        return;
+    };
+    let message = ["message", "reason", "detail", "description"]
+        .into_iter()
+        .find_map(|key| object.get(key).and_then(Value::as_str))
+        .unwrap_or("Tori rejected the field");
+    let code = ["code", "type", "kind"]
+        .into_iter()
+        .find_map(|key| object.get(key).and_then(Value::as_str))
+        .unwrap_or("invalid");
+    output.push(UpstreamValidationError {
+        source: source.to_owned(),
+        code: code.to_owned(),
+        message: message.to_owned(),
+        raw: Some(value.clone()),
+    });
+}
+
+pub(super) fn mutation_is_ambiguous(error: &ApiError) -> bool {
+    error.code == "mutation.uncertain"
+        || error.status.is_none()
+        || matches!(error.status, Some(408 | 425 | 500..=599))
+}
+
+pub(super) fn field_error_details(
+    stage: &str,
+    fields: &[String],
+    error: &ApiError,
+    validation: &[ValidationIssue],
+    observation: Option<Value>,
+) -> Value {
+    let mut details = json!({
+        "stage": stage,
+        "fields": fields,
+        "status": error.status,
+        "content_type": error.details.as_deref().and_then(|details| details.get("content_type")),
+        "body_is_unparseable": error.details.as_deref().and_then(|details| details.get("body_is_unparseable")),
+        "upstream_error": error.details,
+    });
+    let object = details
+        .as_object_mut()
+        .expect("field error details are an object");
+    if !validation.is_empty() {
+        object.insert(
+            "field_errors".to_owned(),
+            serde_json::to_value(validation).expect("validation issues serialize"),
+        );
+    }
+    if let Some(observation) = observation {
+        object.insert("observation".to_owned(), observation);
+    }
+    details
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RecoveryAttempt {
+    Completed,
+    Attempting,
+    Unattempted,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RecoveryImageIntent {
+    pub(super) index: usize,
+    pub(super) operation: ImageRecoveryOperation,
+    pub(super) image_id: Option<String>,
+    pub(super) upload: RecoveryAttempt,
+    pub(super) attachment: RecoveryAttempt,
+}
+
+impl RecoveryImageIntent {
+    pub(super) fn additions(start: usize, count: usize) -> Vec<Self> {
+        (0..count)
+            .map(|offset| Self {
+                index: start + offset,
+                operation: ImageRecoveryOperation::Add,
+                image_id: None,
+                upload: RecoveryAttempt::Unattempted,
+                attachment: RecoveryAttempt::Unattempted,
+            })
+            .collect()
+    }
+
+    pub(super) fn removals(image_ids: &[String]) -> Vec<Self> {
+        image_ids
+            .iter()
+            .enumerate()
+            .map(|(index, image_id)| Self {
+                index,
+                operation: ImageRecoveryOperation::Remove,
+                image_id: Some(image_id.clone()),
+                upload: RecoveryAttempt::Completed,
+                attachment: RecoveryAttempt::Attempting,
+            })
+            .collect()
+    }
+}
+
+fn summarize_recovery_images(
+    intent: &[RecoveryImageIntent],
+    observed: Option<&DraftState>,
+    uncertain: bool,
+) -> Vec<ImageRecovery> {
+    intent
+        .iter()
+        .map(|requested| {
+            let observed_image = requested.image_id.as_deref().and_then(|image_id| {
+                observed
+                    .and_then(|state| state.images.iter().find(|image| image.image_id == image_id))
+            });
+            let upload = match requested.upload {
+                RecoveryAttempt::Completed => UploadRecoveryStatus::Completed,
+                RecoveryAttempt::Attempting if uncertain => UploadRecoveryStatus::Indeterminate,
+                RecoveryAttempt::Attempting => UploadRecoveryStatus::Failed,
+                RecoveryAttempt::Unattempted => UploadRecoveryStatus::Unattempted,
+            };
+            let attachment = if observed_image.is_some() {
+                AttachmentRecoveryStatus::Attached
+            } else {
+                match requested.attachment {
+                    RecoveryAttempt::Completed | RecoveryAttempt::Attempting
+                        if observed.is_some() =>
+                    {
+                        AttachmentRecoveryStatus::Absent
+                    }
+                    RecoveryAttempt::Completed | RecoveryAttempt::Attempting => {
+                        AttachmentRecoveryStatus::Indeterminate
+                    }
+                    RecoveryAttempt::Unattempted
+                        if requested.upload == RecoveryAttempt::Completed && observed.is_some() =>
+                    {
+                        AttachmentRecoveryStatus::Absent
+                    }
+                    RecoveryAttempt::Unattempted => AttachmentRecoveryStatus::Unattempted,
+                }
+            };
+            let processing = match observed_image.map(|image| &image.state) {
+                Some(ImageState::Ready) => ProcessingRecoveryStatus::Ready,
+                Some(ImageState::Processing) => ProcessingRecoveryStatus::Processing,
+                Some(ImageState::Failed) => ProcessingRecoveryStatus::Failed,
+                None if attachment == AttachmentRecoveryStatus::Indeterminate => {
+                    ProcessingRecoveryStatus::Indeterminate
+                }
+                None => ProcessingRecoveryStatus::Unattempted,
+            };
+            let status = match requested.operation {
+                ImageRecoveryOperation::Remove
+                    if observed.is_some() && observed_image.is_none() =>
+                {
+                    RecoveryStatus::Persisted
+                }
+                ImageRecoveryOperation::Remove if observed_image.is_some() => {
+                    RecoveryStatus::Absent
+                }
+                ImageRecoveryOperation::Remove => RecoveryStatus::Indeterminate,
+                ImageRecoveryOperation::Add => match processing {
+                    ProcessingRecoveryStatus::Ready => RecoveryStatus::Persisted,
+                    ProcessingRecoveryStatus::Processing => RecoveryStatus::Pending,
+                    ProcessingRecoveryStatus::Failed => RecoveryStatus::Rejected,
+                    ProcessingRecoveryStatus::Indeterminate => RecoveryStatus::Indeterminate,
+                    ProcessingRecoveryStatus::Unattempted => match upload {
+                        UploadRecoveryStatus::Completed => RecoveryStatus::Absent,
+                        UploadRecoveryStatus::Failed => RecoveryStatus::Rejected,
+                        UploadRecoveryStatus::Indeterminate => RecoveryStatus::Indeterminate,
+                        UploadRecoveryStatus::Unattempted => RecoveryStatus::Unattempted,
+                    },
+                },
+            };
+            ImageRecovery {
+                index: requested.index,
+                operation: requested.operation,
+                status,
+                upload,
+                attachment,
+                processing,
+                image_id: requested.image_id.as_deref().map(bounded_recovery_text),
+            }
+        })
+        .collect()
+}
+
+pub(super) fn observed_image_intent(state: &DraftState) -> Vec<RecoveryImageIntent> {
+    state
+        .images
+        .iter()
+        .map(|image| RecoveryImageIntent {
+            index: image.position,
+            operation: ImageRecoveryOperation::Add,
+            image_id: Some(image.image_id.clone()),
+            upload: RecoveryAttempt::Completed,
+            attachment: RecoveryAttempt::Completed,
+        })
+        .collect()
+}
+
+pub(super) fn set_recovery_images(
+    recovery: &mut Recovery,
+    intent: &[RecoveryImageIntent],
+    uncertain: bool,
+) {
+    let mut images = summarize_recovery_images(intent, recovery.fresh_state.as_ref(), uncertain);
+    images.sort_by_key(|image| (recovery_priority(image.status), image.index));
+    recovery.images_omitted = images.len().saturating_sub(RECOVERY_IMAGE_LIMIT);
+    images.truncate(RECOVERY_IMAGE_LIMIT);
+    recovery.images = images;
+}
