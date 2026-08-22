@@ -28,7 +28,7 @@ pub mod compatibility {
     pub const DEVICE: &str = "Pixel 6";
     pub const APP_BRAND: &str = "Tori";
     pub const DEVICE_INFO: &str = "Android, mobile";
-    pub const ADINPUT_VERSION: &str = "viewings";
+    pub const ADINPUT_VERSION: &str = "boatmotor";
     pub const USER_AGENT: &str = "ToriApp_And/26.4.0 (Linux; U; Android 14; en_us; Pixel 6 Build/UP1A.231005.007) ToriNativeApp(UA spoofed for tracking) ToriApp_And";
 
     pub const SERVICE_ADINPUT: &str = "APPS-ADINPUT";
@@ -184,6 +184,7 @@ pub struct RequestSpec {
     pub body: RequestBody,
     pub content_type: Option<HeaderValue>,
     pub if_match: Option<HeaderValue>,
+    pub content_length_zero: bool,
     pub headers: HeaderMap,
 }
 
@@ -198,6 +199,7 @@ impl fmt::Debug for RequestSpec {
             .field("body", &self.body)
             .field("content_type", &self.content_type)
             .field("has_if_match", &self.if_match.is_some())
+            .field("content_length_zero", &self.content_length_zero)
             .field("header_names", &header_names(&self.headers))
             .finish()
     }
@@ -217,6 +219,7 @@ impl RequestSpec {
             body: RequestBody::Empty,
             content_type: None,
             if_match: None,
+            content_length_zero: false,
             headers: HeaderMap::new(),
         }
     }
@@ -229,6 +232,12 @@ impl RequestSpec {
     pub fn body(mut self, body: impl Into<Vec<u8>>, content_type: HeaderValue) -> Self {
         self.body = RequestBody::Bytes(body.into());
         self.content_type = Some(content_type);
+        self
+    }
+
+    pub fn empty_body(mut self) -> Self {
+        self.body = RequestBody::Bytes(Vec::new());
+        self.content_length_zero = true;
         self
     }
 
@@ -566,6 +575,9 @@ impl<T: Transport> HttpClient<T> {
         }
         if let Some(etag) = &request.if_match {
             headers.insert(IF_MATCH, etag.clone());
+        }
+        if request.content_length_zero {
+            headers.insert(CONTENT_LENGTH, HeaderValue::from_static("0"));
         }
 
         Ok(TransportRequest {

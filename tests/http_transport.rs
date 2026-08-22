@@ -219,6 +219,21 @@ async fn retries_only_bounded_safe_methods() {
 }
 
 #[tokio::test]
+async fn empty_post_sends_an_explicit_zero_content_length_once() {
+    let transport = FixtureTransport::new([fixture_response(StatusCode::OK)]);
+    let client = client(transport.clone());
+
+    client
+        .send(RequestSpec::new(Method::POST, "/create", "ITEMS").empty_body())
+        .await
+        .unwrap();
+
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].headers["content-length"], "0");
+}
+
+#[tokio::test]
 async fn multipart_request_is_inspectable_and_signs_an_empty_body() {
     let transport = FixtureTransport::new([fixture_response(StatusCode::CREATED)]);
     let client = client(transport.clone());

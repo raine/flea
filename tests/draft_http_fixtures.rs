@@ -47,8 +47,35 @@ fn response(status: u16, body: Value) -> HttpResponse {
     HttpResponse {
         status,
         etag: None,
+        content_type: Some("application/json".to_owned()),
+        location: None,
         body,
+        body_is_unparseable: false,
     }
+}
+
+fn response_with_location(status: u16, location: &str) -> HttpResponse {
+    HttpResponse {
+        status,
+        etag: None,
+        content_type: None,
+        location: Some(location.to_owned()),
+        body: Value::Null,
+        body_is_unparseable: false,
+    }
+}
+
+fn image(id: &str, position: usize, state: &str, width: u32, height: u32) -> Value {
+    let url = format!("https://img.tori.net/dynamic/default/{id}.jpg");
+    json!({
+        "image_id": url,
+        "url": url,
+        "position": position,
+        "state": state,
+        "width": width,
+        "height": height,
+        "mime_type": "image/jpeg"
+    })
 }
 
 fn draft(etag: &str, extra: Value) -> Value {
@@ -154,6 +181,134 @@ fn successful_publish_responses() -> Vec<HttpResponse> {
             json!({ "listing_id": "listing-9", "state": "pending" }),
         ),
     ]
+}
+
+fn observed_draft(id: &str, etag: &str, values: Value) -> Value {
+    json!({
+        "ad": {
+            "id": id,
+            "ad-type": "recommerce",
+            "etag": etag,
+            "values": values,
+            "meta-data": {},
+            "locked-fields": []
+        },
+        "model": {}
+    })
+}
+
+#[tokio::test]
+async fn creation_normalizes_the_source_observed_json_success() {
+    let transport = FixtureTransport::new([response(
+        200,
+        observed_draft("98231", "W/\"7\"", json!({ "title": "Chair" })),
+    )]);
+    let api = HttpAdInputApi::new(transport.clone());
+
+    let state = api.create_draft().await.unwrap();
+
+    assert_eq!(state.draft_id, "98231");
+    assert_eq!(state.etag, "W/\"7\"");
+    assert_eq!(state.values["title"], "Chair");
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, Method::Post);
+    assert_eq!(requests[0].path, "/adinput/ad/withModel/recommerce");
+    assert_eq!(requests[0].body, RequestBody::Empty);
+    assert_eq!(requests[0].retry, RetryPolicy::Never);
+}
+
+#[tokio::test]
+async fn creation_observes_location_and_see_other_identity_without_reposting() {
+    for status in [201, 303] {
+        let transport = FixtureTransport::new([
+            response_with_location(
+                status,
+                "https://apps-adinput.svc.tori.fi/adinput/ad/recommerce/98231",
+            ),
+            response(200, observed_draft("98231", "W/\"8\"", json!({}))),
+        ]);
+        let api = HttpAdInputApi::new(transport.clone());
+
+        let state = api.create_draft().await.unwrap();
+
+        assert_eq!(state.draft_id, "98231");
+        assert_eq!(state.etag, "W/\"8\"");
+        let requests = transport.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].method, Method::Post);
+        assert_eq!(requests[1].method, Method::Get);
+        assert_eq!(requests[1].path, "/adinput/ad/withModel/98231");
+    }
+}
+
+#[tokio::test]
+async fn uncertain_creation_covers_unparseable_empty_and_missing_identity_successes() {
+    let mut non_json = response(200, Value::Null);
+    non_json.body_is_unparseable = true;
+    non_json.content_type = Some("text/html".to_owned());
+    let mut malformed_json = response(200, Value::Null);
+    malformed_json.body_is_unparseable = true;
+    for response in [
+        non_json,
+        malformed_json,
+        response(204, Value::Null),
+        response(200, json!({})),
+    ] {
+        let transport = FixtureTransport::new([response]);
+        let api = HttpAdInputApi::new(transport.clone());
+
+        let error = api.create_draft().await.unwrap_err();
+
+        assert_eq!(error.code, "mutation.uncertain");
+        assert!(!error.retryable);
+        let details = error.details.unwrap();
+        assert_eq!(details["stage"], "create_draft");
+        assert_eq!(details["completed_steps"], json!([]));
+        assert!(
+            details["recovery_guidance"]
+                .as_str()
+                .unwrap()
+                .contains("do not repeat")
+        );
+        assert_eq!(transport.requests().len(), 1);
+        assert_eq!(transport.requests()[0].retry, RetryPolicy::Never);
+    }
+}
+
+#[tokio::test]
+async fn creation_observation_failure_preserves_authoritative_identity() {
+    let transport = FixtureTransport::new([
+        response_with_location(201, "/adinput/ad/recommerce/98231"),
+        response(503, json!({ "message": "observation unavailable" })),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow
+        .create(Map::new(), &[] as &[&str])
+        .await
+        .unwrap_err();
+
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.draft_id, "98231");
+    assert_eq!(
+        recovery.completed_steps,
+        ["create_draft", "establish_identity"]
+    );
+    assert_eq!(recovery.next_safe_actions, ["tori draft show 98231"]);
+}
+
+#[tokio::test]
+async fn creation_rejects_noncanonical_redirects_without_following_them() {
+    let mut redirected = response_with_location(307, "https://example.com/draft/98231");
+    redirected.body = json!({ "message": "redirect" });
+    let transport = FixtureTransport::new([redirected]);
+    let api = HttpAdInputApi::new(transport.clone());
+
+    let error = api.create_draft().await.unwrap_err();
+
+    assert_eq!(error.status, Some(307));
+    assert_eq!(transport.requests().len(), 1);
 }
 
 #[tokio::test]
@@ -297,29 +452,32 @@ async fn image_upload_reads_dimensions_and_preserves_order() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("second.png");
     image::DynamicImage::new_rgb8(7, 11).save(&path).unwrap();
+    use std::io::Write as _;
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(b"private-gps-metadata")
+        .unwrap();
     let transport = FixtureTransport::new([
         response(
             200,
             draft(
                 "one",
                 json!({
-                    "images": [{
-                        "image_id": "first",
-                        "position": 0,
-                        "state": "ready"
-                    }]
+                    "images": [image("first", 0, "ready", 4, 6)]
                 }),
             ),
         ),
-        response(201, json!({ "image_id": "second", "state": "processing" })),
+        response_with_location(201, "https://img.tori.net/dynamic/default/second.png"),
         response(
             200,
             draft(
                 "two",
                 json!({
                     "images": [
-                        { "image_id": "first", "position": 0, "state": "ready" },
-                        { "image_id": "second", "position": 1, "state": "processing" }
+                        image("first", 0, "ready", 4, 6),
+                        image("second", 1, "processing", 7, 11)
                     ]
                 }),
             ),
@@ -331,17 +489,32 @@ async fn image_upload_reads_dimensions_and_preserves_order() {
 
     assert_eq!(state.images[1].state, ImageState::Processing);
     let requests = transport.requests();
-    let RequestBody::Image { width, height, .. } = &requests[1].body else {
+    let RequestBody::Image {
+        bytes,
+        file_name,
+        mime_type,
+        width,
+        height,
+    } = &requests[1].body
+    else {
         panic!("expected image upload")
     };
     assert_eq!((*width, *height), (7, 11));
-    assert_eq!(requests[1].retry, RetryPolicy::Never);
-    assert_eq!(
-        requests[2].body,
-        RequestBody::Json(json!({
-            "image_ids": ["first", "second"]
-        }))
+    assert_eq!(file_name, "image.png");
+    assert_eq!(mime_type, "image/png");
+    assert!(
+        !bytes
+            .windows(b"private-gps-metadata".len())
+            .any(|window| window == b"private-gps-metadata")
     );
+    assert_eq!(requests[1].retry, RetryPolicy::Never);
+    assert_eq!(requests[1].path, "/adinput/ad/recommerce/draft-1/upload");
+    let RequestBody::Json(values) = &requests[2].body else {
+        panic!("expected image field update")
+    };
+    assert_eq!(values["multi_image"].as_array().unwrap().len(), 2);
+    assert_eq!(values["multi_image"][1]["width"], 7);
+    assert_eq!(values["multi_image"][1]["height"], 11);
 }
 
 #[tokio::test]
@@ -353,9 +526,9 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
                 "one",
                 json!({
                     "images": [
-                        { "image_id": "third", "position": 2, "state": "ready" },
-                        { "image_id": "first", "position": 0, "state": "ready" },
-                        { "image_id": "second", "position": 1, "state": "ready" }
+                        image("third", 2, "ready", 3, 3),
+                        image("first", 0, "ready", 1, 1),
+                        image("second", 1, "ready", 2, 2)
                     ]
                 }),
             ),
@@ -366,8 +539,8 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
                 "two",
                 json!({
                     "images": [
-                        { "image_id": "first", "position": 0, "state": "ready" },
-                        { "image_id": "third", "position": 1, "state": "ready" }
+                        image("first", 0, "ready", 1, 1),
+                        image("third", 1, "ready", 3, 3)
                     ]
                 }),
             ),
@@ -377,16 +550,25 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
     let state = workflow
-        .remove_images("draft-1", &["second".to_owned()])
+        .remove_images(
+            "draft-1",
+            &["https://img.tori.net/dynamic/default/second.jpg".to_owned()],
+        )
         .await
         .unwrap();
     workflow.delete("draft-1").await.unwrap();
 
-    assert_eq!(state.images[1].image_id, "third");
+    assert!(state.images[1].image_id.ends_with("third.jpg"));
     let requests = transport.requests();
-    assert_eq!(
-        requests[1].body,
-        RequestBody::Json(json!({ "image_ids": ["first", "third"] }))
+    let RequestBody::Json(values) = &requests[1].body else {
+        panic!("expected image field update")
+    };
+    assert_eq!(values["multi_image"].as_array().unwrap().len(), 2);
+    assert!(
+        values["multi_image"][1]["url"]
+            .as_str()
+            .unwrap()
+            .ends_with("third.jpg")
     );
     assert_eq!(requests[1].retry, RetryPolicy::Never);
     assert_eq!(requests[2].method, Method::Delete);
@@ -485,9 +667,9 @@ async fn publish_runs_the_complete_bounded_sequence() {
     assert_eq!(
         observed_sequence,
         [
-            (Method::Get, "/drafts/draft-1/with-model"),
-            (Method::Patch, "/drafts/draft-1/item"),
-            (Method::Get, "/drafts/draft-1/with-model"),
+            (Method::Get, "/adinput/ad/withModel/draft-1"),
+            (Method::Put, "/adinput/ad/recommerce/draft-1/update"),
+            (Method::Get, "/adinput/ad/withModel/draft-1"),
             (Method::Put, "/drafts/draft-1/adinput"),
             (Method::Put, "/drafts/draft-1/delivery"),
             (Method::Get, "/drafts/draft-1/products?revision=revision-7"),
@@ -785,6 +967,7 @@ fn image_request_debug_never_contains_raw_bytes_or_secret_json_values() {
         body: RequestBody::Image {
             bytes: b"raw-image-secret".to_vec(),
             file_name: "image.jpg".to_owned(),
+            mime_type: "image/jpeg".to_owned(),
             width: 1,
             height: 1,
         },

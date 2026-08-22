@@ -217,7 +217,17 @@ fn draft_create_flows_through_the_http_adapter() {
     assert_eq!(value["data"]["draft"]["draft_id"], "draft-1");
     let requests = client.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].path_and_query, "/drafts");
+    assert_eq!(
+        requests[0].path_and_query,
+        "/adinput/ad/withModel/recommerce"
+    );
+    assert_eq!(requests[0].service, "APPS-ADINPUT");
+    assert_eq!(requests[0].host, tori::api::client::ApiHost::Adinput);
+    assert!(requests[0].content_length_zero);
+    assert!(matches!(
+        &requests[0].body,
+        tori::api::client::RequestBody::Bytes(bytes) if bytes.is_empty()
+    ));
 }
 
 #[test]
@@ -254,6 +264,30 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
 }
 
 #[test]
+fn uncertain_creation_is_a_non_retryable_partial_error_with_safe_metadata() {
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
+    let client = MockClient::with_responses([HttpResponse {
+        status: StatusCode::OK,
+        headers,
+        body: b"<html>unsupported success</html>".to_vec(),
+    }]);
+
+    let result = run_with_runtime(
+        ["tori", "--format", "json", "draft", "create"],
+        &TestRuntime { client },
+    );
+    let value: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 50);
+    assert_eq!(value["error"]["code"], "mutation.uncertain");
+    assert_eq!(value["error"]["retryable"], false);
+    assert_eq!(value["error"]["details"]["stage"], "create_draft");
+    assert_eq!(value["error"]["details"]["status"], 200);
+    assert_eq!(value["error"]["details"]["content_type"], "text/html");
+}
+
+#[test]
 fn image_add_flows_through_upload_and_ordering() {
     let directory = tempfile::tempdir().unwrap();
     let image_path = directory.path().join("chair.png");
@@ -264,7 +298,9 @@ fn image_add_flows_through_upload_and_ordering() {
         response(StatusCode::OK, draft_state("one")),
         response(
             StatusCode::CREATED,
-            json!({ "image_id": "image-1", "state": "processing" }),
+            json!({
+                "location": "https://img.tori.net/dynamic/default/image-1.png"
+            }),
         ),
         response(StatusCode::OK, draft_with_images("two", "processing")),
     ]);
@@ -284,7 +320,10 @@ fn image_add_flows_through_upload_and_ordering() {
         ],
     );
 
-    assert_eq!(value["data"]["images"][0]["image_id"], "image-1");
+    assert_eq!(
+        value["data"]["images"][0]["image_id"],
+        "https://img.tori.net/dynamic/default/image-1.png"
+    );
     assert_eq!(client.requests.lock().unwrap().len(), 3);
 }
 
@@ -584,7 +623,15 @@ fn draft_with_images(etag: &str, state: &str) -> Value {
         "draft_id": "draft-1",
         "etag": etag,
         "values": {},
-        "images": [{ "image_id": "image-1", "position": 0, "state": state }]
+        "images": [{
+            "image_id": "https://img.tori.net/dynamic/default/image-1.png",
+            "url": "https://img.tori.net/dynamic/default/image-1.png",
+            "position": 0,
+            "state": state,
+            "width": 4,
+            "height": 6,
+            "mime_type": "image/png"
+        }]
     })
 }
 

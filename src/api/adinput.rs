@@ -1,6 +1,9 @@
-use std::{collections::BTreeMap, fmt, path::Path, time::Duration};
+use std::{collections::BTreeMap, fmt, io::Cursor, path::Path, time::Duration};
 
-use reqwest::{Method as ReqwestMethod, header::HeaderValue};
+use reqwest::{
+    Method as ReqwestMethod,
+    header::{CONTENT_TYPE, HeaderValue, LOCATION},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -38,6 +41,7 @@ pub enum RequestBody {
     Image {
         bytes: Vec<u8>,
         file_name: String,
+        mime_type: String,
         width: u32,
         height: u32,
     },
@@ -54,13 +58,14 @@ impl fmt::Debug for RequestBody {
             }
             Self::Image {
                 bytes,
-                file_name,
+                mime_type,
                 width,
                 height,
+                ..
             } => formatter
                 .debug_struct("Image")
                 .field("byte_len", &bytes.len())
-                .field("file_name", file_name)
+                .field("mime_type", mime_type)
                 .field("width", width)
                 .field("height", height)
                 .finish(),
@@ -103,7 +108,10 @@ impl HttpRequest {
 pub struct HttpResponse {
     pub status: u16,
     pub etag: Option<String>,
+    pub content_type: Option<String>,
+    pub location: Option<String>,
     pub body: Value,
+    pub body_is_unparseable: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -133,12 +141,16 @@ impl ApiError {
             .and_then(Value::as_str)
             .map(diagnostics::redact_text)
             .unwrap_or_else(|| "Tori rejected the request".to_owned());
-        let mut details = response.body.clone();
-        diagnostics::redact_value(&mut details);
+        let mut upstream = response.body.clone();
+        diagnostics::redact_value(&mut upstream);
         let mut error = Self::new("upstream.request_failed", message);
         error.status = Some(response.status);
         error.retryable = response.status >= 500;
-        error.details = Some(Box::new(details));
+        error.details = Some(Box::new(json!({
+            "status": response.status,
+            "content_type": response.content_type,
+            "upstream": upstream
+        })));
         error
     }
 }
@@ -194,10 +206,11 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
             Method::Delete => ReqwestMethod::DELETE,
         };
         let mut spec = RequestSpec::new(method, request.path.clone(), service);
-        if service == compatibility::SERVICE_ADINPUT {
+        if request.path.starts_with("/adinput/") {
             spec = spec.adinput();
         }
         spec = match request.body {
+            RequestBody::Empty if spec.method == ReqwestMethod::POST => spec.empty_body(),
             RequestBody::Empty => spec,
             RequestBody::Json(value) => spec.body(
                 serde_json::to_vec(&value).map_err(|error| {
@@ -208,15 +221,21 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
             RequestBody::Image {
                 bytes,
                 file_name,
-                width,
-                height,
-            } => spec.multipart(vec![
-                MultipartPart::bytes("image", bytes)
-                    .file_name(file_name)
-                    .mime_type("application/octet-stream"),
-                MultipartPart::bytes("width", width.to_string()),
-                MultipartPart::bytes("height", height.to_string()),
-            ]),
+                mime_type,
+                ..
+            } => {
+                spec.headers.insert(
+                    "upload-draft-interop-version",
+                    HeaderValue::from_static(compatibility::UPLOAD_DRAFT_INTEROP_VERSION),
+                );
+                spec.headers
+                    .insert("upload-complete", HeaderValue::from_static("?1"));
+                spec.multipart(vec![
+                    MultipartPart::bytes("file", bytes)
+                        .file_name(file_name)
+                        .mime_type(mime_type),
+                ])
+            }
         };
         if let Some(etag) = request.if_match {
             spec = spec.if_match(HeaderValue::from_str(&etag).map_err(|_| {
@@ -228,11 +247,13 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
             api.retryable = matches!(request.retry, RetryPolicy::BoundedRead);
             api
         })?;
-        let body = if response.body.is_empty() {
-            Value::Null
+        let (body, body_is_unparseable) = if response.body.is_empty() {
+            (Value::Null, false)
         } else {
-            serde_json::from_slice(&response.body)
-                .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))?
+            match serde_json::from_slice(&response.body) {
+                Ok(body) => (body, false),
+                Err(_) => (Value::Null, true),
+            }
         };
         Ok(HttpResponse {
             status: response.status.as_u16(),
@@ -240,13 +261,26 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
                 .etag()
                 .and_then(|etag| etag.to_str().ok())
                 .map(str::to_owned),
+            content_type: response
+                .headers
+                .get(CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(safe_content_type),
+            location: response
+                .headers
+                .get(LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned),
             body,
+            body_is_unparseable,
         })
     }
 }
 
 fn service_for_path(path: &str) -> &'static str {
-    if path.contains("/delivery") {
+    if path.ends_with("/upload") || path.ends_with("/update") {
+        ""
+    } else if path.contains("/delivery") {
         compatibility::SERVICE_DELIVERY
     } else if path.contains("/products") || path.contains("/publish") {
         compatibility::SERVICE_ORDER_PAYMENT
@@ -274,6 +308,14 @@ pub struct DraftImage {
     pub image_id: String,
     pub position: usize,
     pub state: ImageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
 }
@@ -324,6 +366,14 @@ impl DraftState {
 pub struct UploadedImage {
     pub image_id: String,
     pub state: ImageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub width: u32,
+    #[serde(default)]
+    pub height: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -399,7 +449,8 @@ pub trait AdInputApi: Send + Sync {
         &self,
         draft_id: &str,
         etag: &str,
-        image_ids: &[String],
+        values: &Map<String, Value>,
+        images: &[UploadedImage],
     ) -> Result<DraftState, ApiError>;
     async fn category_predictions(
         &self,
@@ -449,31 +500,102 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
     }
 
     async fn draft_request(&self, request: HttpRequest) -> Result<DraftState, ApiError> {
+        let is_mutation = request.method.is_mutation();
         let response = self.json(request).await?;
-        let mut draft: DraftState = serde_json::from_value(response.body)
-            .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))?;
-        if let Some(etag) = response.etag {
-            draft.etag = etag;
+        if response.body_is_unparseable {
+            let mut error = unexpected_representation("receive_draft_state", &response);
+            if is_mutation {
+                error.code = "mutation.uncertain".to_owned();
+                error.message =
+                    "The draft mutation may have succeeded, but its resulting state is unknown"
+                        .to_owned();
+            }
+            return Err(error);
         }
-        Ok(draft)
+        normalize_draft_state(response.body, response.etag.as_deref()).map_err(|mut error| {
+            if is_mutation {
+                error.code = "mutation.uncertain".to_owned();
+                error.message =
+                    "The draft mutation may have succeeded, but its resulting state is unknown"
+                        .to_owned();
+                error.status = Some(response.status);
+            }
+            error
+        })
+    }
+
+    async fn observe_created_draft(
+        &self,
+        draft_id: &str,
+        completed_steps: &[&str],
+    ) -> Result<DraftState, ApiError> {
+        self.get_draft(draft_id).await.map_err(|mut error| {
+            error.details = Some(Box::new(json!({
+                "stage": "observe_created_draft",
+                "draft_id": draft_id,
+                "completed_steps": completed_steps,
+                "recovery_guidance": format!(
+                    "Inspect the draft with `tori draft show {draft_id}`; do not repeat creation"
+                )
+            })));
+            error
+        })
     }
 }
 
 #[allow(async_fn_in_trait)]
 impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     async fn create_draft(&self) -> Result<DraftState, ApiError> {
-        self.draft_request(HttpRequest::mutation(
+        let request = HttpRequest::mutation(
             Method::Post,
-            "/drafts",
-            RequestBody::Json(json!({ "type": "recommerce" })),
-        ))
-        .await
+            "/adinput/ad/withModel/recommerce",
+            RequestBody::Empty,
+        );
+        let response = self.transport.execute(request).await?;
+        if response.status == 303 {
+            let draft_id =
+                draft_id_from_location(response.location.as_deref()).ok_or_else(|| {
+                    uncertain_creation(&response, "redirect response did not identify a draft")
+                })?;
+            return self
+                .observe_created_draft(&draft_id, &["create_draft", "establish_identity"])
+                .await;
+        }
+        if !(200..300).contains(&response.status) {
+            return Err(ApiError::response(&response));
+        }
+        if response.body_is_unparseable {
+            return Err(uncertain_creation(
+                &response,
+                "successful response was not valid JSON",
+            ));
+        }
+
+        let body_id = draft_id_from_body(&response.body);
+        let location_id = draft_id_from_location(response.location.as_deref());
+        if body_id.is_some() && location_id.is_some() && body_id != location_id {
+            return Err(uncertain_creation(
+                &response,
+                "response body and Location identified different drafts",
+            ));
+        }
+        let draft_id = body_id.or(location_id).ok_or_else(|| {
+            uncertain_creation(&response, "successful response did not identify a draft")
+        })?;
+
+        if draft_id_from_body(&response.body).is_some() {
+            return normalize_draft_state(response.body, response.etag.as_deref());
+        }
+        self.observe_created_draft(&draft_id, &["create_draft", "establish_identity"])
+            .await
     }
 
     async fn get_draft(&self, draft_id: &str) -> Result<DraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
-        self.draft_request(HttpRequest::read(format!("/drafts/{draft_id}/with-model")))
-            .await
+        self.draft_request(HttpRequest::read(format!(
+            "/adinput/ad/withModel/{draft_id}"
+        )))
+        .await
     }
 
     async fn update_item(
@@ -484,8 +606,8 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     ) -> Result<DraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
         let mut request = HttpRequest::mutation(
-            Method::Patch,
-            format!("/drafts/{draft_id}/item"),
+            Method::Put,
+            format!("/adinput/ad/recommerce/{draft_id}/update"),
             RequestBody::Json(Value::Object(values.clone())),
         );
         request.if_match = Some(etag.to_owned());
@@ -528,33 +650,90 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         height: u32,
     ) -> Result<UploadedImage, ApiError> {
         validate_resource_id(draft_id, "draft")?;
+        let mime_type = if file_name.ends_with(".png") {
+            "image/png"
+        } else {
+            "image/jpeg"
+        };
         let response = self
             .json(HttpRequest::mutation(
                 Method::Post,
-                format!("/drafts/{draft_id}/images"),
+                format!("/adinput/ad/recommerce/{draft_id}/upload"),
                 RequestBody::Image {
                     bytes,
                     file_name: file_name.to_owned(),
+                    mime_type: mime_type.to_owned(),
                     width,
                     height,
                 },
             ))
             .await?;
-        serde_json::from_value(response.body)
-            .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))
+        let location = response
+            .location
+            .as_deref()
+            .or_else(|| response.body.get("location").and_then(Value::as_str))
+            .and_then(valid_image_location)
+            .ok_or_else(|| {
+                let mut error = unexpected_representation("upload_image", &response);
+                error.code = "mutation.uncertain".to_owned();
+                error.message =
+                    "Image upload succeeded without an authoritative image location".to_owned();
+                error
+            })?;
+        Ok(UploadedImage {
+            image_id: location.clone(),
+            state: ImageState::Processing,
+            url: Some(location),
+            width,
+            height,
+            mime_type: Some(mime_type.to_owned()),
+        })
     }
 
     async fn set_images(
         &self,
         draft_id: &str,
         etag: &str,
-        image_ids: &[String],
+        values: &Map<String, Value>,
+        images: &[UploadedImage],
     ) -> Result<DraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
+        let mut values = values.clone();
+        let mut image = Vec::with_capacity(images.len());
+        let mut multi_image = Vec::with_capacity(images.len());
+        for uploaded in images {
+            let url = uploaded
+                .url
+                .as_deref()
+                .and_then(valid_image_location)
+                .ok_or_else(|| {
+                    ApiError::new("draft.invalid_image", "Tori image location is invalid")
+                })?;
+            let path = url
+                .strip_prefix("https://img.tori.net/dynamic/default/")
+                .expect("validated image location has the canonical prefix");
+            let mime_type = uploaded.mime_type.as_deref().unwrap_or("image/jpeg");
+            image.push(json!({
+                "height": uploaded.height.to_string(),
+                "type": mime_type,
+                "uri": path,
+                "width": uploaded.width.to_string()
+            }));
+            multi_image.push(json!({
+                "description": "",
+                "height": uploaded.height,
+                "path": path,
+                "type": mime_type,
+                "url": url,
+                "width": uploaded.width
+            }));
+        }
+        values.insert("image".to_owned(), Value::Array(image));
+        values.insert("multi_image".to_owned(), Value::Array(multi_image));
         let mut request = HttpRequest::mutation(
             Method::Put,
-            format!("/drafts/{draft_id}/images/order"),
-            RequestBody::Json(json!({ "image_ids": image_ids })),
+            format!("/adinput/ad/recommerce/{draft_id}/update"),
+            RequestBody::Json(Value::Object(values)),
         );
         request.if_match = Some(etag.to_owned());
         self.draft_request(request).await
@@ -667,6 +846,155 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 }
 
+fn safe_content_type(value: &str) -> String {
+    value
+        .split(';')
+        .next()
+        .unwrap_or("unknown")
+        .trim()
+        .to_ascii_lowercase()
+}
+
+fn unexpected_representation(stage: &str, response: &HttpResponse) -> ApiError {
+    let mut error = ApiError::new(
+        "upstream.unexpected_response",
+        "Tori returned an unsupported response representation",
+    );
+    error.status = Some(response.status);
+    error.details = Some(Box::new(json!({
+        "stage": stage,
+        "status": response.status,
+        "content_type": response.content_type,
+    })));
+    error
+}
+
+fn uncertain_creation(response: &HttpResponse, reason: &str) -> ApiError {
+    let mut error = ApiError::new(
+        "mutation.uncertain",
+        "Draft creation may have succeeded, but its remote identity could not be established",
+    );
+    error.status = Some(response.status);
+    error.details = Some(Box::new(json!({
+        "stage": "create_draft",
+        "status": response.status,
+        "content_type": response.content_type,
+        "completed_steps": [],
+        "reason": reason,
+        "recovery_guidance": "Inspect drafts in Tori before continuing; do not repeat draft creation"
+    })));
+    error
+}
+
+fn draft_id_from_body(body: &Value) -> Option<String> {
+    let ad = body.get("ad").unwrap_or(body);
+    [ad.get("id"), ad.get("draft_id"), body.get("draft_id")]
+        .into_iter()
+        .flatten()
+        .find_map(|value| match value {
+            Value::String(value) if validate_resource_id(value, "draft").is_ok() => {
+                Some(value.clone())
+            }
+            Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
+}
+
+fn draft_id_from_location(location: Option<&str>) -> Option<String> {
+    let location = location?;
+    let path = if location.starts_with('/') {
+        location.to_owned()
+    } else {
+        let parsed = url::Url::parse(location).ok()?;
+        if parsed.scheme() != "https" || parsed.host_str()? != "apps-adinput.svc.tori.fi" {
+            return None;
+        }
+        parsed.path().to_owned()
+    };
+    let id = path
+        .strip_prefix("/adinput/ad/recommerce/")?
+        .trim_end_matches('/');
+    (!id.contains('/') && validate_resource_id(id, "draft").is_ok()).then(|| id.to_owned())
+}
+
+fn valid_image_location(location: &str) -> Option<String> {
+    let parsed = url::Url::parse(location).ok()?;
+    (parsed.scheme() == "https"
+        && parsed.host_str() == Some("img.tori.net")
+        && parsed.path().starts_with("/dynamic/default/")
+        && parsed.query().is_none()
+        && parsed.fragment().is_none())
+    .then(|| location.to_owned())
+}
+
+fn normalize_draft_state(body: Value, response_etag: Option<&str>) -> Result<DraftState, ApiError> {
+    if let Ok(mut legacy) = serde_json::from_value::<DraftState>(body.clone()) {
+        if let Some(etag) = response_etag {
+            legacy.etag = etag.to_owned();
+        }
+        return Ok(legacy);
+    }
+    let draft_id = draft_id_from_body(&body).ok_or_else(|| {
+        ApiError::new(
+            "upstream.unexpected_response",
+            "Tori draft response did not contain an authoritative identity",
+        )
+    })?;
+    let ad = body.get("ad").unwrap_or(&body);
+    let values = ad
+        .get("values")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let etag = response_etag
+        .or_else(|| ad.get("etag").and_then(Value::as_str))
+        .unwrap_or_default()
+        .to_owned();
+    let images = values
+        .get("multi_image")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(position, value)| {
+            let object = value.as_object()?;
+            let url = object.get("url").and_then(Value::as_str)?.to_owned();
+            Some(DraftImage {
+                image_id: url.clone(),
+                position,
+                state: ImageState::Ready,
+                url: Some(url),
+                width: object
+                    .get("width")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .unwrap_or_default(),
+                height: object
+                    .get("height")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .unwrap_or_default(),
+                mime_type: object
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                failure: None,
+            })
+        })
+        .collect();
+    Ok(DraftState {
+        draft_id,
+        etag,
+        values,
+        fields: Vec::new(),
+        options: Vec::new(),
+        required_fields: Vec::new(),
+        images,
+        cleared_fields: Vec::new(),
+        predictions: Vec::new(),
+    })
+}
+
 fn validate_resource_id(value: &str, resource: &str) -> Result<(), ApiError> {
     if value.is_empty()
         || value.len() > 128
@@ -722,11 +1050,29 @@ pub struct WorkflowError {
 
 impl WorkflowError {
     fn before_creation(error: ApiError) -> Self {
+        let recovery = error.details.as_deref().and_then(|details| {
+            let draft_id = details.get("draft_id")?.as_str()?.to_owned();
+            let completed_steps = details
+                .get("completed_steps")?
+                .as_array()?
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect();
+            Some(Recovery {
+                next_safe_actions: vec![format!("tori draft show {draft_id}")],
+                draft_id,
+                listing_id: None,
+                completed_steps,
+                retryable: true,
+                fresh_state: None,
+            })
+        });
         Self {
             code: error.code.clone(),
             message: error.message.clone(),
             source: Some(error),
-            recovery: None,
+            recovery,
             details: None,
         }
     }
@@ -860,7 +1206,8 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     .unwrap_or(Value::String(id)),
                 category => category,
             };
-            let category_values = Map::from_iter([("category".to_owned(), category)]);
+            let mut category_values = draft.values.clone();
+            category_values.insert("category".to_owned(), category);
             draft = self
                 .api
                 .update_item(&draft.draft_id, &draft.etag, &category_values)
@@ -871,9 +1218,11 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             completed.push("apply_category".to_owned());
         }
         if !values.is_empty() {
+            let mut merged_values = draft.values.clone();
+            merged_values.extend(values);
             draft = self
                 .api
-                .update_item(&draft.draft_id, &draft.etag, &values)
+                .update_item(&draft.draft_id, &draft.etag, &merged_values)
                 .await
                 .map_err(|error| {
                     WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
@@ -906,9 +1255,11 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .await
             .map_err(WorkflowError::before_creation)?;
         let mut completed = vec!["load_source_listing".to_owned(), "create_draft".to_owned()];
+        let mut copied_values = draft.values.clone();
+        copied_values.extend(seed.values);
         draft = self
             .api
-            .update_item(&draft.draft_id, &draft.etag, &seed.values)
+            .update_item(&draft.draft_id, &draft.etag, &copied_values)
             .await
             .map_err(|error| {
                 WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
@@ -918,7 +1269,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
 
         let mut ordered = Vec::new();
         for source in seed.images {
-            let (width, height) = image_dimensions(&source.bytes).map_err(|error| {
+            let image = sanitize_image(&source.bytes).map_err(|error| {
                 WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
                     .with_listing_id(listing_id)
             })?;
@@ -926,23 +1277,23 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .api
                 .upload_image(
                     &draft.draft_id,
-                    &source.file_name,
-                    source.bytes,
-                    width,
-                    height,
+                    image.file_name,
+                    image.bytes,
+                    image.width,
+                    image.height,
                 )
                 .await
                 .map_err(|error| {
                     WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
                         .with_listing_id(listing_id)
                 })?;
-            ordered.push(uploaded.image_id);
+            ordered.push(uploaded);
             completed.push(format!("upload_image:{}", ordered.len() - 1));
         }
         if !ordered.is_empty() {
             draft = self
                 .api
-                .set_images(&draft.draft_id, &draft.etag, &ordered)
+                .set_images(&draft.draft_id, &draft.etag, &draft.values, &ordered)
                 .await
                 .map_err(|error| {
                     WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
@@ -985,7 +1336,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
         let completed = vec!["fetch_draft".to_owned()];
-        match self.api.update_item(draft_id, &current.etag, patch).await {
+        let mut values = current.values.clone();
+        values.extend(patch.clone());
+        match self.api.update_item(draft_id, &current.etag, &values).await {
             Ok(state) => Ok(state),
             Err(error) if error.status == Some(412) => {
                 let fresh = self.api.get_draft(draft_id).await.map_err(|fresh_error| {
@@ -1037,9 +1390,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
     ) -> Result<DraftState, WorkflowError> {
         let mut existing = state.images.iter().collect::<Vec<_>>();
         existing.sort_by_key(|image| image.position);
-        let mut ordered: Vec<String> = existing
+        let mut ordered: Vec<UploadedImage> = existing
             .into_iter()
-            .map(|image| image.image_id.clone())
+            .map(uploaded_from_draft_image)
             .collect();
         for path in paths {
             let path = path.as_ref();
@@ -1051,26 +1404,28 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     false,
                 )
             })?;
-            let (width, height) = image_dimensions(&bytes).map_err(|error| {
+            let image = sanitize_image(&bytes).map_err(|error| {
                 WorkflowError::for_draft(&state.draft_id, completed, error, false)
             })?;
-            let file_name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("image");
             let uploaded = self
                 .api
-                .upload_image(&state.draft_id, file_name, bytes, width, height)
+                .upload_image(
+                    &state.draft_id,
+                    image.file_name,
+                    image.bytes,
+                    image.width,
+                    image.height,
+                )
                 .await
                 .map_err(|error| {
                     WorkflowError::for_draft(&state.draft_id, completed, error, false)
                 })?;
-            ordered.push(uploaded.image_id);
+            ordered.push(uploaded);
             completed.push(format!("upload_image:{}", ordered.len() - 1));
         }
         let updated = self
             .api
-            .set_images(&state.draft_id, &state.etag, &ordered)
+            .set_images(&state.draft_id, &state.etag, &state.values, &ordered)
             .await
             .map_err(|error| WorkflowError::for_draft(&state.draft_id, completed, error, false))?;
         completed.push("attach_images".to_owned());
@@ -1093,12 +1448,12 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .filter(|image| !remove.contains(&image.image_id))
             .collect::<Vec<_>>();
         retained.sort_by_key(|image| image.position);
-        let ordered: Vec<String> = retained
+        let ordered: Vec<UploadedImage> = retained
             .into_iter()
-            .map(|image| image.image_id.clone())
+            .map(uploaded_from_draft_image)
             .collect();
         self.api
-            .set_images(draft_id, &state.etag, &ordered)
+            .set_images(draft_id, &state.etag, &state.values, &ordered)
             .await
             .map_err(|error| {
                 WorkflowError::for_draft(draft_id, &["fetch_draft".to_owned()], error, false)
@@ -1295,10 +1650,50 @@ fn image_processing_timeout(draft_id: &str, completed: &[String]) -> WorkflowErr
     WorkflowError::for_draft(draft_id, completed, error, true)
 }
 
-fn image_dimensions(bytes: &[u8]) -> Result<(u32, u32), ApiError> {
-    let image = image::load_from_memory(bytes)
-        .map_err(|error| ApiError::new("draft.invalid_image", error.to_string()))?;
-    Ok((image.width(), image.height()))
+struct SanitizedImage {
+    bytes: Vec<u8>,
+    file_name: &'static str,
+    width: u32,
+    height: u32,
+}
+
+fn sanitize_image(bytes: &[u8]) -> Result<SanitizedImage, ApiError> {
+    let format = image::guess_format(bytes)
+        .map_err(|_| ApiError::new("draft.invalid_image", "Image must be JPEG or PNG"))?;
+    let (output_format, file_name) = match format {
+        image::ImageFormat::Jpeg => (image::ImageFormat::Jpeg, "image.jpg"),
+        image::ImageFormat::Png => (image::ImageFormat::Png, "image.png"),
+        _ => {
+            return Err(ApiError::new(
+                "draft.invalid_image",
+                "Image must be JPEG or PNG",
+            ));
+        }
+    };
+    let image = image::load_from_memory_with_format(bytes, format)
+        .map_err(|_| ApiError::new("draft.invalid_image", "Image data is invalid"))?;
+    let (width, height) = (image.width(), image.height());
+    let mut output = Cursor::new(Vec::new());
+    image
+        .write_to(&mut output, output_format)
+        .map_err(|_| ApiError::new("draft.invalid_image", "Image conversion failed"))?;
+    Ok(SanitizedImage {
+        bytes: output.into_inner(),
+        file_name,
+        width,
+        height,
+    })
+}
+
+fn uploaded_from_draft_image(image: &DraftImage) -> UploadedImage {
+    UploadedImage {
+        image_id: image.image_id.clone(),
+        state: image.state.clone(),
+        url: image.url.clone().or_else(|| Some(image.image_id.clone())),
+        width: image.width,
+        height: image.height,
+        mime_type: image.mime_type.clone(),
+    }
 }
 
 fn missing_required_fields(state: &DraftState) -> Vec<String> {

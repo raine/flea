@@ -415,7 +415,7 @@ fn workflow_error(error: WorkflowError) -> AppError {
     let exit_class = match error.code.as_str() {
         "draft.conflict" => ExitClass::Conflict,
         "draft.validation_failed" | "draft.invalid_image" => ExitClass::Validation,
-        "draft.image_processing" => ExitClass::Partial,
+        "draft.image_processing" | "mutation.uncertain" => ExitClass::Partial,
         _ if has_remote_mutation => ExitClass::Partial,
         _ => ExitClass::Upstream,
     };
