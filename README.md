@@ -25,17 +25,23 @@ command output, and the bundled skill.
 
 ## Installation
 
-Install Flea from a source checkout with a Rust toolchain that supports edition
-2024:
+Install the latest release:
 
 ```sh
-cargo install --locked --path .
+curl -fsSL https://raw.githubusercontent.com/raine/flea/main/scripts/install | bash
 ```
 
-Or run the local Nix flake:
+Or install with Homebrew on macOS or Linux:
 
 ```sh
-nix run . -- --version
+brew install raine/flea/flea
+```
+
+Other options:
+
+```sh
+cargo install --git https://github.com/raine/flea --locked
+nix profile install github:raine/flea
 ```
 
 Verify the installation:
