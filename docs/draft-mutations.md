@@ -37,15 +37,17 @@ dedicated delivery composer endpoint. The order is:
 4. `trade_type`
 5. `price`
 6. `postal_code`
-7. `attributes`
-8. Other top-level composer fields in lexical order
-9. `delivery`
+7. Optional source-backed composer fields from `attributes`, in lexical order
+8. `delivery`
 
 Image upload and attachment follow the requested field groups during creation.
 Category is first because its composer response supplies the field schema for
 the selected category. Trade type precedes price because the dedicated sale
-price mutation requires sale intent. Flea validates requested values against
-source-backed field types and options before sending the applicable groups.
+price mutation requires sale intent. Each `attributes` entry becomes a separate
+composer field mutation. Flea accepts it only when the refreshed composer marks
+the field optional and exposes a supported type. Select values must match the
+source-backed options. Fields absent from the composer and composer fields that
+Flea cannot safely encode have distinct validation codes.
 
 A successful group is committed independently. A create or update command with
 multiple fields is therefore ordered but is not an all-or-nothing transaction.

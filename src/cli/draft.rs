@@ -79,6 +79,9 @@ pub struct ListingInputArgs {
     /// Seller postal code.
     #[arg(long)]
     pub postal_code: Option<String>,
+    /// Condition machine value returned by draft field discovery.
+    #[arg(long, value_name = "VALUE")]
+    pub condition: Option<String>,
     /// Delivery machine value returned by draft inspection.
     #[arg(long, value_name = "VALUE")]
     pub delivery: Vec<String>,
@@ -99,7 +102,7 @@ pub enum DraftCommand {
     )]
     Create {
         /// Authenticated seller listing ID to copy into a fresh draft.
-        #[arg(long, conflicts_with_all = ["category", "title", "description", "description_file", "price", "trade_type", "postal_code", "delivery", "image", "input"])]
+        #[arg(long, conflicts_with_all = ["category", "title", "description", "description_file", "price", "trade_type", "postal_code", "condition", "delivery", "image", "input"])]
         from_listing: Option<String>,
         #[command(flatten)]
         values: ListingInputArgs,
@@ -321,6 +324,7 @@ pub fn collect_input_with_reader(
         "postal_code",
         args.postal_code.map(Value::String),
     )?;
+    insert_attribute_flag(&mut values, "condition", args.condition.map(Value::String))?;
     insert_flag(
         &mut values,
         "delivery",
@@ -507,6 +511,26 @@ fn insert_flag(
         }
         values.insert(field.to_owned(), value);
     }
+    Ok(())
+}
+
+fn insert_attribute_flag(
+    values: &mut Map<String, Value>,
+    field: &'static str,
+    value: Option<Value>,
+) -> Result<(), AppError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    let attributes = values
+        .entry("attributes".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| input_error("input field `attributes` must be an object"))?;
+    if attributes.contains_key(field) {
+        return Err(duplicate_field(field));
+    }
+    attributes.insert(field.to_owned(), value);
     Ok(())
 }
 
@@ -972,6 +996,7 @@ mod tests {
             price: None,
             trade_type: None,
             postal_code: None,
+            condition: None,
             delivery: Vec::new(),
             image: Vec::new(),
             input: Some(PathBuf::from("-")),
@@ -990,6 +1015,33 @@ mod tests {
         assert_eq!(collected.values["title"], "Chair");
         assert_eq!(collected.values["delivery"], json!(["pickup", "shipping"]));
         assert_eq!(collected.values["attributes"]["material"], "10");
+    }
+
+    #[test]
+    fn condition_flag_uses_the_optional_attribute_namespace() {
+        let mut args = empty_args();
+        args.condition = Some("2".to_owned());
+
+        let collected = collect_input_with_reader(args, &mut Cursor::new(b"{}")).unwrap();
+
+        assert_eq!(collected.values["attributes"]["condition"], "2");
+    }
+
+    #[test]
+    fn condition_flag_conflicts_with_json_attribute() {
+        let mut args = empty_args();
+        args.condition = Some("2".to_owned());
+
+        let error = collect_input_with_reader(
+            args,
+            &mut Cursor::new(br#"{"attributes":{"condition":"3"}}"#),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.details.as_deref(),
+            Some(&json!({ "duplicate_field": "condition" }))
+        );
     }
 
     #[test]

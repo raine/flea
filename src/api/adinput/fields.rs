@@ -63,7 +63,11 @@ fn prices_equal(left: &Value, right: &Value) -> bool {
     }
 }
 
-pub(super) fn ordered_field_mutations(values: Map<String, Value>) -> Vec<FieldMutation> {
+pub(super) fn ordered_field_mutations(mut values: Map<String, Value>) -> Vec<FieldMutation> {
+    let attributes = values
+        .remove("attributes")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
     let order = [
         "category",
         "title",
@@ -71,10 +75,10 @@ pub(super) fn ordered_field_mutations(values: Map<String, Value>) -> Vec<FieldMu
         "trade_type",
         "price",
         "postal_code",
-        "attributes",
         "delivery",
     ];
     let mut values = values.into_iter().collect::<Vec<_>>();
+    values.extend(attributes);
     values.sort_by(|(left, _), (right, _)| {
         let rank = |key: &str| {
             if key == "delivery" {
@@ -106,19 +110,10 @@ pub(super) fn ordered_field_mutations(values: Map<String, Value>) -> Vec<FieldMu
                     }
                 })
                 .collect();
-            let fields = if key == "attributes" {
-                value
-                    .as_object()
-                    .filter(|attributes| !attributes.is_empty())
-                    .map(|attributes| {
-                        attributes
-                            .keys()
-                            .map(|field| format!("attributes.{field}"))
-                            .collect()
-                    })
-                    .unwrap_or_else(|| vec![key.clone()])
-            } else {
+            let fields = if order.contains(&key.as_str()) {
                 vec![key.clone()]
+            } else {
+                vec![format!("attributes.{key}")]
             };
             let kind = match key.as_str() {
                 "price" => FieldMutationKind::Price,
@@ -159,11 +154,7 @@ pub(super) fn pending_fields(
         .collect()
 }
 
-pub(super) fn field_is_persisted(
-    state: &DraftState,
-    mutation: &FieldMutation,
-    field: &str,
-) -> bool {
+pub(super) fn field_is_persisted(state: &DraftState, mutation: &FieldMutation) -> bool {
     if mutation.kind == FieldMutationKind::Delivery {
         let requested = delivery_values(&mutation.value).unwrap_or_default();
         return state
@@ -171,21 +162,11 @@ pub(super) fn field_is_persisted(
             .as_ref()
             .is_some_and(|delivery| delivery.selected == requested);
     }
-    if mutation.key == "attributes" {
-        let Some(attribute) = field.strip_prefix("attributes.") else {
-            return state.values.get(&mutation.key) == Some(&mutation.value);
-        };
-        return state
-            .values
-            .get("attributes")
-            .and_then(Value::as_object)
-            .and_then(|attributes| attributes.get(attribute))
-            == mutation
-                .value
-                .as_object()
-                .and_then(|attributes| attributes.get(attribute));
+    let observed = state.values.get(&mutation.key);
+    if mutation.value.is_null() {
+        return observed.is_none_or(Value::is_null);
     }
-    let Some(observed) = state.values.get(&mutation.key) else {
+    let Some(observed) = observed else {
         return false;
     };
     match mutation.key.as_str() {
@@ -204,7 +185,7 @@ pub(super) fn classify_fields(
         .fields
         .iter()
         .cloned()
-        .partition(|field| field_is_persisted(state, mutation, field))
+        .partition(|_| field_is_persisted(state, mutation))
 }
 
 pub(super) fn retry_field_action(draft_id: &str, fields: &[String]) -> String {
@@ -272,30 +253,45 @@ pub(super) fn schema_validation_issues(
     state: &DraftState,
     mutation: &FieldMutation,
 ) -> Vec<ValidationIssue> {
-    let requested = if mutation.key == "attributes" {
-        mutation
-            .value
-            .as_object()
-            .map(|attributes| {
-                attributes
-                    .iter()
-                    .map(|(key, value)| (key.as_str(), value))
-                    .collect::<Vec<_>>()
+    let input_field = mutation
+        .fields
+        .first()
+        .map(String::as_str)
+        .unwrap_or(&mutation.key);
+    let optional = input_field.starts_with("attributes.");
+    let Some(field) = state.fields.iter().find(|field| field.key == mutation.key) else {
+        return optional
+            .then(|| ValidationIssue {
+                field: input_field.to_owned(),
+                code: "absent_in_composer".to_owned(),
+                message: format!(
+                    "field is absent from this category's composer; inspect with `flea draft show {} --include-fields`",
+                    state.draft_id
+                ),
+                source: Some("listing_composer".to_owned()),
+                raw: None,
             })
-            .unwrap_or_else(|| vec![(mutation.key.as_str(), &mutation.value)])
-    } else {
-        vec![(mutation.key.as_str(), &mutation.value)]
+            .into_iter()
+            .collect();
     };
-    requested
-        .into_iter()
-        .filter_map(|(key, value)| {
-            let field = state.fields.iter().find(|field| field.key == key)?;
-            let mut issue = schema_validation_issue(state, field, value)?;
-            if mutation.key == "attributes" {
-                issue.field = format!("attributes.{}", issue.field);
-            }
-            Some(issue)
+    if optional
+        && (field.requirement != Requirement::Optional
+            || matches!(field.field_type, FieldType::Unknown(_)))
+    {
+        return vec![ValidationIssue {
+            field: input_field.to_owned(),
+            code: "unsupported_by_cli".to_owned(),
+            message: "composer field is not a supported optional input type".to_owned(),
+            source: Some("listing_composer".to_owned()),
+            raw: None,
+        }];
+    }
+    schema_validation_issue(state, field, &mutation.value)
+        .map(|mut issue| {
+            issue.field = input_field.to_owned();
+            issue
         })
+        .into_iter()
         .collect()
 }
 
@@ -347,11 +343,38 @@ pub(super) fn schema_validation_issue(
                     .any(|option| select_values_equal(&field.key, value, option))
             })
         {
+            let options = state
+                .options
+                .iter()
+                .filter(|option| option.field == field.key)
+                .take(13)
+                .collect::<Vec<_>>();
+            let message = if !field.options_truncated && options.len() <= 12 {
+                let allowed = options
+                    .iter()
+                    .map(|option| {
+                        let value = option
+                            .value
+                            .as_str()
+                            .map_or_else(|| option.value.to_string(), str::to_owned);
+                        format!("{value} ({})", option.label)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "value is not present in the source-backed field options; allowed values: {allowed}"
+                )
+            } else {
+                format!(
+                    "value is not present in the source-backed field options; inspect with `flea draft show {} --include-options {}`",
+                    state.draft_id, field.key
+                )
+            };
             return Some(ValidationIssue {
                 field: field.key.clone(),
                 code: "invalid_option".to_owned(),
-                message: "value is not present in the source-backed field options".to_owned(),
-                source: Some("local_schema".to_owned()),
+                message,
+                source: Some("listing_composer".to_owned()),
                 raw: None,
             });
         }
@@ -789,4 +812,52 @@ pub(super) fn set_recovery_images(
     recovery.images_omitted = images.len().saturating_sub(RECOVERY_IMAGE_LIMIT);
     images.truncate(RECOVERY_IMAGE_LIMIT);
     recovery.images = images;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn common_condition_machine_values_match_the_source_options() {
+        let field = Field::new(
+            "condition",
+            "Kunto",
+            FieldType::Select,
+            Requirement::Optional,
+            None,
+            "attributes",
+        );
+        let options = [
+            ("1", "Uusi"),
+            ("2", "Kuin uusi"),
+            ("3", "Hyvä"),
+            ("4", "Kohtalainen"),
+            ("5", "Vaatii korjausta"),
+        ]
+        .into_iter()
+        .map(|(value, label)| FieldOption {
+            field: "condition".to_owned(),
+            value: json!(value),
+            label: label.to_owned(),
+        })
+        .collect();
+        let state = DraftState {
+            draft_id: "draft-1".to_owned(),
+            etag: "etag".to_owned(),
+            revision: None,
+            values: Map::new(),
+            fields: vec![field.clone()],
+            options,
+            required_fields: Vec::new(),
+            images: Vec::new(),
+            cleared_fields: Vec::new(),
+            predictions: Vec::new(),
+            delivery: None,
+        };
+
+        for value in ["1", "2", "3", "4", "5"] {
+            assert!(schema_validation_issue(&state, &field, &json!(value)).is_none());
+        }
+    }
 }

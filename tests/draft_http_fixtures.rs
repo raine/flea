@@ -3742,6 +3742,228 @@ fn delivery_fixture() -> Value {
     .unwrap()
 }
 
+fn remove_composer_field(fixture: &mut Value, field: &str) {
+    fixture["ad"]["values"]
+        .as_object_mut()
+        .unwrap()
+        .remove(field);
+    for section in fixture["model"]["sections"].as_array_mut().unwrap() {
+        section["content"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|widget| widget["id"] != field);
+    }
+}
+
+#[tokio::test]
+async fn category_specific_condition_is_source_validated_and_persisted() {
+    let option_ids = ["46".to_owned(), "258".to_owned()];
+    let mut initial = composer_with_category_options("258", &option_ids);
+    let mut category_changed = composer_with_category_options("46", &option_ids);
+    let mut condition_changed = category_changed.clone();
+    for fixture in [&mut initial, &mut category_changed, &mut condition_changed] {
+        fixture["model"]["sections"][2]["content"][1]["exclusive-dependencies"]["category"] =
+            json!(["46", "258"]);
+    }
+    condition_changed["ad"]["values"]["condition"] = json!("2");
+    let transport = FixtureTransport::new([
+        response(200, initial),
+        category_taxonomy("46", true),
+        response(200, category_changed),
+        response(200, condition_changed),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let result = workflow
+        .update(
+            "46000000",
+            &Map::from_iter([
+                ("category".to_owned(), json!("46")),
+                ("attributes".to_owned(), json!({ "condition": "2" })),
+            ]),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.draft.values["condition"], "2");
+    assert_eq!(
+        result.requested_fields,
+        ["attributes.condition", "category"]
+    );
+    assert!(
+        result
+            .persisted_fields
+            .contains(&"attributes.condition".to_owned())
+    );
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 4);
+    let RequestBody::Json(condition_update) = &requests[3].body else {
+        panic!("expected condition composer update")
+    };
+    assert_eq!(condition_update["condition"], "2");
+    assert!(condition_update.get("attributes").is_none());
+}
+
+#[tokio::test]
+async fn invalid_condition_reports_source_backed_allowed_values_before_mutation() {
+    let transport = FixtureTransport::new([response(200, composer_fixture())]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "46000000",
+            &Map::from_iter([("attributes".to_owned(), json!({ "condition": "99" }))]),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "draft.validation_failed");
+    let details = error.details.unwrap();
+    assert_eq!(details["field_errors"][0]["field"], "attributes.condition");
+    assert_eq!(details["field_errors"][0]["code"], "invalid_option");
+    let message = details["field_errors"][0]["message"].as_str().unwrap();
+    assert!(message.contains("2 (Kuin uusi)"));
+    assert_eq!(transport.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn absent_optional_field_is_distinct_from_an_unsupported_field() {
+    let mut fixture = composer_fixture();
+    remove_composer_field(&mut fixture, "condition");
+    let transport = FixtureTransport::new([response(200, fixture)]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "46000000",
+            &Map::from_iter([("attributes".to_owned(), json!({ "condition": "2" }))]),
+        )
+        .await
+        .unwrap_err();
+
+    let details = error.details.unwrap();
+    assert_eq!(details["field_errors"][0]["code"], "absent_in_composer");
+    assert_eq!(details["field_errors"][0]["source"], "listing_composer");
+    assert_eq!(transport.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn unrecognized_optional_field_type_is_rejected_as_unsupported() {
+    let mut fixture = composer_fixture();
+    fixture["model"]["sections"][2]["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "future_attribute",
+            "label": "Future attribute",
+            "required": false,
+            "type": "future-widget"
+        }));
+    let transport = FixtureTransport::new([response(200, fixture)]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "46000000",
+            &Map::from_iter([(
+                "attributes".to_owned(),
+                json!({ "future_attribute": "opaque" }),
+            )]),
+        )
+        .await
+        .unwrap_err();
+
+    let details = error.details.unwrap();
+    assert_eq!(details["field_errors"][0]["code"], "unsupported_by_cli");
+    assert_eq!(transport.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn category_change_revalidates_pending_optional_fields() {
+    let option_ids = ["258".to_owned(), "999".to_owned()];
+    let initial = composer_with_category_options("258", &option_ids);
+    let mut changed = composer_with_category_options("999", &option_ids);
+    remove_composer_field(&mut changed, "condition");
+    let transport = FixtureTransport::new([
+        response(200, initial),
+        category_taxonomy("999", true),
+        response(200, changed),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow
+        .update(
+            "46000000",
+            &Map::from_iter([
+                ("category".to_owned(), json!("999")),
+                ("attributes".to_owned(), json!({ "condition": "2" })),
+            ]),
+        )
+        .await
+        .unwrap_err();
+
+    let details = error.details.unwrap();
+    assert_eq!(details["field_errors"][0]["code"], "absent_in_composer");
+    assert_eq!(transport.requests().len(), 3);
+}
+
+#[tokio::test]
+async fn generic_optional_composer_field_can_be_changed_and_cleared() {
+    let mut initial = composer_fixture();
+    initial["model"]["sections"][2]["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id": "material",
+            "label": "Materiaali",
+            "required": false,
+            "type": "simple",
+            "sub-type": "string"
+        }));
+    let mut changed = initial.clone();
+    changed["ad"]["values"]["material"] = json!("wool");
+    let mut cleared = changed.clone();
+    cleared["ad"]["values"]
+        .as_object_mut()
+        .unwrap()
+        .remove("material");
+    let transport = FixtureTransport::new([
+        response(200, initial),
+        response(200, changed.clone()),
+        response(200, changed),
+        response(200, cleared),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let changed = workflow
+        .update(
+            "46000000",
+            &Map::from_iter([("attributes".to_owned(), json!({ "material": "wool" }))]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed.draft.values["material"], "wool");
+
+    let cleared = workflow
+        .update(
+            "46000000",
+            &Map::from_iter([("attributes".to_owned(), json!({ "material": null }))]),
+        )
+        .await
+        .unwrap();
+    assert!(cleared.draft.values.get("material").is_none());
+    assert!(
+        cleared
+            .persisted_fields
+            .contains(&"attributes.material".to_owned())
+    );
+    let requests = transport.requests();
+    let RequestBody::Json(clear_update) = &requests[3].body else {
+        panic!("expected optional field clear")
+    };
+    assert!(clear_update["material"].is_null());
+}
+
 #[tokio::test]
 async fn source_observed_composer_exposes_required_fields_price_and_revision() {
     let api = HttpAdInputApi::new(FixtureTransport::new([response(200, composer_fixture())]));

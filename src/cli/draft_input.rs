@@ -15,6 +15,8 @@ use super::draft::CollectedInput;
 const TITLE_MAX_CHARS: usize = 100;
 const DESCRIPTION_MAX_CHARS: usize = 10_000;
 const ATTRIBUTES_MAX_BYTES: usize = 32 * 1024;
+const ATTRIBUTES_MAX_COUNT: usize = 32;
+const ATTRIBUTE_ARRAY_MAX_VALUES: usize = 32;
 const DELIVERY_MAX_VALUES: usize = 8;
 const IMAGE_MAX_COUNT: usize = 12;
 
@@ -161,6 +163,7 @@ pub fn preview(
             "price": structured_price,
             "trade_type": normalized.values.get("trade_type"),
             "postal_code": normalized.values.get("postal_code"),
+            "attributes": normalized.values.get("attributes"),
             "delivery_intent": delivery_methods(normalized.values.get("delivery")),
             "category_machine_value": category_machine_value,
         },
@@ -281,20 +284,46 @@ fn normalize_values(mut values: Map<String, Value>) -> Result<Map<String, Value>
 
     if let Some(attributes) = values.get("attributes") {
         match attributes {
-            Value::Object(_) => {
+            Value::Object(attributes) => {
                 let byte_len =
                     serde_json::to_vec(attributes).map_or(usize::MAX, |value| value.len());
-                if byte_len > ATTRIBUTES_MAX_BYTES {
+                if attributes.len() > ATTRIBUTES_MAX_COUNT {
+                    issues.insert(
+                        "attributes".to_owned(),
+                        format!("at most {ATTRIBUTES_MAX_COUNT} optional fields are accepted"),
+                    );
+                } else if byte_len > ATTRIBUTES_MAX_BYTES {
                     issues.insert(
                         "attributes".to_owned(),
                         "attribute data exceeds the 32 KiB local limit".to_owned(),
                     );
-                } else if contains_unsafe_metadata(attributes) {
+                } else if contains_unsafe_metadata(&Value::Object(attributes.clone())) {
                     issues.insert(
                         "attributes".to_owned(),
                         "attribute keys must not contain credentials or private metadata"
                             .to_owned(),
                     );
+                }
+                for (key, value) in attributes {
+                    if !attribute_identifier(key) {
+                        issues.insert(
+                            format!("attributes.{key}"),
+                            "expected a safe composer field identifier".to_owned(),
+                        );
+                    } else if dedicated_input_field(key) {
+                        issues.insert(
+                            format!("attributes.{key}"),
+                            "field has dedicated draft input and cannot use the optional namespace"
+                                .to_owned(),
+                        );
+                    } else if !bounded_attribute_value(value) {
+                        issues.insert(
+                            format!("attributes.{key}"),
+                            format!(
+                                "expected null, a scalar value, or at most {ATTRIBUTE_ARRAY_MAX_VALUES} scalar values"
+                            ),
+                        );
+                    }
                 }
             }
             _ => {
@@ -439,6 +468,47 @@ fn normalize_delivery(delivery: &mut Value) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn attribute_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn dedicated_input_field(value: &str) -> bool {
+    matches!(
+        value,
+        "attributes"
+            | "category"
+            | "delivery"
+            | "description"
+            | "image"
+            | "postal_code"
+            | "price"
+            | "title"
+            | "trade_type"
+    )
+}
+
+fn bounded_attribute_value(value: &Value) -> bool {
+    let scalar = |value: &Value| match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => true,
+        Value::String(value) => {
+            !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
+        }
+        _ => false,
+    };
+    match value {
+        Value::Array(values) => {
+            !values.is_empty()
+                && values.len() <= ATTRIBUTE_ARRAY_MAX_VALUES
+                && values.iter().all(scalar)
+        }
+        value => scalar(value),
+    }
 }
 
 fn semantic_machine_value(value: &str) -> bool {

@@ -27,6 +27,37 @@ Preview never creates a draft or uploads an image. A successful preview means
 that the input passed Flea's local checks. It does not mean that Tori will accept
 or publish the listing.
 
+## Optional composer fields
+
+Condition has a dedicated flag that accepts a composer machine value:
+
+```sh
+flea draft create --category 46 --condition 2 --input listing.json
+```
+
+Discover the valid value from an existing draft before setting it:
+
+```sh
+flea draft show DRAFT_ID --include-options condition
+```
+
+Other category-specific optional fields use the bounded `attributes` namespace
+in JSON input:
+
+```json
+{
+  "attributes": {
+    "material": "10"
+  }
+}
+```
+
+Flea applies category first, refreshes the composer, and requires every
+attribute key to name an optional composer field with a supported type. Select
+values must match that composer's machine values. Use JSON `null` to clear a
+persisted optional field. Local preview preserves these inputs and identifies
+composer validation as unverifiable because it has no draft model.
+
 ## Read-only category enrichment
 
 Add `--verify-category` to query the authenticated category taxonomy:

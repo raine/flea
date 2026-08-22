@@ -757,7 +757,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                         Ok(_) => {
                             completed.push(mutation.step.clone());
                             match self.api.get_draft(&draft.draft_id).await {
-                                Ok(fresh) if field_is_persisted(&fresh, mutation, "price") => {
+                                Ok(fresh) if field_is_persisted(&fresh, mutation) => {
                                     diagnostics::workflow_step(&context, "completed");
                                     completed.push("observe_price".to_owned());
                                     progress.persisted.push("price".to_owned());
@@ -1333,7 +1333,21 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 None,
             )
             .await?;
-        let mut requested_fields = patch.keys().cloned().collect::<Vec<_>>();
+        let mut requested_fields = patch
+            .iter()
+            .flat_map(|(key, value)| {
+                if key == "attributes" {
+                    value
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .map(|(attribute, _)| format!("attributes.{attribute}"))
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![key.clone()]
+                }
+            })
+            .collect::<Vec<_>>();
         requested_fields.sort();
         Ok(UpdateResult {
             etag_changed: applied.draft.etag != current.etag,

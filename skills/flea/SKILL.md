@@ -19,6 +19,8 @@ JSON. Run `flea <command> --help` for current syntax, filters, and examples.
 - Inspect the returned draft or listing after a mutation. Remote state is
   authoritative.
 - A field cannot appear in both flags and `--input` JSON.
+- Optional category fields use the bounded `attributes` object in input JSON.
+  Every key and value must match the selected draft's composer model.
 - Publish, dispose, and delete act immediately without confirmation. Run them
   only when the user explicitly requests them.
 
@@ -70,8 +72,14 @@ flea draft validate DRAFT_ID
 
 Preview checks local input without creating a draft. Add `--verify-category` to
 check the category. `draft validate` authoritatively checks an existing draft's
-publication readiness. Request `--include-fields` or `--include-options FIELD`
-from `draft show` only when needed.
+publication readiness.
+
+Discover optional fields with `draft show DRAFT_ID --include-fields` and select
+machine values with `--include-options FIELD`. Set condition with
+`draft update DRAFT_ID --condition VALUE`. Set other optional fields under
+`attributes` in input JSON, and use JSON `null` to clear one. Flea rejects
+fields absent from the selected category and revalidates them after a category
+change.
 
 Publish with the exact validated revision:
 
