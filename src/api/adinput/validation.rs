@@ -207,6 +207,11 @@ fn validate_publication_category(
         (ComposerModelStatus::Available, Some(field)) if field.status == FieldStatus::Invalid => {
             Some(false)
         }
+        (ComposerModelStatus::Available, Some(field)) if !field.validation_options.is_empty() => {
+            Some(field.validation_options.iter().any(|option| {
+                values_semantically_equal(category_value.expect("category value"), option)
+            }))
+        }
         (ComposerModelStatus::Available, Some(_)) if composer_option.is_some() => Some(true),
         (ComposerModelStatus::Available, Some(field))
             if field.option_count > 0 && !field.options_truncated =>

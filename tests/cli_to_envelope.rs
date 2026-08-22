@@ -746,6 +746,16 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
     let client = MockClient::with_responses([
         response(StatusCode::CREATED, draft_state("one")),
         response(
+            StatusCode::OK,
+            json!({
+                "categories": [{
+                    "id": "chairs",
+                    "label": "Chairs",
+                    "isSelectable": true
+                }]
+            }),
+        ),
+        response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({ "message": "category service unavailable" }),
         ),

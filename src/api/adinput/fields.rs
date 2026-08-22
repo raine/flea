@@ -1,4 +1,4 @@
-use super::{images::*, recovery::*, validation::*, *};
+use super::{images::*, normalization::values_semantically_equal, recovery::*, validation::*, *};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FieldMutationKind {
@@ -334,30 +334,25 @@ pub(super) fn schema_validation_issue(
         });
     }
     if matches!(field.field_type, FieldType::Select | FieldType::MultiSelect) {
-        let allowed = state
-            .options
-            .iter()
-            .filter(|option| option.field == field.key)
-            .filter_map(|option| match &option.value {
-                Value::String(value) => Some(value.clone()),
-                Value::Number(value) => Some(value.to_string()),
-                Value::Bool(value) => Some(value.to_string()),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
+        let allowed = if field.validation_options.is_empty() {
+            state
+                .options
+                .iter()
+                .filter(|option| option.field == field.key)
+                .map(|option| &option.value)
+                .collect::<Vec<_>>()
+        } else {
+            field.validation_options.iter().collect::<Vec<_>>()
+        };
         let supplied = value
             .as_array()
             .map(|values| values.iter().collect::<Vec<_>>())
             .unwrap_or_else(|| vec![value]);
         if !allowed.is_empty()
             && supplied.iter().any(|value| {
-                let candidate = match value {
-                    Value::String(value) => Some(value.clone()),
-                    Value::Number(value) => Some(value.to_string()),
-                    Value::Bool(value) => Some(value.to_string()),
-                    _ => None,
-                };
-                candidate.is_none_or(|value| !allowed.contains(value.as_str()))
+                !allowed
+                    .iter()
+                    .any(|allowed| values_semantically_equal(value, allowed))
             })
         {
             return Some(ValidationIssue {
@@ -370,6 +365,99 @@ pub(super) fn schema_validation_issue(
         }
     }
     None
+}
+
+pub(super) fn category_validation_issues(
+    state: &DraftState,
+    mutation: &FieldMutation,
+    categories: &[PublicationCategory],
+) -> Vec<ValidationIssue> {
+    let category_id = match &mutation.value {
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    };
+    let Some(category_id) = category_id else {
+        return vec![ValidationIssue {
+            field: "category".to_owned(),
+            code: "invalid_type".to_owned(),
+            message: "expected a category machine value".to_owned(),
+            source: Some("category_taxonomy".to_owned()),
+            raw: None,
+        }];
+    };
+
+    let mut issues = Vec::new();
+    let taxonomy_valid = match categories
+        .iter()
+        .find(|category| category.category_id == category_id)
+    {
+        None => {
+            issues.push(ValidationIssue {
+                field: "category".to_owned(),
+                code: "category_not_found".to_owned(),
+                message: "category is absent from the current taxonomy".to_owned(),
+                source: Some("category_taxonomy".to_owned()),
+                raw: None,
+            });
+            false
+        }
+        Some(category) if !category.selectable => {
+            issues.push(ValidationIssue {
+                field: "category".to_owned(),
+                code: "category_not_selectable".to_owned(),
+                message: "category cannot contain listings".to_owned(),
+                source: Some("category_taxonomy".to_owned()),
+                raw: None,
+            });
+            false
+        }
+        Some(_) => true,
+    };
+
+    if taxonomy_valid && let Some(field) = state.fields.iter().find(|field| field.key == "category")
+    {
+        let matching_presentation_option = state.options.iter().any(|option| {
+            option.field == field.key && values_semantically_equal(&mutation.value, &option.value)
+        });
+        let issue = if field.status == FieldStatus::Invalid {
+            Some((
+                "category_incompatible",
+                "category is incompatible with the current listing composer",
+            ))
+        } else if !field.validation_options.is_empty() {
+            (!field
+                .validation_options
+                .iter()
+                .any(|option| values_semantically_equal(&mutation.value, option)))
+            .then_some((
+                "category_incompatible",
+                "category is incompatible with the current listing composer",
+            ))
+        } else if matching_presentation_option || field.option_count == 0 {
+            None
+        } else if field.options_truncated {
+            Some((
+                "category_compatibility_unverifiable",
+                "complete category options are unavailable from the listing composer",
+            ))
+        } else {
+            Some((
+                "category_incompatible",
+                "category is incompatible with the current listing composer",
+            ))
+        };
+        if let Some((code, message)) = issue {
+            issues.push(ValidationIssue {
+                field: "category".to_owned(),
+                code: code.to_owned(),
+                message: message.to_owned(),
+                source: Some("listing_composer".to_owned()),
+                raw: None,
+            });
+        }
+    }
+    issues
 }
 
 fn field_type_name(field_type: &FieldType) -> &'static str {

@@ -286,28 +286,40 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             "fields": mutation.fields,
             "field_errors": issues,
         })));
+        let mut recovery = field_recovery(
+            &draft.draft_id,
+            completed,
+            FieldBoundary {
+                step: &stage,
+                fields: &mutation.fields,
+            },
+            FieldOutcomes {
+                persisted,
+                absent,
+                indeterminate: Vec::new(),
+                unattempted: pending_fields(mutations, progress, &mutation.fields),
+            },
+            false,
+            false,
+            Some(draft.clone()),
+            false,
+        );
+        if mutation.key == "category" {
+            let category = match &mutation.value {
+                Value::String(value) => value.clone(),
+                Value::Number(value) => value.to_string(),
+                _ => "QUERY".to_owned(),
+            };
+            recovery.next_safe_actions = vec![
+                format!("flea category search {category}"),
+                format!("flea draft show {}", draft.draft_id),
+            ];
+        }
         WorkflowError {
             code: api.code.clone(),
             message: api.message.clone(),
             source: Some(api),
-            recovery: Some(field_recovery(
-                &draft.draft_id,
-                completed,
-                FieldBoundary {
-                    step: &stage,
-                    fields: &mutation.fields,
-                },
-                FieldOutcomes {
-                    persisted,
-                    absent,
-                    indeterminate: Vec::new(),
-                    unattempted: pending_fields(mutations, progress, &mutation.fields),
-                },
-                false,
-                false,
-                Some(draft.clone()),
-                false,
-            )),
+            recovery: Some(recovery),
             details: Some(json!({
                 "stage": stage,
                 "fields": mutation.fields,
@@ -667,9 +679,23 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         let category_first = mutations
             .first()
             .is_some_and(|mutation| mutation.key == "category");
+        let category_issues = if category_first {
+            let categories = self.api.publication_categories().await.map_err(|error| {
+                WorkflowError::for_draft(&draft.draft_id, completed, error, true)
+                    .with_optional_source_listing_id(listing_id)
+            })?;
+            completed.push("fetch_category_taxonomy".to_owned());
+            category_validation_issues(&draft, &mutations[0], &categories)
+        } else {
+            Vec::new()
+        };
         let initial_validation_end = if category_first { 1 } else { mutations.len() };
         for mutation in &mutations[..initial_validation_end] {
-            let issues = schema_validation_issues(&draft, mutation);
+            let issues = if mutation.key == "category" {
+                category_issues.clone()
+            } else {
+                schema_validation_issues(&draft, mutation)
+            };
             if !issues.is_empty() {
                 return Err(self
                     .local_field_validation_error(

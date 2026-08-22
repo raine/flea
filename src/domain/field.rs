@@ -51,6 +51,8 @@ pub struct Field {
     pub options_returned: usize,
     #[serde(default)]
     pub options_truncated: bool,
+    #[serde(default, skip_serializing)]
+    pub validation_options: Vec<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub validation_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,6 +87,7 @@ impl Field {
             option_count: 0,
             options_returned: 0,
             options_truncated: false,
+            validation_options: Vec::new(),
             validation_message: None,
             raw: None,
         }

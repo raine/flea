@@ -881,6 +881,7 @@ async fn decimal_sale_price_preserves_the_requested_amount() {
 async fn creation_applies_fields_before_the_dedicated_sale_price() {
     let transport = FixtureTransport::new([
         response(201, draft("one", json!({}))),
+        category_taxonomy("258", true),
         response(200, draft("two", json!({ "values": { "category": 258 } }))),
         response(
             200,
@@ -953,6 +954,7 @@ async fn creation_applies_fields_before_the_dedicated_sale_price() {
         created.completed_steps,
         [
             "create_draft",
+            "fetch_category_taxonomy",
             "apply_category",
             "apply_title",
             "apply_description",
@@ -962,21 +964,22 @@ async fn creation_applies_fields_before_the_dedicated_sale_price() {
         ]
     );
     let requests = transport.requests();
-    assert_eq!(requests.len(), 7);
+    assert_eq!(requests.len(), 8);
+    assert_eq!(requests[1].path, "/categories/taxonomy");
     assert!(
-        requests[1..5]
+        requests[2..6]
             .iter()
             .all(|request| request.method == Method::Put)
     );
-    let RequestBody::Json(fields) = &requests[4].body else {
+    let RequestBody::Json(fields) = &requests[5].body else {
         panic!("expected composer field update")
     };
     assert_eq!(fields["trade_type"], "1");
     assert!(fields.get("price").is_none());
-    assert_eq!(requests[5].method, Method::Patch);
-    assert_eq!(requests[5].path, "/items/draft-1");
-    assert_eq!(requests[5].retry, RetryPolicy::Never);
-    assert_eq!(requests[6].method, Method::Get);
+    assert_eq!(requests[6].method, Method::Patch);
+    assert_eq!(requests[6].path, "/items/draft-1");
+    assert_eq!(requests[6].retry, RetryPolicy::Never);
+    assert_eq!(requests[7].method, Method::Get);
 }
 
 #[tokio::test]
@@ -1527,6 +1530,7 @@ async fn dedicated_delivery_failure_requires_authoritative_recovery() {
 async fn discovered_numeric_category_is_sent_as_the_composer_machine_value() {
     let transport = FixtureTransport::new([
         response(201, draft("one", json!({}))),
+        category_taxonomy("258", true),
         response(200, draft("two", json!({ "values": { "category": 258 } }))),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
@@ -1540,8 +1544,9 @@ async fn discovered_numeric_category_is_sent_as_the_composer_machine_value() {
         .unwrap();
 
     let requests = transport.requests();
+    assert_eq!(requests[1].path, "/categories/taxonomy");
     assert_eq!(
-        requests[1].body,
+        requests[2].body,
         RequestBody::Json(json!({ "category": 258 }))
     );
 }
@@ -1550,6 +1555,7 @@ async fn discovered_numeric_category_is_sent_as_the_composer_machine_value() {
 async fn post_creation_failure_keeps_recovery_context() {
     let transport = FixtureTransport::new([
         response(201, draft("one", json!({}))),
+        category_taxonomy("furniture/chairs", true),
         response(503, json!({ "message": "category service unavailable" })),
         response(200, draft("one", json!({}))),
     ]);
@@ -1565,7 +1571,10 @@ async fn post_creation_failure_keeps_recovery_context() {
 
     let recovery = error.recovery.unwrap();
     assert_eq!(recovery.draft_id, "draft-1");
-    assert_eq!(recovery.completed_steps, ["create_draft"]);
+    assert_eq!(
+        recovery.completed_steps,
+        ["create_draft", "fetch_category_taxonomy"]
+    );
     assert!(recovery.upstream_transient);
     assert!(!recovery.safe_to_retry);
     assert_eq!(recovery.active_step.as_deref(), Some("apply_category"));
@@ -1594,6 +1603,7 @@ async fn recovery_output_bounds_dynamic_fields_images_steps_and_local_paths() {
     }
     let transport = FixtureTransport::new([
         response(201, draft("one", json!({}))),
+        category_taxonomy("chairs", true),
         response(503, json!({ "message": "category unavailable" })),
         response(200, draft("observed", json!({}))),
     ]);
@@ -3788,6 +3798,144 @@ async fn composer_keeps_a_selected_category_outside_the_option_bound() {
     assert_eq!(options.len(), 50);
     assert!(options.iter().any(|option| option.value == json!("59")));
     assert_eq!(options.last().unwrap().label, "Category 59");
+}
+
+#[tokio::test]
+async fn create_accepts_a_category_outside_the_compact_composer_page() {
+    let option_ids = (0..593).map(|index| index.to_string()).collect::<Vec<_>>();
+    let mut initial = composer_with_category_options("1", &option_ids);
+    initial["ad"]["values"]
+        .as_object_mut()
+        .unwrap()
+        .remove("category");
+    let transport = FixtureTransport::new([
+        response(201, initial),
+        category_taxonomy("46", true),
+        response(200, composer_with_category_options("46", &option_ids)),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let created = workflow
+        .create(
+            Map::from_iter([("category".to_owned(), json!(46))]),
+            &[] as &[&str],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(created.draft.values["category"], json!("46"));
+    let category = created
+        .draft
+        .fields
+        .iter()
+        .find(|field| field.key == "category")
+        .unwrap();
+    assert_eq!(category.option_count, 593);
+    assert_eq!(category.options_returned, 50);
+    assert!(category.options_truncated);
+    assert_eq!(transport.requests()[1].path, "/categories/taxonomy");
+}
+
+#[tokio::test]
+async fn update_accepts_categories_inside_and_outside_the_compact_composer_page() {
+    for requested in ["1", "59"] {
+        let option_ids = (0..60).map(|index| index.to_string()).collect::<Vec<_>>();
+        let transport = FixtureTransport::new([
+            response(200, composer_with_category_options("0", &option_ids)),
+            category_taxonomy(requested, true),
+            response(200, composer_with_category_options(requested, &option_ids)),
+        ]);
+        let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+        let updated = workflow
+            .update(
+                "46000000",
+                &Map::from_iter([("category".to_owned(), json!(requested))]),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.draft.values["category"], json!(requested));
+        assert_eq!(transport.requests().len(), 3);
+    }
+}
+
+#[tokio::test]
+async fn category_mutation_errors_distinguish_taxonomy_and_composer_failures() {
+    for (requested, taxonomy_id, selectable, expected_code) in [
+        ("59", "999", true, "category_not_found"),
+        ("59", "59", false, "category_not_selectable"),
+        ("60", "60", true, "category_incompatible"),
+    ] {
+        let option_ids = (0..60).map(|index| index.to_string()).collect::<Vec<_>>();
+        let transport = FixtureTransport::new([
+            response(200, composer_with_category_options("0", &option_ids)),
+            category_taxonomy(taxonomy_id, selectable),
+        ]);
+        let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+        let error = workflow
+            .update(
+                "46000000",
+                &Map::from_iter([("category".to_owned(), json!(requested))]),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "draft.validation_failed");
+        let field_errors = error.details.as_ref().unwrap()["field_errors"]
+            .as_array()
+            .unwrap();
+        assert_eq!(field_errors.len(), 1);
+        assert_eq!(field_errors[0]["code"], expected_code);
+        let recovery = error.recovery.unwrap();
+        assert_eq!(
+            recovery.next_safe_actions,
+            [
+                format!("flea category search {requested}"),
+                "flea draft show 46000000".to_owned(),
+            ]
+        );
+        assert_eq!(transport.requests().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn inspection_option_limits_do_not_change_category_validation() {
+    for include_all_options in [false, true] {
+        let option_ids = (0..60).map(|index| index.to_string()).collect::<Vec<_>>();
+        let (state, report) = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new([
+                response(200, composer_with_category_options("59", &option_ids)),
+                response(200, delivery_fixture()),
+                category_taxonomy("59", true),
+            ])),
+            config(),
+        )
+        .inspect("46000000", include_all_options)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            report
+                .category_validation
+                .as_ref()
+                .and_then(|category| category.compatible),
+            Some(true)
+        );
+        let category = state
+            .fields
+            .iter()
+            .find(|field| field.key == "category")
+            .unwrap();
+        assert_eq!(category.options_truncated, !include_all_options);
+        assert!(
+            state
+                .options
+                .iter()
+                .any(|option| { option.field == "category" && option.value == json!("59") })
+        );
+    }
 }
 
 #[tokio::test]

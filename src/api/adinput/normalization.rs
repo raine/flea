@@ -475,6 +475,7 @@ fn normalize_widget(
     field.option_count = option_result.total;
     field.options_returned = option_result.options.len();
     field.options_truncated = option_result.total > option_result.options.len();
+    field.validation_options = option_result.validation_options;
     if matches!(field_type, FieldType::Unknown(_)) {
         field.raw = Some(json!({
             "type": upstream_type,
@@ -670,6 +671,7 @@ fn normalize_field_type(
 
 struct NormalizedOptions {
     options: Vec<FieldOption>,
+    validation_options: Vec<Value>,
     total: usize,
     selected: Vec<Value>,
     selected_options: Vec<FieldOption>,
@@ -690,6 +692,7 @@ fn normalize_widget_options(
     };
     let mut result = NormalizedOptions {
         options: Vec::new(),
+        validation_options: Vec::new(),
         total: 0,
         selected,
         selected_options: Vec::new(),
@@ -881,6 +884,7 @@ fn push_option(
     option_limit: usize,
 ) {
     result.total += 1;
+    result.validation_options.push(value.clone());
     let option = FieldOption {
         field: field.to_owned(),
         value,
