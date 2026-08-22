@@ -21,6 +21,33 @@ pub fn clear(paths: &StatePaths) -> Result<(), AppError> {
     }
 }
 
+pub fn open_and_wait(
+    paths: &StatePaths,
+    login_url: &str,
+    expires_at_unix: u64,
+) -> Result<String, AppError> {
+    open_browser(login_url)?;
+    eprintln!("Browser opened. Finish signing in and choose Open Tori CLI Auth when asked.");
+    eprintln!("Waiting for Tori to return to the CLI...");
+
+    loop {
+        if paths.oauth_callback_file().exists() {
+            return read(paths);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(callback_receiver_error)?
+            .as_secs();
+        if now >= expires_at_unix {
+            return Err(AppError::authentication(
+                "auth.flow_expired",
+                "browser sign-in did not finish before the authentication flow expired",
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 pub fn read(paths: &StatePaths) -> Result<String, AppError> {
     let path = paths.oauth_callback_file();
     let metadata =
@@ -69,6 +96,29 @@ fn prepare_platform_receiver(_paths: &StatePaths) -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
+fn open_browser(_login_url: &str) -> Result<(), AppError> {
+    Err(AppError::authentication(
+        "auth.interactive_login_unsupported",
+        "interactive browser login is supported on macOS; use auth start and auth complete on this platform",
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn open_browser(login_url: &str) -> Result<(), AppError> {
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg(login_url)
+        .status()
+        .map_err(callback_receiver_error)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(callback_receiver_error(std::io::Error::other(
+            "the default browser could not be opened",
+        )))
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn prepare_platform_receiver(paths: &StatePaths) -> Result<(), AppError> {
     use std::process::Command;
@@ -77,6 +127,22 @@ fn prepare_platform_receiver(paths: &StatePaths) -> Result<(), AppError> {
     const BUNDLE_ID: &str = "fi.raine.tori-cli.auth-callback";
 
     let app = paths.auth_callback_app();
+    let register = |app: &Path| -> Result<(), AppError> {
+        checked_command(Command::new(
+            "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+        ).args(["-f", path_text(app)?]))?;
+        set_default_url_handler(SCHEME, BUNDLE_ID)
+    };
+    if app.exists() {
+        let metadata = fs::symlink_metadata(&app).map_err(callback_receiver_error)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(callback_receiver_error(std::io::Error::other(
+                "callback receiver path is not an application directory",
+            )));
+        }
+        return register(&app);
+    }
+
     let temporary = paths
         .auth_dir()
         .join(format!(".Tori CLI Auth.{}.app", uuid::Uuid::new_v4()));
@@ -127,11 +193,7 @@ fn prepare_platform_receiver(paths: &StatePaths) -> Result<(), AppError> {
         }
         fs::rename(&temporary, &app).map_err(callback_receiver_error)?;
 
-        checked_command(Command::new(
-            "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
-        ).args(["-f", path_text(&app)?]))?;
-        set_default_url_handler(SCHEME, BUNDLE_ID)?;
-        Ok(())
+        register(&app)
     })();
 
     if result.is_err() {

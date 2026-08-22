@@ -30,6 +30,13 @@ pub struct RunResult {
     pub presentation: Presentation,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuthPresentation {
+    Structured,
+    Start,
+    Login,
+}
+
 pub fn run<I, T>(args: I) -> RunResult
 where
     I: IntoIterator<Item = T>,
@@ -45,9 +52,16 @@ where
 
     let session = match DiagnosticsSession::initialize() {
         Ok(session) => session,
-        Err(error) => return finish(cli.format, Err(error.into_app_error()), None, false),
+        Err(error) => {
+            return finish(
+                cli.format,
+                Err(error.into_app_error()),
+                None,
+                AuthPresentation::Structured,
+            );
+        }
     };
-    let plain_auth_start = uses_plain_auth_start(cli.format, &cli.command);
+    let auth_presentation = auth_presentation(cli.format, &cli.command);
     let runtime = cli::runtime::ProductionRuntime;
     session.run(&command, || {
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -55,7 +69,7 @@ where
                 cli.format,
                 cli::dispatch_with_runtime(cli.command, &runtime),
                 Some(session.context()),
-                plain_auth_start,
+                auth_presentation,
             )
         }))
         .unwrap_or_else(|_| {
@@ -63,7 +77,7 @@ where
                 cli.format,
                 Err(AppError::unexpected("command failed unexpectedly")),
                 Some(session.context()),
-                false,
+                AuthPresentation::Structured,
             )
         });
         let exit_code = result.exit_code;
@@ -82,13 +96,13 @@ where
         Ok(cli) => cli,
         Err(error) => return clap_presentation(error),
     };
-    let plain_auth_start = uses_plain_auth_start(cli.format, &cli.command);
+    let auth_presentation = auth_presentation(cli.format, &cli.command);
     catch_unwind(AssertUnwindSafe(|| {
         finish(
             cli.format,
             cli::dispatch_with_runtime(cli.command, runtime),
             None,
-            plain_auth_start,
+            auth_presentation,
         )
     }))
     .unwrap_or_else(|_| {
@@ -96,7 +110,7 @@ where
             cli.format,
             Err(AppError::unexpected("command failed unexpectedly")),
             None,
-            false,
+            AuthPresentation::Structured,
         )
     })
 }
@@ -114,32 +128,47 @@ fn clap_presentation(error: clap::Error) -> RunResult {
     }
 }
 
-fn uses_plain_auth_start(format: output::OutputFormat, command: &cli::Command) -> bool {
-    format == output::OutputFormat::Toon
-        && matches!(
-            command,
-            cli::Command::Auth(cli::auth::AuthArgs {
-                command: cli::auth::AuthCommand::Start
-            })
-        )
+fn auth_presentation(format: output::OutputFormat, command: &cli::Command) -> AuthPresentation {
+    if format != output::OutputFormat::Toon {
+        return AuthPresentation::Structured;
+    }
+    match command {
+        cli::Command::Auth(cli::auth::AuthArgs {
+            command: cli::auth::AuthCommand::Start,
+        }) => AuthPresentation::Start,
+        cli::Command::Auth(cli::auth::AuthArgs {
+            command: cli::auth::AuthCommand::Login,
+        }) => AuthPresentation::Login,
+        _ => AuthPresentation::Structured,
+    }
 }
 
 fn finish(
     format: output::OutputFormat,
     result: Result<serde_json::Value, AppError>,
     diagnostics: Option<&DiagnosticsContext>,
-    plain_auth_start: bool,
+    auth_presentation: AuthPresentation,
 ) -> RunResult {
     let (envelope, exit_code) = match result {
         Ok(data) => {
-            if plain_auth_start {
-                return match output::render_auth_start(&data) {
+            let plain_document = match auth_presentation {
+                AuthPresentation::Structured => None,
+                AuthPresentation::Start => Some(output::render_auth_start(&data)),
+                AuthPresentation::Login => Some(output::render_auth_login(&data)),
+            };
+            if let Some(document) = plain_document {
+                return match document {
                     Ok(document) => RunResult {
                         document,
                         exit_code: ExitClass::Success.code(),
                         presentation: Presentation::PlainStdout,
                     },
-                    Err(error) => finish(format, Err(error), diagnostics, false),
+                    Err(error) => finish(
+                        format,
+                        Err(error),
+                        diagnostics,
+                        AuthPresentation::Structured,
+                    ),
                 };
             }
             let mut envelope = Envelope::success(data);

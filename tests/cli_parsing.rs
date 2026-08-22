@@ -7,6 +7,7 @@ use tori::{
 #[test]
 fn every_command_leaf_parses() {
     let cases = [
+        vec!["tori", "auth", "login"],
         vec!["tori", "auth", "start"],
         vec!["tori", "auth", "complete", "flow-1"],
         vec![

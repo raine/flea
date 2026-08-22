@@ -25,6 +25,11 @@ pub struct AuthArgs {
 #[derive(Subcommand)]
 pub enum AuthCommand {
     #[command(
+        about = "Sign in through the browser",
+        long_about = "Open Tori sign-in in the default browser, wait for the Tori CLI callback receiver, and store credentials."
+    )]
+    Login,
+    #[command(
         about = "Start browser authentication",
         long_about = "Create a short-lived OAuth flow and print the login URL and exact completion command."
     )]
@@ -56,6 +61,7 @@ pub enum AuthCommand {
 impl std::fmt::Debug for AuthCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Login => formatter.write_str("Login"),
             Self::Start => formatter.write_str("Start"),
             Self::Complete { flow_id, .. } => formatter
                 .debug_struct("Complete")
@@ -190,6 +196,9 @@ impl<A, S> AuthCommandHandler<A, S> {
 impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
     pub async fn dispatch(&self, command: AuthCommand, now_unix: u64) -> Result<Value, AppError> {
         match command {
+            AuthCommand::Login => Err(AppError::unexpected(
+                "interactive browser login requires the production runtime",
+            )),
             AuthCommand::Start => self.start(now_unix),
             AuthCommand::Complete {
                 flow_id,

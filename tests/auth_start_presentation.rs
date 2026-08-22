@@ -8,6 +8,7 @@ const LOGIN_URL: &str = "https://login.vend.fi/oauth/authorize?client_id=client&
 const COMPLETION_COMMAND: &str = "tori auth complete flow-1";
 
 struct AuthStartRuntime;
+struct AuthLoginRuntime;
 
 impl CommandRuntime for AuthStartRuntime {
     fn execute(&self, _command: tori::cli::Command) -> Result<Value, AppError> {
@@ -18,6 +19,21 @@ impl CommandRuntime for AuthStartRuntime {
             "completion_command": COMPLETION_COMMAND
         }))
     }
+}
+
+impl CommandRuntime for AuthLoginRuntime {
+    fn execute(&self, _command: tori::cli::Command) -> Result<Value, AppError> {
+        Ok(json!({ "authenticated": true, "user_id": "42" }))
+    }
+}
+
+#[test]
+fn default_auth_login_reports_human_success() {
+    let result = tori::run_with_runtime(["tori", "auth", "login"], &AuthLoginRuntime);
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.presentation, Presentation::PlainStdout);
+    assert_eq!(result.document, "Signed in to Tori.\n");
 }
 
 #[test]

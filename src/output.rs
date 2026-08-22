@@ -23,6 +23,15 @@ pub fn render<T: Serialize>(value: &T, format: OutputFormat) -> Result<String, A
     }
 }
 
+pub fn render_auth_login(data: &Value) -> Result<String, AppError> {
+    if data.get("authenticated").and_then(Value::as_bool) != Some(true) {
+        return Err(AppError::output(
+            "authentication login output has an invalid status",
+        ));
+    }
+    Ok("Signed in to Tori.\n".to_owned())
+}
+
 pub fn render_auth_start(data: &Value) -> Result<String, AppError> {
     let login_url = required_string(data, "login_url")?;
     data.get("expires_at_unix")
