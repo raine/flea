@@ -214,7 +214,7 @@ pub fn normalize_values_output(value: &mut Value) {
 
 pub fn normalize_commerce_map(values: &mut Map<String, Value>) {
     let trade_source = value_at(values, &["trade_type", "tradeType", "adViewTypeLabel"]);
-    let (trade_type, price) = normalize_commerce_fields(values);
+    let (_, price) = normalize_commerce_fields(values);
     values.insert(
         "trade_type".to_owned(),
         trade_source.map_or_else(
