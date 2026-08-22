@@ -122,6 +122,8 @@ pub(super) fn observation_source(path: &str) -> &'static str {
         "delivery_composer"
     } else if path == "/categories/taxonomy" {
         "category_taxonomy"
+    } else if path.starts_with("/search?") {
+        "authenticated_listing_collection"
     } else if path.starts_with("/my/listings/")
         || path.starts_with("/listings/")
         || path.strip_prefix('/').is_some_and(|id| {
@@ -268,6 +270,80 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
         ))
     }
 
+    async fn reconcile_missing_draft(&self, draft_id: &str, detail_error: ApiError) -> ApiError {
+        let detail_observation = detail_error
+            .observation
+            .clone()
+            .unwrap_or_else(|| Observation::confirmed_absent("draft_detail", Some(404)));
+        match self.find_listing_summary(draft_id).await {
+            Ok(Some(summary)) => {
+                let collection =
+                    Observation::confirmed_present("authenticated_listing_collection", Some(200));
+                let observation = Observation::reconcile(&[detail_observation, collection])
+                    .expect("draft lifecycle observations are non-empty");
+                let state = summary
+                    .pointer("/state/type")
+                    .or_else(|| summary.get("state"))
+                    .and_then(Value::as_str);
+                let mut error = ApiError::new(
+                    "draft.observation_conflict",
+                    "Draft lifecycle sources disagree about whether the draft is present",
+                )
+                .with_observation(observation, ObservationOperation::Read);
+                error.status = Some(404);
+                error.details = Some(Box::new(json!({
+                    "draft_id": draft_id,
+                    "detail_status": "not_found",
+                    "collection_status": "present",
+                    "collection_state": state,
+                })));
+                error
+            }
+            Ok(None) => {
+                let collection =
+                    Observation::confirmed_absent("authenticated_listing_collection", Some(200));
+                let source_states = [&detail_observation, &collection]
+                    .into_iter()
+                    .map(|observation| SourceStateEvidence {
+                        source: observation.source.clone(),
+                        state: observation.state,
+                    })
+                    .collect();
+                let observation = Observation::new(
+                    ObservationState::ConfirmedAbsent,
+                    "draft_lifecycle_reconciliation",
+                    StatusEvidence {
+                        http_status: Some(404),
+                        response_received: true,
+                        model_parsed: false,
+                        source_states,
+                    },
+                );
+                let mut error = detail_error;
+                error.observation = Some(observation);
+                error
+            }
+            Err(collection_error) => {
+                let collection_observation = collection_error.observation.unwrap_or_else(|| {
+                    Observation::unrecognized_response("authenticated_listing_collection", None)
+                });
+                let mut error = ApiError::new(
+                    "draft.observation_incomplete",
+                    "Draft absence could not be confirmed against the authenticated collection",
+                )
+                .with_observation(collection_observation, ObservationOperation::Read);
+                error.status = Some(404);
+                error.details = Some(Box::new(json!({
+                    "draft_id": draft_id,
+                    "detail_status": "not_found",
+                    "collection_status": "unavailable",
+                    "detail_observation": detail_observation,
+                })));
+                error
+            }
+        }
+    }
+
     async fn observe_created_draft(
         &self,
         draft_id: &str,
@@ -341,11 +417,18 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
 
     async fn get_draft(&self, draft_id: &str) -> Result<DraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
-        self.draft_request(
-            HttpRequest::read(format!("/adinput/ad/withModel/{draft_id}")),
-            true,
-        )
-        .await
+        match self
+            .draft_request(
+                HttpRequest::read(format!("/adinput/ad/withModel/{draft_id}")),
+                true,
+            )
+            .await
+        {
+            Err(error) if error.status == Some(404) => {
+                Err(self.reconcile_missing_draft(draft_id, error).await)
+            }
+            result => result,
+        }
     }
 
     async fn publication_draft(&self, draft_id: &str) -> Result<PublicationDraftState, ApiError> {
@@ -358,11 +441,17 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         include_all_options: bool,
     ) -> Result<PublicationDraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
-        let response = self
+        let response = match self
             .json(HttpRequest::read(format!(
                 "/adinput/ad/withModel/{draft_id}"
             )))
-            .await?;
+            .await
+        {
+            Err(error) if error.status == Some(404) => {
+                return Err(self.reconcile_missing_draft(draft_id, error).await);
+            }
+            result => result?,
+        };
         if response.body_is_unparseable {
             return Err(malformed_read_response("publication_draft"));
         }
@@ -1046,7 +1135,7 @@ fn listing_observation_model_error(status: u16, model: &str) -> ApiError {
         "Tori returned an unrecognized listing collection model",
     )
     .with_observation(
-        Observation::unrecognized_response("listing_collection", Some(status)),
+        Observation::unrecognized_response("authenticated_listing_collection", Some(status)),
         ObservationOperation::Read,
     );
     error.status = Some(status);

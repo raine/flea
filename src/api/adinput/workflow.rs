@@ -236,6 +236,32 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         error
     }
 
+    fn post_image_observation_error(
+        &self,
+        draft: &DraftState,
+        completed: &[String],
+        intent: &[RecoveryImageIntent],
+        error: ApiError,
+    ) -> WorkflowError {
+        let observation = RecoveryObservation::from_error(&error, "draft_detail");
+        let mut workflow = WorkflowError::for_draft(&draft.draft_id, completed, error, false);
+        if let Some(recovery) = &mut workflow.recovery {
+            recovery.observe(draft, ObservationStatus::Observed);
+            recovery.requested_values = draft.values.clone();
+            recovery.observation = observation;
+            recovery.active_step = Some("observe_attached_images".to_owned());
+            recovery.failed_stage = recovery.active_step.clone();
+            recovery.safe_to_retry = false;
+            recovery.destructive_actions.clear();
+            recovery.next_safe_actions = vec![
+                format!("flea draft show {}", draft.draft_id),
+                "flea listing list".to_owned(),
+            ];
+            set_recovery_images(recovery, intent, false);
+        }
+        workflow
+    }
+
     fn add_unattempted_images(error: &mut WorkflowError, start: usize, count: usize) {
         if let Some(recovery) = &mut error.recovery {
             let intent = RecoveryImageIntent::additions(start, count);
@@ -1374,9 +1400,10 @@ impl<A: AdInputApi> DraftWorkflow<A> {
     ) -> Result<AddImagesResult, WorkflowError> {
         let state = self
             .api
-            .get_draft(draft_id)
+            .publication_draft(draft_id)
             .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
+            .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?
+            .draft;
         let mut completed = vec!["fetch_draft".to_owned()];
         self.add_images_from_paths(&state, paths, &mut completed)
             .await
@@ -1488,8 +1515,17 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             }
         };
         completed.push("attach_images".to_owned());
+        let observed = self
+            .api
+            .publication_draft(&state.draft_id)
+            .await
+            .map_err(|error| {
+                self.post_image_observation_error(&updated, completed, &intent, error)
+            })?
+            .draft;
+        completed.push("observe_attached_images".to_owned());
         Ok(AddImagesResult {
-            draft: updated,
+            draft: observed,
             image_processing,
         })
     }
@@ -1501,9 +1537,10 @@ impl<A: AdInputApi> DraftWorkflow<A> {
     ) -> Result<DraftState, WorkflowError> {
         let state = self
             .api
-            .get_draft(draft_id)
+            .publication_draft(draft_id)
             .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
+            .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?
+            .draft;
         let mut retained = state
             .images
             .iter()
@@ -1519,7 +1556,17 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .set_images(draft_id, &state.etag, &state.values, &ordered)
             .await
         {
-            Ok(updated) => Ok(updated),
+            Ok(updated) => {
+                let completed = ["fetch_draft".to_owned(), "remove_images".to_owned()];
+                self.api
+                    .publication_draft(draft_id)
+                    .await
+                    .map(|publication| publication.draft)
+                    .map_err(|error| {
+                        let intent = RecoveryImageIntent::removals(remove);
+                        self.post_image_observation_error(&updated, &completed, &intent, error)
+                    })
+            }
             Err(error) => {
                 let workflow =
                     WorkflowError::for_draft(draft_id, &["fetch_draft".to_owned()], error, false);

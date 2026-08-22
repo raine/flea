@@ -925,14 +925,20 @@ fn draft_http_absence_is_the_only_draft_not_found_outcome() {
     let result = run_with_runtime(
         ["flea", "--format", "json", "draft", "show", "draft-1"],
         &TestRuntime {
-            client: MockClient::with_responses([response(StatusCode::NOT_FOUND, Value::Null)]),
+            client: MockClient::with_responses([
+                response(StatusCode::NOT_FOUND, Value::Null),
+                response(StatusCode::OK, json!({ "summaries": [], "total": 0 })),
+            ]),
         },
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
     assert_eq!(value["error"]["code"], "draft.not_found");
     assert_eq!(value["error"]["observation"]["state"], "confirmed_absent");
-    assert_eq!(value["error"]["observation"]["source"], "draft_detail");
+    assert_eq!(
+        value["error"]["observation"]["source"],
+        "draft_lifecycle_reconciliation"
+    );
     assert!(value["error"]["observation"]["observed_at"].is_string());
     assert_eq!(
         value["error"]["observation"]["status_evidence"]["http_status"],
@@ -957,6 +963,7 @@ fn image_add_flows_through_upload_and_ordering() {
             }),
         ),
         response(StatusCode::OK, draft_with_images("two", "processing")),
+        response(StatusCode::OK, draft_with_images("three", "processing")),
     ]);
     let value = invoke_vec(
         &TestRuntime {
@@ -986,7 +993,7 @@ fn image_add_flows_through_upload_and_ordering() {
     assert!(processing["final_byte_size"].as_u64().unwrap() > 0);
     assert_eq!(processing["metadata_stripped"], true);
     assert_eq!(processing["recompressed"], false);
-    assert_eq!(client.requests.lock().unwrap().len(), 3);
+    assert_eq!(client.requests.lock().unwrap().len(), 4);
 }
 
 #[test]

@@ -11,7 +11,10 @@ use flea::{
         ProcessingRecoveryStatus, RecoveryStatus, RequestBody, RetryPolicy, UploadRecoveryStatus,
         WorkflowConfig,
     },
-    domain::field::{FieldStatus, FieldType, Requirement},
+    domain::{
+        field::{FieldStatus, FieldType, Requirement},
+        observation::ObservationState,
+    },
 };
 use serde_json::{Map, Value, json};
 
@@ -1993,6 +1996,81 @@ async fn copy_failure_identifies_both_source_listing_and_created_draft() {
 }
 
 #[tokio::test]
+async fn draft_detail_absence_reconciles_with_the_authenticated_collection() {
+    let transport = FixtureTransport::new([response(404, json!({ "message": "missing" }))])
+        .with_search_responses([listing_collection("draft-1", "DRAFT")]);
+    let api = HttpAdInputApi::new(transport.clone());
+
+    let error = api.get_draft("draft-1").await.unwrap_err();
+
+    assert_eq!(error.code, "draft.observation_conflict");
+    let observation = error.observation.unwrap();
+    assert_eq!(observation.state, ObservationState::ConflictingSources);
+    assert_eq!(observation.status_evidence.source_states.len(), 2);
+    assert_eq!(
+        observation.status_evidence.source_states[0].source,
+        "draft_detail"
+    );
+    assert_eq!(
+        observation.status_evidence.source_states[1].source,
+        "authenticated_listing_collection"
+    );
+    assert_eq!(transport.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn collection_absence_confirms_a_deleted_draft() {
+    let transport = FixtureTransport::new([response(404, json!({ "message": "missing" }))])
+        .with_search_responses([response(200, json!({ "summaries": [], "total": 0 }))]);
+    let api = HttpAdInputApi::new(transport);
+
+    let error = api.get_draft("draft-1").await.unwrap_err();
+
+    assert_eq!(error.code, "draft.not_found");
+    let observation = error.observation.unwrap();
+    assert_eq!(observation.state, ObservationState::ConfirmedAbsent);
+    assert_eq!(observation.source, "draft_lifecycle_reconciliation");
+    assert_eq!(observation.status_evidence.source_states.len(), 2);
+}
+
+#[tokio::test]
+async fn unavailable_collection_cannot_confirm_detail_absence() {
+    let transport = FixtureTransport::new([response(404, json!({ "message": "missing" }))])
+        .with_search_responses([response(
+            503,
+            json!({ "message": "collection unavailable" }),
+        )]);
+    let api = HttpAdInputApi::new(transport);
+
+    let error = api.get_draft("draft-1").await.unwrap_err();
+
+    assert_eq!(error.code, "draft.observation_incomplete");
+    assert_eq!(
+        error.observation.unwrap().state,
+        ObservationState::TemporarilyUnavailable
+    );
+}
+
+#[tokio::test]
+async fn a_later_detail_read_resolves_collection_consistency() {
+    let transport = FixtureTransport::new([
+        response(404, json!({ "message": "missing" })),
+        response(200, draft("post-image", json!({}))),
+    ])
+    .with_search_responses([listing_collection("draft-1", "DRAFT")]);
+    let api = HttpAdInputApi::new(transport);
+
+    let first = api.get_draft("draft-1").await.unwrap_err();
+    let later = api.get_draft("draft-1").await.unwrap();
+
+    assert_eq!(
+        first.observation.unwrap().state,
+        ObservationState::ConflictingSources
+    );
+    assert_eq!(later.revision.as_deref(), Some("post-image"));
+}
+
+#[tokio::test]
 async fn show_fetches_predictions_only_for_uncategorized_draft_with_images() {
     let transport = FixtureTransport::new([
         response(
@@ -2065,11 +2143,24 @@ async fn image_upload_reads_dimensions_and_preserves_order() {
                 }),
             ),
         ),
+        response(
+            200,
+            draft(
+                "three",
+                json!({
+                    "images": [
+                        image("first", 0, "ready", 4, 6),
+                        image("second", 1, "processing", 7, 11)
+                    ]
+                }),
+            ),
+        ),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
     let state = workflow.add_images("draft-1", &[path]).await.unwrap();
 
+    assert_eq!(state.revision.as_deref(), Some("three"));
     assert_eq!(state.images[1].state, ImageState::Processing);
     assert_eq!(state.image_processing.len(), 1);
     assert_eq!(state.image_processing[0].source_format, "png");
@@ -2105,6 +2196,119 @@ async fn image_upload_reads_dimensions_and_preserves_order() {
     assert_eq!(values["multi_image"].as_array().unwrap().len(), 2);
     assert_eq!(values["multi_image"][1]["width"], 7);
     assert_eq!(values["multi_image"][1]["height"], 11);
+}
+
+#[tokio::test]
+async fn post_attachment_inspection_accepts_a_stale_composer_endpoint_model() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("image.png");
+    image::DynamicImage::new_rgb8(4, 6).save(&path).unwrap();
+    let image_url = "https://img.tori.net/dynamic/default/image.jpg";
+    let transport = FixtureTransport::new([
+        response(200, draft("before-images", json!({}))),
+        response_with_location(201, image_url),
+        response(
+            200,
+            draft(
+                "attachment-response",
+                json!({ "images": [image("image", 0, "ready", 4, 6)] }),
+            ),
+        ),
+        response(
+            200,
+            json!({
+                "ad": {
+                    "id": "draft-1",
+                    "etag": "post-image",
+                    "values": {
+                        "multi_image": [{
+                            "description": "",
+                            "height": 6,
+                            "path": "image.jpg",
+                            "type": "image/jpeg",
+                            "url": image_url,
+                            "width": 4
+                        }]
+                    }
+                }
+            }),
+        ),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let result = workflow.add_images("draft-1", &[path]).await.unwrap();
+
+    assert_eq!(result.revision.as_deref(), Some("post-image"));
+    assert_eq!(result.images.len(), 1);
+    assert_eq!(result.images[0].image_id, image_url);
+}
+
+#[tokio::test]
+async fn post_attachment_conflict_preserves_revision_values_and_uploaded_image_ids() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = (0..2)
+        .map(|index| {
+            let path = directory.path().join(format!("image-{index}.png"));
+            image::DynamicImage::new_rgb8(4, 6).save(&path).unwrap();
+            path
+        })
+        .collect::<Vec<_>>();
+    let attached = draft(
+        "1179389950",
+        json!({
+            "values": {
+                "title": "Chair",
+                "description": "Solid birch chair",
+                "trade_type": "sell",
+                "price": 45,
+                "postal_code": "00100"
+            },
+            "images": [
+                image("first", 0, "ready", 4, 6),
+                image("second", 1, "ready", 4, 6)
+            ]
+        }),
+    );
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "before-images",
+                json!({ "values": attached["values"].clone() }),
+            ),
+        ),
+        response_with_location(201, "https://img.tori.net/dynamic/default/first.jpg"),
+        response_with_location(201, "https://img.tori.net/dynamic/default/second.jpg"),
+        response(200, attached),
+        response(404, json!({ "message": "missing" })),
+    ])
+    .with_search_responses([listing_collection("draft-1", "DRAFT")]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow.add_images("draft-1", &paths).await.unwrap_err();
+
+    assert_eq!(error.code, "draft.observation_conflict");
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.draft_id, "draft-1");
+    assert_eq!(recovery.observed_revision.as_deref(), Some("1179389950"));
+    assert_eq!(recovery.requested_values["title"], "Chair");
+    assert_eq!(recovery.requested_values["price"], 45);
+    assert_eq!(recovery.images.len(), 2);
+    assert!(recovery.images.iter().all(|image| {
+        image.status == RecoveryStatus::Persisted
+            && image.upload == UploadRecoveryStatus::Completed
+            && image.attachment == AttachmentRecoveryStatus::Attached
+            && image.image_id.is_some()
+    }));
+    assert_eq!(
+        recovery.observation.state,
+        ObservationState::ConflictingSources
+    );
+    assert_eq!(
+        recovery.next_safe_actions,
+        ["flea draft show draft-1", "flea listing list"]
+    );
+    assert!(recovery.destructive_actions.is_empty());
 }
 
 #[tokio::test]
@@ -2299,6 +2503,18 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
                 }),
             ),
         ),
+        response(
+            200,
+            draft(
+                "three",
+                json!({
+                    "images": [
+                        image("first", 0, "ready", 1, 1),
+                        image("third", 1, "ready", 3, 3)
+                    ]
+                }),
+            ),
+        ),
         response(204, Value::Null),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
@@ -2325,8 +2541,10 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
             .ends_with("third.jpg")
     );
     assert_eq!(requests[1].retry, RetryPolicy::Never);
-    assert_eq!(requests[2].method, Method::Delete);
-    assert_eq!(requests[2].retry, RetryPolicy::Never);
+    assert_eq!(requests[2].method, Method::Get);
+    assert_eq!(requests[2].retry, RetryPolicy::BoundedRead);
+    assert_eq!(requests[3].method, Method::Delete);
+    assert_eq!(requests[3].retry, RetryPolicy::Never);
 }
 
 #[tokio::test]

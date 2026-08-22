@@ -197,6 +197,8 @@ pub struct Recovery {
     pub indeterminate_fields: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unattempted_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Map::is_empty")]
+    pub requested_values: Map<String, Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub field_summary: Vec<FieldRecovery>,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -339,6 +341,7 @@ impl Recovery {
             absent_fields: Vec::new(),
             indeterminate_fields: Vec::new(),
             unattempted_fields: Vec::new(),
+            requested_values: Map::new(),
             field_summary: Vec::new(),
             fields_omitted: 0,
             images: Vec::new(),
@@ -492,16 +495,25 @@ impl WorkflowError {
         let upstream_transient = error.upstream_transient;
         let error_code = error.code.clone();
         let observation = RecoveryObservation::from_error(&error, "draft_detail");
+        let lifecycle_conflict = observation.state == ObservationState::ConflictingSources;
+        let mut recovery = Recovery {
+            upstream_transient,
+            safe_to_retry,
+            observation,
+            ..Recovery::base(draft_id, completed_steps, Some(&error_code))
+        };
+        if lifecycle_conflict {
+            recovery.next_safe_actions = vec![
+                format!("flea draft show {draft_id}"),
+                "flea listing list".to_owned(),
+            ];
+            recovery.destructive_actions.clear();
+        }
         Self {
             code: error.code.clone(),
             message: error.message.clone(),
             source: Some(error),
-            recovery: Some(Recovery {
-                upstream_transient,
-                safe_to_retry,
-                observation,
-                ..Recovery::base(draft_id, completed_steps, Some(&error_code))
-            }),
+            recovery: Some(recovery),
             details: None,
         }
     }

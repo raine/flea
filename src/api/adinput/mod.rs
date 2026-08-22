@@ -26,7 +26,10 @@ use crate::{
             Field, FieldStatus, FieldType, Requirement, UpstreamValidationError, ValidationIssue,
             map_validation_errors, stable_field_key,
         },
-        observation::{Observation, ObservationOperation, ObservationState, StatusEvidence},
+        observation::{
+            Observation, ObservationOperation, ObservationState, SourceStateEvidence,
+            StatusEvidence,
+        },
     },
     image_processing::{self, ImageProcessingReport, ProcessedImage, ProcessingError},
     retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},
