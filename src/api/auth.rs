@@ -210,6 +210,70 @@ impl<S> SchibstedToriAuthenticationApi<S> {
     }
 }
 
+impl<S: GatewaySigner> SchibstedToriAuthenticationApi<S> {
+    pub async fn refresh_credentials(
+        &self,
+        refresh_token: &str,
+        device_id: &str,
+        installation_id: &str,
+        ab_test_device_id: &str,
+        now_unix: u64,
+    ) -> Result<AuthCredentials, AppError> {
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+            refresh_token: String,
+            id_token: String,
+        }
+
+        let response = self
+            .client
+            .post(format!("{}/oauth/token", self.login_base_url))
+            .header("X-OIDC", "v1")
+            .header("User-Agent", SCHIBSTED_USER_AGENT)
+            .form(&[
+                ("client_id", CLIENT_ID),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token),
+            ])
+            .send()
+            .await
+            .map_err(|_| upstream_error("token_refresh", true))?;
+        ensure_success(response.status(), "token_refresh")?;
+        let tokens: TokenResponse = response
+            .json()
+            .await
+            .map_err(|_| unexpected_response("token_refresh"))?;
+        if tokens.access_token.is_empty()
+            || tokens.refresh_token.is_empty()
+            || tokens.id_token.is_empty()
+        {
+            return Err(unexpected_response("token_refresh"));
+        }
+        let spid = self.exchange_spid_code(&tokens.access_token).await?;
+        let session = self
+            .login_to_tori(
+                spid.expose(),
+                &tokens.id_token,
+                device_id,
+                installation_id,
+                ab_test_device_id,
+            )
+            .await?;
+        Ok(AuthCredentials {
+            user_id: session.user_id,
+            refresh_token: SecretString::new(tokens.refresh_token),
+            bearer_token: session.bearer_token,
+            bearer_expires_at_unix: now_unix.checked_add(TORI_BEARER_LIFETIME_SECS).ok_or_else(
+                || AppError::authentication("auth.clock_invalid", "credential expiry is invalid"),
+            )?,
+            device_id: device_id.to_owned(),
+            installation_id: installation_id.to_owned(),
+            ab_test_device_id: ab_test_device_id.to_owned(),
+        })
+    }
+}
+
 impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
     async fn exchange_authorization_code(
         &self,
@@ -586,7 +650,10 @@ fn ensure_success(status: StatusCode, stage: &'static str) -> Result<(), AppErro
         "the authentication service rejected the login",
         ExitClass::Authentication,
     );
-    error.details = Some(serde_json::json!({ "stage": stage, "status": status.as_u16() }));
+    error.details = Some(Box::new(serde_json::json!({
+        "stage": stage,
+        "status": status.as_u16()
+    })));
     Err(error)
 }
 
@@ -597,7 +664,7 @@ fn upstream_error(stage: &'static str, retryable: bool) -> AppError {
         ExitClass::Upstream,
     );
     error.retryable = retryable;
-    error.details = Some(serde_json::json!({ "stage": stage }));
+    error.details = Some(Box::new(serde_json::json!({ "stage": stage })));
     error
 }
 
@@ -607,7 +674,7 @@ fn unexpected_response(stage: &'static str) -> AppError {
         "an authentication service returned an unexpected response",
         ExitClass::Upstream,
     );
-    error.details = Some(serde_json::json!({ "stage": stage }));
+    error.details = Some(Box::new(serde_json::json!({ "stage": stage })));
     error
 }
 

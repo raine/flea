@@ -72,16 +72,6 @@ impl AppError {
         error
     }
 
-    pub fn protocol_unavailable(command: &str, details: Value) -> Self {
-        let mut error = Self::new(
-            "upstream.not_implemented",
-            format!("remote protocol support for `{command}` is unavailable"),
-            ExitClass::Upstream,
-        );
-        error.details = Some(Box::new(details));
-        error
-    }
-
     pub fn output(message: impl Into<String>) -> Self {
         Self::new("output.serialization_failed", message, ExitClass::Upstream)
     }

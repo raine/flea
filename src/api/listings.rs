@@ -1,9 +1,14 @@
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
-use serde::{Deserialize, Serialize};
+use reqwest::{Method, StatusCode, header::HeaderValue};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
+    api::client::{RequestSpec, ToriClient, compatibility},
     domain::listing::{
         Category, CategoryList, ListingAction, ListingActionName, ListingCollection,
         ListingCopySource, ListingDetail, ListingFacet, ListingMutation, ListingRef,
@@ -31,6 +36,137 @@ pub trait ListingsApi: Send + Sync {
     ) -> Result<UpstreamListing, ListingsApiError>;
     fn dispose_listing(&self, listing_id: &str) -> Result<(), ListingsApiError>;
     fn delete_listing(&self, listing_id: &str) -> Result<(), ListingsApiError>;
+}
+
+pub struct HttpListingsApi {
+    client: Arc<dyn ToriClient>,
+}
+
+impl HttpListingsApi {
+    pub fn new(client: Arc<dyn ToriClient>) -> Self {
+        Self { client }
+    }
+
+    fn request<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: String,
+        body: Option<Value>,
+        etag: Option<&str>,
+    ) -> Result<T, ListingsApiError> {
+        let mut request = RequestSpec::new(method, path, compatibility::SERVICE_AD_SUMMARIES);
+        if let Some(body) = body {
+            request = request.body(
+                serde_json::to_vec(&body)
+                    .map_err(|error| ListingsApiError::UnexpectedResponse(error.to_string()))?,
+                HeaderValue::from_static("application/json"),
+            );
+        }
+        if let Some(etag) = etag {
+            request = request
+                .if_match(HeaderValue::from_str(etag).map_err(|_| {
+                    ListingsApiError::UnexpectedResponse("invalid ETag".to_owned())
+                })?);
+        }
+        let client = Arc::clone(&self.client);
+        let response = std::thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|error| ListingsApiError::Upstream(error.to_string()))?
+                        .block_on(client.execute(request))
+                        .map_err(|error| ListingsApiError::Upstream(error.to_string()))
+                })
+                .join()
+                .map_err(|_| ListingsApiError::Upstream("HTTP worker panicked".to_owned()))?
+        })?;
+        match response.status {
+            StatusCode::NOT_FOUND => return Err(ListingsApiError::NotFound),
+            StatusCode::PRECONDITION_FAILED | StatusCode::CONFLICT => {
+                return Err(ListingsApiError::Conflict);
+            }
+            status if !status.is_success() => {
+                let message = serde_json::from_slice::<Value>(&response.body)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_else(|| format!("Tori returned HTTP {}", status.as_u16()));
+                return Err(ListingsApiError::Upstream(message));
+            }
+            _ => {}
+        }
+        if response.body.is_empty() {
+            serde_json::from_value(Value::Null)
+        } else {
+            serde_json::from_slice(&response.body)
+        }
+        .map_err(|error| ListingsApiError::UnexpectedResponse(error.to_string()))
+    }
+
+    fn empty(&self, method: Method, path: String) -> Result<(), ListingsApiError> {
+        self.request::<Value>(method, path, None, None).map(|_| ())
+    }
+}
+
+impl ListingsApi for HttpListingsApi {
+    fn categories(&self) -> Result<Vec<UpstreamCategory>, ListingsApiError> {
+        self.request(
+            Method::GET,
+            "/my/listings/categories".to_owned(),
+            None,
+            None,
+        )
+    }
+
+    fn listing_page(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<UpstreamListingPage, ListingsApiError> {
+        self.request(
+            Method::GET,
+            format!("/my/listings?offset={offset}&limit={limit}"),
+            None,
+            None,
+        )
+    }
+
+    fn listing(&self, listing_id: &str) -> Result<UpstreamListing, ListingsApiError> {
+        self.request(
+            Method::GET,
+            format!("/my/listings/{listing_id}"),
+            None,
+            None,
+        )
+    }
+
+    fn update_listing(
+        &self,
+        listing_id: &str,
+        etag: &str,
+        fields: &BTreeMap<String, Value>,
+    ) -> Result<UpstreamListing, ListingsApiError> {
+        self.request(
+            Method::PUT,
+            format!("/my/listings/{listing_id}"),
+            Some(Value::Object(fields.clone().into_iter().collect())),
+            Some(etag),
+        )
+    }
+
+    fn dispose_listing(&self, listing_id: &str) -> Result<(), ListingsApiError> {
+        self.empty(Method::POST, format!("/my/listings/{listing_id}/dispose"))
+    }
+
+    fn delete_listing(&self, listing_id: &str) -> Result<(), ListingsApiError> {
+        self.empty(Method::DELETE, format!("/my/listings/{listing_id}"))
+    }
 }
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq)]
@@ -322,10 +458,10 @@ impl<'a> Listings<'a> {
                     ExitClass::Conflict,
                 );
                 error.retryable = true;
-                error.details = Some(json!({
+                error.details = Some(Box::new(json!({
                     "listing_id": listing_id,
                     "current": fresh,
-                }));
+                })));
                 Err(error)
             }
             Err(error) => Err(listing_error(error, Some(listing_id))),
@@ -609,7 +745,7 @@ fn validation_error(field: &str, message: &str) -> AppError {
         "listing fields are invalid",
         ExitClass::Validation,
     );
-    error.details = Some(json!({ "fields": { field: message } }));
+    error.details = Some(Box::new(json!({ "fields": { field: message } })));
     error
 }
 
@@ -635,7 +771,9 @@ fn listing_error(error: ListingsApiError, listing_id: Option<&str>) -> AppError 
         ListingsApiError::Validation { message, fields } => {
             let mut error =
                 AppError::new("listing.validation_failed", message, ExitClass::Validation);
-            error.details = Some(json!({ "listing_id": listing_id, "fields": fields }));
+            error.details = Some(Box::new(
+                json!({ "listing_id": listing_id, "fields": fields }),
+            ));
             error
         }
         other => upstream_error(other),
@@ -648,7 +786,7 @@ fn resource_not_found(code: &str, resource: &str, id: &str) -> AppError {
         format!("{resource} was not found"),
         ExitClass::Validation,
     );
-    error.details = Some(json!({ format!("{resource}_id"): id }));
+    error.details = Some(Box::new(json!({ format!("{resource}_id"): id })));
     error
 }
 

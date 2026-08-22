@@ -25,13 +25,6 @@ pub enum CategoryCommand {
     },
 }
 
-pub fn dispatch(command: CategoryArgs) -> Result<Value, AppError> {
-    let details = serde_json::to_value(command.command).map_err(|error| {
-        AppError::output("failed to serialize category command context").with_source(error)
-    })?;
-    Err(AppError::protocol_unavailable("category", details))
-}
-
 pub fn dispatch_with_api(command: CategoryArgs, api: &dyn ListingsApi) -> Result<Value, AppError> {
     let listings = Listings::new(api);
     let result = match command.command {

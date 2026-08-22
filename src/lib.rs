@@ -14,7 +14,7 @@ use std::{
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
 use diagnostics::{DiagnosticsContext, DiagnosticsSession};
-use domain::envelope::Envelope;
+use domain::envelope::{Envelope, Warning};
 use error::{AppError, ExitClass};
 
 pub struct RunResult {
@@ -35,9 +35,10 @@ where
         Ok(session) => session,
         Err(error) => return finish(requested_format, Err(error.into_app_error()), None),
     };
+    let runtime = cli::runtime::ProductionRuntime;
     session.run(&command, || {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            run_parsed(args, requested_format, Some(session.context()))
+            run_parsed(args, requested_format, Some(session.context()), &runtime)
         }))
         .unwrap_or_else(|panic| {
             finish(
@@ -51,13 +52,37 @@ where
     })
 }
 
+pub fn run_with_runtime<I, T>(args: I, runtime: &dyn cli::CommandRuntime) -> RunResult
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString>,
+{
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    let requested_format = output::format_from_args(args.iter().cloned()).unwrap_or_default();
+    catch_unwind(AssertUnwindSafe(|| {
+        run_parsed(args, requested_format, None, runtime)
+    }))
+    .unwrap_or_else(|panic| {
+        finish(
+            requested_format,
+            Err(AppError::unexpected(panic_message(panic))),
+            None,
+        )
+    })
+}
+
 fn run_parsed(
     args: Vec<OsString>,
     requested_format: output::OutputFormat,
     diagnostics: Option<&DiagnosticsContext>,
+    runtime: &dyn cli::CommandRuntime,
 ) -> RunResult {
     match cli::Cli::try_parse_from(args) {
-        Ok(cli) => finish(cli.format, cli::dispatch(cli.command), diagnostics),
+        Ok(cli) => finish(
+            cli.format,
+            cli::dispatch_with_runtime(cli.command, runtime),
+            diagnostics,
+        ),
         Err(error)
             if matches!(
                 error.kind(),
@@ -84,7 +109,25 @@ fn finish(
     diagnostics: Option<&DiagnosticsContext>,
 ) -> RunResult {
     let (envelope, exit_code) = match result {
-        Ok(data) => (Envelope::success(data), ExitClass::Success.code()),
+        Ok(data) => {
+            let mut envelope = Envelope::success(data);
+            if let Some(warnings) = envelope
+                .data
+                .as_ref()
+                .and_then(|data| data.get("warnings"))
+                .and_then(serde_json::Value::as_array)
+            {
+                envelope.warnings = warnings
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(|message| Warning {
+                        code: "workflow.best_effort_failed".to_owned(),
+                        message: message.to_owned(),
+                    })
+                    .collect();
+            }
+            (envelope, ExitClass::Success.code())
+        }
         Err(mut error) => {
             if error.diagnostics.is_none() {
                 error.diagnostics = diagnostics.map(|context| Box::new(context.envelope()));

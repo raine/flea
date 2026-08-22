@@ -1,9 +1,13 @@
 use std::{collections::BTreeMap, fmt, path::Path, time::Duration};
 
+use reqwest::{Method as ReqwestMethod, header::HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::domain::field::Field;
+use crate::{
+    api::client::{MultipartPart, RequestSpec, ToriClient, compatibility},
+    domain::field::Field,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetryPolicy {
@@ -82,7 +86,7 @@ pub struct ApiError {
     pub message: String,
     pub retryable: bool,
     pub status: Option<u16>,
-    pub details: Option<Value>,
+    pub details: Option<Box<Value>>,
 }
 
 impl ApiError {
@@ -105,7 +109,7 @@ impl ApiError {
         let mut error = Self::new("upstream.request_failed", message);
         error.status = Some(response.status);
         error.retryable = response.status >= 500;
-        error.details = Some(response.body.clone());
+        error.details = Some(Box::new(response.body.clone()));
         error
     }
 }
@@ -121,6 +125,94 @@ impl std::error::Error for ApiError {}
 #[allow(async_fn_in_trait)]
 pub trait HttpTransport: Send + Sync {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ApiError>;
+}
+
+pub struct ClientTransport<C> {
+    client: C,
+}
+
+impl<C> ClientTransport<C> {
+    pub const fn new(client: C) -> Self {
+        Self { client }
+    }
+}
+
+impl<C: ToriClient> HttpTransport for ClientTransport<C> {
+    async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
+        let service = service_for_path(&request.path);
+        let method = match request.method {
+            Method::Get => ReqwestMethod::GET,
+            Method::Post => ReqwestMethod::POST,
+            Method::Patch => ReqwestMethod::PATCH,
+            Method::Put => ReqwestMethod::PUT,
+            Method::Delete => ReqwestMethod::DELETE,
+        };
+        let mut spec = RequestSpec::new(method, request.path.clone(), service);
+        if service == compatibility::SERVICE_ADINPUT {
+            spec = spec.adinput();
+        }
+        spec = match request.body {
+            RequestBody::Empty => spec,
+            RequestBody::Json(value) => spec.body(
+                serde_json::to_vec(&value).map_err(|error| {
+                    ApiError::new("upstream.request_encoding_failed", error.to_string())
+                })?,
+                HeaderValue::from_static("application/json"),
+            ),
+            RequestBody::Image {
+                bytes,
+                file_name,
+                width,
+                height,
+            } => spec.multipart(vec![
+                MultipartPart::bytes("image", bytes)
+                    .file_name(file_name)
+                    .mime_type("application/octet-stream"),
+                MultipartPart::bytes("width", width.to_string()),
+                MultipartPart::bytes("height", height.to_string()),
+            ]),
+        };
+        if let Some(etag) = request.if_match {
+            spec = spec.if_match(HeaderValue::from_str(&etag).map_err(|_| {
+                ApiError::new("upstream.invalid_etag", "Tori returned an invalid ETag")
+            })?);
+        }
+        let response = self.client.execute(spec).await.map_err(|error| {
+            let mut api = ApiError::new("upstream.request_failed", error.to_string());
+            api.retryable = matches!(request.retry, RetryPolicy::BoundedRead);
+            api
+        })?;
+        let body = if response.body.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&response.body)
+                .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))?
+        };
+        Ok(HttpResponse {
+            status: response.status.as_u16(),
+            etag: response
+                .etag()
+                .and_then(|etag| etag.to_str().ok())
+                .map(str::to_owned),
+            body,
+        })
+    }
+}
+
+fn service_for_path(path: &str) -> &'static str {
+    if path.contains("/delivery") {
+        compatibility::SERVICE_DELIVERY
+    } else if path.contains("/products") || path.contains("/publish") {
+        compatibility::SERVICE_ORDER_PAYMENT
+    } else if path.contains("/tracking/") {
+        compatibility::SERVICE_BILLING_TRACKING
+    } else if path.starts_with("/listings/") {
+        compatibility::SERVICE_AD_SUMMARIES
+    } else if path.ends_with("/item") {
+        compatibility::SERVICE_ITEM_CREATION
+    } else {
+        compatibility::SERVICE_ADINPUT
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1010,8 +1102,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .find(|image| image.state == ImageState::Failed)
             {
                 let mut error = ApiError::new("draft.image_failed", "An image failed processing");
-                error.details =
-                    Some(json!({ "image_id": image.image_id, "failure": image.failure }));
+                error.details = Some(Box::new(
+                    json!({ "image_id": image.image_id, "failure": image.failure }),
+                ));
                 return Err(WorkflowError::for_draft(
                     &state.draft_id,
                     completed,

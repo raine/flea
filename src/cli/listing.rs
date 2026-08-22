@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::{
     api::listings::{Listings, ListingsApi},
-    cli::draft::{ListingInputArgs, TradeType},
+    cli::draft::{ListingInputArgs, TradeType, parse_price},
     error::AppError,
 };
 
@@ -42,20 +42,13 @@ pub enum ListingCommand {
     },
 }
 
-pub fn dispatch(command: ListingArgs) -> Result<Value, AppError> {
-    let details = serde_json::to_value(command.command).map_err(|error| {
-        AppError::output("failed to serialize listing command context").with_source(error)
-    })?;
-    Err(AppError::protocol_unavailable("listing", details))
-}
-
 pub fn dispatch_with_api(command: ListingArgs, api: &dyn ListingsApi) -> Result<Value, AppError> {
     let listings = Listings::new(api);
     let value = match command.command {
         ListingCommand::List => serde_json::to_value(listings.list()?),
         ListingCommand::Show { listing_id } => serde_json::to_value(listings.show(&listing_id)?),
         ListingCommand::Update { listing_id, values } => {
-            let changes = listing_changes(values)?;
+            let changes = listing_changes(*values)?;
             serde_json::to_value(listings.update(&listing_id, changes)?)
         }
         ListingCommand::Dispose { listing_id } => {
@@ -174,16 +167,4 @@ fn insert_flag(
     }
     changes.insert(key.to_owned(), value);
     Ok(())
-}
-
-fn parse_price(input: &str) -> Result<Value, AppError> {
-    let value: Value = serde_json::from_str(input)
-        .map_err(|_| AppError::usage("--price must be a non-negative number"))?;
-    if value
-        .as_f64()
-        .is_none_or(|price| !price.is_finite() || price < 0.0)
-    {
-        return Err(AppError::usage("--price must be a non-negative number"));
-    }
-    Ok(value)
 }

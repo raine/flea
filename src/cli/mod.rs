@@ -2,6 +2,7 @@ pub mod auth;
 pub mod category;
 pub mod draft;
 pub mod listing;
+pub mod runtime;
 
 use clap::{Parser, Subcommand};
 use serde_json::Value;
@@ -27,11 +28,17 @@ pub enum Command {
     Listing(listing::ListingArgs),
 }
 
+pub trait CommandRuntime {
+    fn execute(&self, command: Command) -> Result<Value, AppError>;
+}
+
 pub fn dispatch(command: Command) -> Result<Value, AppError> {
-    match command {
-        Command::Auth(args) => auth::dispatch(args),
-        Command::Category(args) => category::dispatch(args),
-        Command::Draft(args) => draft::dispatch(*args),
-        Command::Listing(args) => listing::dispatch(args),
-    }
+    runtime::ProductionRuntime.execute(command)
+}
+
+pub fn dispatch_with_runtime(
+    command: Command,
+    runtime: &dyn CommandRuntime,
+) -> Result<Value, AppError> {
+    runtime.execute(command)
 }

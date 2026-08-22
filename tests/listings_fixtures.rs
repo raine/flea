@@ -250,7 +250,7 @@ fn json_and_flag_duplicates_are_a_structured_usage_error() {
         panic!("expected listing update");
     };
 
-    let error = listing_changes(values).unwrap_err();
+    let error = listing_changes(*values).unwrap_err();
     assert_eq!(error.code, "cli.invalid_usage");
     assert_eq!(error.exit_class.code(), 2);
 }

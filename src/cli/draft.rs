@@ -147,7 +147,11 @@ pub fn collect_input_with_reader(
         }
     };
     insert_flag(&mut values, "description", description)?;
-    insert_flag(&mut values, "price", args.price.map(Value::String))?;
+    insert_flag(
+        &mut values,
+        "price",
+        args.price.map(|price| parse_price(&price)).transpose()?,
+    )?;
     insert_flag(
         &mut values,
         "trade_type",
@@ -234,11 +238,23 @@ fn insert_flag(
     Ok(())
 }
 
+pub fn parse_price(input: &str) -> Result<Value, AppError> {
+    let value: Value = serde_json::from_str(input)
+        .map_err(|_| input_error("--price must be a non-negative number"))?;
+    if value
+        .as_f64()
+        .is_none_or(|price| !price.is_finite() || price < 0.0)
+    {
+        return Err(input_error("--price must be a non-negative number"));
+    }
+    Ok(value)
+}
+
 fn duplicate_field(field: &str) -> AppError {
     let mut error = input_error(format!(
         "field `{field}` appears in both command flags and JSON input"
     ));
-    error.details = Some(json!({ "duplicate_field": field }));
+    error.details = Some(Box::new(json!({ "duplicate_field": field })));
     error
 }
 
@@ -331,10 +347,25 @@ pub async fn execute<A: AdInputApi>(
 }
 
 fn workflow_error(error: WorkflowError) -> AppError {
+    let has_remote_mutation = error.recovery.as_ref().is_some_and(|recovery| {
+        recovery.completed_steps.iter().any(|step| {
+            step == "create_draft"
+                || step.starts_with("upload_image:")
+                || matches!(
+                    step.as_str(),
+                    "attach_images"
+                        | "patch_item_fields"
+                        | "submit_adinput"
+                        | "apply_delivery"
+                        | "publish_basic"
+                )
+        })
+    });
     let exit_class = match error.code.as_str() {
         "draft.conflict" => ExitClass::Conflict,
-        "draft.validation_failed" => ExitClass::Validation,
-        _ if error.recovery.is_some() => ExitClass::Partial,
+        "draft.validation_failed" | "draft.invalid_image" => ExitClass::Validation,
+        "draft.image_processing" => ExitClass::Partial,
+        _ if has_remote_mutation => ExitClass::Partial,
         _ => ExitClass::Upstream,
     };
     let retryable = error
@@ -363,17 +394,15 @@ fn workflow_error(error: WorkflowError) -> AppError {
     app.retryable = retryable;
     app.details = error
         .details
-        .or_else(|| error.source.and_then(|source| source.details));
-    app.partial = partial;
+        .or_else(|| {
+            error
+                .source
+                .and_then(|source| source.details.map(|details| *details))
+        })
+        .map(Box::new);
+    app.partial = partial.map(Box::new);
     app.next_actions = next_actions;
     app
-}
-
-pub fn dispatch(command: DraftArgs) -> Result<Value, AppError> {
-    let details = serde_json::to_value(command.command).map_err(|error| {
-        AppError::output("failed to serialize draft command context").with_source(error)
-    })?;
-    Err(AppError::protocol_unavailable("draft", details))
 }
 
 #[cfg(test)]
@@ -421,7 +450,10 @@ mod tests {
 
         assert_eq!(error.exit_class, ExitClass::Usage);
         assert_eq!(error.code, "cli.invalid_input");
-        assert_eq!(error.details, Some(json!({ "duplicate_field": "title" })));
+        assert_eq!(
+            error.details.as_deref(),
+            Some(&json!({ "duplicate_field": "title" }))
+        );
     }
 
     #[test]
@@ -432,6 +464,9 @@ mod tests {
 
         let error = collect_input_with_reader(args, &mut input).unwrap_err();
 
-        assert_eq!(error.details, Some(json!({ "duplicate_field": "image" })));
+        assert_eq!(
+            error.details.as_deref(),
+            Some(&json!({ "duplicate_field": "image" }))
+        );
     }
 }

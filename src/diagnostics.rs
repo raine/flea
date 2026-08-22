@@ -1,5 +1,4 @@
 use std::{
-    env,
     ffi::OsString,
     fs::{self, File, OpenOptions},
     io::{self, Write},
@@ -16,6 +15,7 @@ use uuid::Uuid;
 use crate::{
     domain::envelope::Diagnostics,
     error::{AppError, ExitClass},
+    storage::StatePaths,
 };
 
 const LOG_FILE: &str = "tori-cli.jsonl";
@@ -191,14 +191,7 @@ fn initialize_with_context(
 }
 
 fn state_dir() -> io::Result<PathBuf> {
-    if let Some(path) = env::var_os("XDG_STATE_HOME").filter(|path| !path.is_empty()) {
-        return Ok(PathBuf::from(path).join("tori-cli"));
-    }
-    env::var_os("HOME")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .map(|home| home.join(".local/state/tori-cli"))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME and XDG_STATE_HOME are unset"))
+    StatePaths::discover().map(|paths| paths.root())
 }
 
 fn create_private_dir(path: &Path) -> io::Result<()> {
