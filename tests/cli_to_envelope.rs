@@ -399,6 +399,36 @@ fn category_and_listing_commands_flow_through_http_normalization() {
     assert_eq!(listing["data"]["fields"]["title"], "Chair");
 }
 
+#[test]
+fn listing_list_uses_the_published_listing_search_endpoint_and_paginates() {
+    let first_page: Value =
+        serde_json::from_str(include_str!("fixtures/listings/page-1.json")).unwrap();
+    let second_page: Value =
+        serde_json::from_str(include_str!("fixtures/listings/page-2.json")).unwrap();
+    let client = MockClient::with_responses([
+        response(StatusCode::OK, first_page),
+        response(StatusCode::OK, second_page),
+    ]);
+
+    let output = invoke(
+        &TestRuntime {
+            client: client.clone(),
+        },
+        ["tori", "--format", "json", "listing", "list"],
+    );
+
+    assert_eq!(output["data"]["total"], 52);
+    assert_eq!(output["data"]["listings"].as_array().unwrap().len(), 52);
+    assert_eq!(output["data"]["listings"][0]["listing_id"], "1000");
+    assert_eq!(output["data"]["listings"][0]["statistics"]["views"], 100);
+
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].service, "AD-SUMMARIES");
+    assert_eq!(requests[0].path_and_query, "/search?limit=50&offset=0");
+    assert_eq!(requests[1].path_and_query, "/search?limit=50&offset=50");
+}
+
 fn invoke<const N: usize>(runtime: &TestRuntime, args: [&str; N]) -> Value {
     let result = run_with_runtime(args, runtime);
     assert_eq!(result.exit_code, 0, "{}", result.document);

@@ -132,7 +132,7 @@ impl ListingsApi for HttpListingsApi {
     ) -> Result<UpstreamListingPage, ListingsApiError> {
         self.request(
             Method::GET,
-            format!("/my/listings?offset={offset}&limit={limit}"),
+            format!("/search?limit={limit}&offset={offset}"),
             None,
             None,
         )
