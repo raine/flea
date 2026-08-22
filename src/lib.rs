@@ -31,9 +31,10 @@ pub struct RunResult {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum AuthPresentation {
+enum PlainPresentation {
     Structured,
-    Login,
+    AuthLogin,
+    Skill,
 }
 
 pub fn run<I, T>(args: I) -> RunResult
@@ -56,11 +57,11 @@ where
                 cli.format,
                 Err(error.into_app_error()),
                 None,
-                AuthPresentation::Structured,
+                PlainPresentation::Structured,
             );
         }
     };
-    let auth_presentation = auth_presentation(cli.format, &cli.command);
+    let plain_presentation = plain_presentation(cli.format, &cli.command);
     let runtime = cli::runtime::ProductionRuntime;
     session.run(&command, || {
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -68,7 +69,7 @@ where
                 cli.format,
                 cli::dispatch_with_runtime(cli.command, &runtime),
                 Some(session.context()),
-                auth_presentation,
+                plain_presentation,
             )
         }))
         .unwrap_or_else(|_| {
@@ -76,7 +77,7 @@ where
                 cli.format,
                 Err(AppError::unexpected("command failed unexpectedly")),
                 Some(session.context()),
-                AuthPresentation::Structured,
+                PlainPresentation::Structured,
             )
         });
         let exit_code = result.exit_code;
@@ -95,13 +96,13 @@ where
         Ok(cli) => cli,
         Err(error) => return clap_presentation(error),
     };
-    let auth_presentation = auth_presentation(cli.format, &cli.command);
+    let plain_presentation = plain_presentation(cli.format, &cli.command);
     catch_unwind(AssertUnwindSafe(|| {
         finish(
             cli.format,
             cli::dispatch_with_runtime(cli.command, runtime),
             None,
-            auth_presentation,
+            plain_presentation,
         )
     }))
     .unwrap_or_else(|_| {
@@ -109,7 +110,7 @@ where
             cli.format,
             Err(AppError::unexpected("command failed unexpectedly")),
             None,
-            AuthPresentation::Structured,
+            PlainPresentation::Structured,
         )
     })
 }
@@ -127,15 +128,13 @@ fn clap_presentation(error: clap::Error) -> RunResult {
     }
 }
 
-fn auth_presentation(format: output::OutputFormat, command: &cli::Command) -> AuthPresentation {
-    if format != output::OutputFormat::Toon {
-        return AuthPresentation::Structured;
-    }
+fn plain_presentation(format: output::OutputFormat, command: &cli::Command) -> PlainPresentation {
     match command {
+        cli::Command::Skill(_) => PlainPresentation::Skill,
         cli::Command::Auth(cli::auth::AuthArgs {
             command: cli::auth::AuthCommand::Login,
-        }) => AuthPresentation::Login,
-        _ => AuthPresentation::Structured,
+        }) if format == output::OutputFormat::Toon => PlainPresentation::AuthLogin,
+        _ => PlainPresentation::Structured,
     }
 }
 
@@ -143,13 +142,14 @@ fn finish(
     format: output::OutputFormat,
     result: Result<serde_json::Value, AppError>,
     diagnostics: Option<&DiagnosticsContext>,
-    auth_presentation: AuthPresentation,
+    plain_presentation: PlainPresentation,
 ) -> RunResult {
     let (envelope, exit_code) = match result {
         Ok(mut data) => {
-            let plain_document = match auth_presentation {
-                AuthPresentation::Structured => None,
-                AuthPresentation::Login => Some(output::render_auth_login(&data)),
+            let plain_document = match plain_presentation {
+                PlainPresentation::Structured => None,
+                PlainPresentation::AuthLogin => Some(output::render_auth_login(&data)),
+                PlainPresentation::Skill => Some(output::render_skill(&data)),
             };
             if let Some(document) = plain_document {
                 return match document {
@@ -162,7 +162,7 @@ fn finish(
                         format,
                         Err(error),
                         diagnostics,
-                        AuthPresentation::Structured,
+                        PlainPresentation::Structured,
                     ),
                 };
             }

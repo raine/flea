@@ -6,6 +6,7 @@ pub mod listing;
 pub mod location;
 pub mod runtime;
 pub mod search;
+pub mod skill;
 
 use clap::{Parser, Subcommand};
 use serde_json::Value;
@@ -60,6 +61,11 @@ pub enum Command {
         long_about = "Discover deterministic Tori location identifiers for subsequent public marketplace searches."
     )]
     Location(location::LocationArgs),
+    #[command(
+        about = "Print or install the coding-agent skill",
+        long_about = "Print the bundled tori-cli coding-agent skill or install it for supported coding agents."
+    )]
+    Skill(skill::SkillArgs),
 }
 
 pub trait CommandRuntime {

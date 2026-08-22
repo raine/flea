@@ -27,6 +27,8 @@ fn every_command_leaf_parses() {
         vec!["tori", "listing", "delete", "listing-1"],
         vec!["tori", "search", "chair"],
         vec!["tori", "location", "search", "Helsinki"],
+        vec!["tori", "skill"],
+        vec!["tori", "skill", "install", "--agent", "claude"],
     ];
 
     for arguments in cases {

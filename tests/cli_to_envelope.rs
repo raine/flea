@@ -96,6 +96,7 @@ impl CommandRuntime for TestRuntime {
                 let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
                 location::dispatch_with_api(args, &api)
             }
+            Command::Skill(args) => tori::cli::skill::dispatch(args),
         }
     }
 }

@@ -120,6 +120,7 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(top.contains("category  Discover Tori category machine values"));
     assert!(top.contains("draft     Create and manage remote drafts"));
     assert!(top.contains("listing   Manage published listings"));
+    assert!(top.contains("skill     Print or install the coding-agent skill"));
 
     let draft = stdout(&invoke(&["draft", "--help"]));
     assert!(draft.contains("create   Create a remote draft"));
@@ -136,6 +137,10 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(auth.contains("login   Sign in through the browser"));
     assert!(auth.contains("status  Show authentication status"));
     assert!(auth.contains("logout  Clear authentication state"));
+
+    let skill = stdout(&invoke(&["skill", "--help"]));
+    assert!(skill.contains("install  Install the tori-cli skill for coding agents"));
+    assert!(skill.contains("tori skill [OPTIONS] [COMMAND]"));
 }
 
 #[test]

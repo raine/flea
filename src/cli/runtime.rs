@@ -49,6 +49,7 @@ impl CommandRuntime for ProductionRuntime {
                 let api = HttpPublicSearchApi::new(Arc::new(public_client()));
                 super::location::dispatch_with_api(args, &api)
             }
+            Command::Skill(args) => super::skill::dispatch(args),
         }
     }
 }
