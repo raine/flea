@@ -3,9 +3,18 @@
 Flea error envelopes answer two independent questions:
 
 - `upstream_transient` reports whether the observed upstream failure is likely temporary.
-- `safe_to_retry` reports whether repeating the complete command is safe from duplicate or conflicting remote mutations.
+- `safe_to_retry` reports whether repeating the complete, unchanged command can make progress without duplicate or conflicting remote mutations.
 
 A temporary upstream failure does not make a mutation safe to repeat. For example, a `502` response from `draft show` produces `upstream_transient: true` and `safe_to_retry: true`. The same response after a draft update request produces `upstream_transient: true` and `safe_to_retry: false` because the remote mutation outcome is uncertain.
+
+Publication validation has four states with distinct retry behavior:
+
+- `missing` and `invalid` are deterministic results from available evidence. They set both classifications to `false`. Publication remains `unattempted`, but replaying the unchanged publish command cannot make progress. `retry_guidance` identifies the field and `next_actions` supplies the update or discovery command that changes the input state.
+- `unverifiable` means required evidence was unavailable. An accompanying `evidence_failures` entry names the field, failed read stage, error code, classifications, and command that repeats that read. A transient read can set `upstream_transient: true` and `safe_to_retry: true` when no deterministic blocker exists. Unverifiable local model evidence without a retryable read sets both values to `false`.
+- `pending` means an observed remote process, such as image processing, can change without a draft update. Repeating publication can be safe while `upstream_transient` remains `false`.
+- `ready` means validation passed. Publication can proceed, but this state provides no guarantee about later mutation retry safety.
+
+`publication: unattempted` describes workflow progress only. It does not imply that an unchanged command is useful or safe to retry. `failed_stage` distinguishes local `validate` results from unverifiable reads such as `fetch_delivery_options` and `fetch_category_taxonomy`.
 
 Errors include `retry_guidance` when one or both classifications are true or a mutation outcome is uncertain. The guidance explains the distinction in human-readable output. When mutation state is uncertain, `next_actions` identifies an authoritative `draft show`, `listing show`, or listing command before any further mutation.
 
@@ -19,7 +28,7 @@ Flea classifies request failures from the operation and the evidence available a
 - A malformed 2xx mutation response has an uncertain outcome and is unsafe to repeat.
 - A mutation protected by an ETag is safe to repeat after a precondition failure only when Flea has authoritatively observed the fresh remote state.
 - A workflow with completed mutation steps is unsafe to replay from the beginning. Returned draft or listing identifiers are recovery handles, not permission to repeat creation or publication.
-- Conflict and validation responses are not upstream-transient. Their safe retry value depends on authoritative evidence that the attempted mutation was not applied.
+- Conflict and deterministic validation responses are not upstream-transient. Their safe retry value depends on whether unchanged input can make progress and on authoritative evidence that an attempted mutation was not applied.
 
 The HTTP retry loop consumes the same classification. It retries transient reads within its configured bound. A mutation enters that loop only when its request declares a source-backed idempotency contract or carries a source-backed idempotency key. Flea's Tori mutation adapters declare neither, so they execute once.
 

@@ -15,6 +15,22 @@ impl<A> DraftWorkflow<A> {
 }
 
 impl<A: AdInputApi> DraftWorkflow<A> {
+    fn validation_evidence_failure(
+        field: &str,
+        failed_stage: &str,
+        error: &ApiError,
+        command: String,
+    ) -> ValidationEvidenceFailure {
+        ValidationEvidenceFailure {
+            field: field.to_owned(),
+            failed_stage: failed_stage.to_owned(),
+            code: error.code.clone(),
+            upstream_transient: error.upstream_transient,
+            safe_to_retry: error.safe_to_retry,
+            command,
+        }
+    }
+
     async fn recover_after_failure(
         &self,
         mut error: WorkflowError,
@@ -1005,17 +1021,50 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
         let mut state = publication.draft;
+        let mut evidence_failures = Vec::new();
         let delivery_verifiable = match self.api.delivery_composer(draft_id).await {
-            Ok(composer) => attach_delivery_model(&mut state, &composer).is_ok(),
-            Err(_) => false,
+            Ok(composer) => match attach_delivery_model(&mut state, &composer) {
+                Ok(()) => true,
+                Err(error) => {
+                    evidence_failures.push(Self::validation_evidence_failure(
+                        "delivery",
+                        "fetch_delivery_options",
+                        &error,
+                        format!("flea draft show {draft_id}"),
+                    ));
+                    false
+                }
+            },
+            Err(error) => {
+                evidence_failures.push(Self::validation_evidence_failure(
+                    "delivery",
+                    "fetch_delivery_options",
+                    &error,
+                    format!("flea draft show {draft_id}"),
+                ));
+                false
+            }
         };
-        let categories = self.api.publication_categories().await.ok();
-        Ok(evaluate_publication(
+        let categories = match self.api.publication_categories().await {
+            Ok(categories) => Some(categories),
+            Err(error) => {
+                evidence_failures.push(Self::validation_evidence_failure(
+                    "category",
+                    "fetch_category_taxonomy",
+                    &error,
+                    "flea category list".to_owned(),
+                ));
+                None
+            }
+        };
+        let mut report = evaluate_publication(
             &state,
             categories.as_deref(),
             publication.composer_model,
             delivery_verifiable,
-        ))
+        );
+        report.evidence_failures = evidence_failures;
+        Ok(report)
     }
 
     pub async fn update(
@@ -1253,24 +1302,59 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         let publication_images = observed_image_intent(&state);
         completed.push("fetch_draft".to_owned());
 
-        let composer = self.api.delivery_composer(draft_id).await.ok();
-        let mut delivery_verifiable = match composer.as_ref() {
-            Some(composer) if attach_delivery_model(&mut state, composer).is_ok() => {
-                completed.push("fetch_delivery_options".to_owned());
-                true
+        let mut evidence_failures = Vec::new();
+        let composer = match self.api.delivery_composer(draft_id).await {
+            Ok(composer) => Some(composer),
+            Err(error) => {
+                evidence_failures.push(Self::validation_evidence_failure(
+                    "delivery",
+                    "fetch_delivery_options",
+                    &error,
+                    format!("flea draft show {draft_id}"),
+                ));
+                None
             }
-            _ => false,
         };
-        let categories = self.api.publication_categories().await.ok();
-        if categories.is_some() {
-            completed.push("fetch_category_taxonomy".to_owned());
-        }
-        let report = evaluate_publication(
+        let mut delivery_verifiable = match composer.as_ref() {
+            Some(composer) => match attach_delivery_model(&mut state, composer) {
+                Ok(()) => {
+                    completed.push("fetch_delivery_options".to_owned());
+                    true
+                }
+                Err(error) => {
+                    evidence_failures.push(Self::validation_evidence_failure(
+                        "delivery",
+                        "fetch_delivery_options",
+                        &error,
+                        format!("flea draft show {draft_id}"),
+                    ));
+                    false
+                }
+            },
+            None => false,
+        };
+        let categories = match self.api.publication_categories().await {
+            Ok(categories) => {
+                completed.push("fetch_category_taxonomy".to_owned());
+                Some(categories)
+            }
+            Err(error) => {
+                evidence_failures.push(Self::validation_evidence_failure(
+                    "category",
+                    "fetch_category_taxonomy",
+                    &error,
+                    "flea category list".to_owned(),
+                ));
+                None
+            }
+        };
+        let mut report = evaluate_publication(
             &state,
             categories.as_deref(),
             composer_model,
             delivery_verifiable,
         );
+        report.evidence_failures = evidence_failures;
         if !report.missing.is_empty()
             || !report.invalid.is_empty()
             || !report.unverifiable.is_empty()

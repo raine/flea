@@ -13,6 +13,7 @@ pub fn evaluate_publication(
         invalid: Vec::new(),
         pending: Vec::new(),
         unverifiable: Vec::new(),
+        evidence_failures: Vec::new(),
     };
     validate_publication_core(state, categories, delivery_verifiable, &mut report);
     validate_publication_composer(state, composer_model, &mut report);
@@ -48,14 +49,14 @@ fn validate_publication_core(
                 "category",
                 "a category is required for publication",
                 "publication_invariant",
-                "flea category list".to_owned(),
+                format!("flea draft update {} --category VALUE", state.draft_id),
             ));
         }
         None => report.invalid.push(publication_issue(
             "category",
             "the category must be a non-empty machine value",
             "publication_invariant",
-            "flea category list".to_owned(),
+            format!("flea draft update {} --category VALUE", state.draft_id),
         )),
         Some(category_id) => match categories {
             Some(categories) => match categories
@@ -80,7 +81,7 @@ fn validate_publication_core(
                 "category",
                 "category selectability could not be verified",
                 "category_taxonomy",
-                format!("flea draft validate {}", state.draft_id),
+                "flea category list".to_owned(),
             )),
         },
     }
@@ -164,7 +165,7 @@ fn validate_publication_core(
             "delivery",
             "delivery configuration could not be verified",
             "delivery_composer",
-            format!("flea draft validate {}", state.draft_id),
+            format!("flea draft show {}", state.draft_id),
         ));
     } else {
         match state.delivery.as_ref() {
@@ -191,7 +192,7 @@ fn validate_publication_core(
                 "delivery",
                 "delivery configuration could not be verified",
                 "delivery_composer",
-                format!("flea draft validate {}", state.draft_id),
+                format!("flea draft show {}", state.draft_id),
             )),
         }
     }
@@ -363,7 +364,11 @@ fn validate_publication_images(state: &DraftState, report: &mut PublicationValid
             "images",
             format!("image processing rejected: {}", failed.join(", ")),
             "image_processing",
-            format!("flea draft show {}", state.draft_id),
+            format!(
+                "flea draft image remove {} {}",
+                state.draft_id,
+                failed.join(" ")
+            ),
         ));
     }
 }

@@ -120,6 +120,16 @@ pub struct PublicationRequirement {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ValidationEvidenceFailure {
+    pub field: String,
+    pub failed_stage: String,
+    pub code: String,
+    pub upstream_transient: bool,
+    pub safe_to_retry: bool,
+    pub command: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PublicationValidation {
     pub draft_id: String,
     pub ready: bool,
@@ -131,6 +141,8 @@ pub struct PublicationValidation {
     pub pending: Vec<PublicationRequirement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unverifiable: Vec<PublicationRequirement>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_failures: Vec<ValidationEvidenceFailure>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

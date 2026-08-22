@@ -771,6 +771,34 @@ fn image_add_flows_through_upload_and_ordering() {
 }
 
 #[test]
+fn deterministic_publish_validation_has_local_remediation_guidance() {
+    let client = MockClient::with_responses([
+        response(StatusCode::OK, draft_state("one")),
+        response(StatusCode::OK, delivery_page(false)),
+        response(StatusCode::OK, json!({ "categories": [] })),
+    ]);
+    let result = run_with_runtime(
+        ["flea", "--format", "json", "draft", "publish", "draft-1"],
+        &TestRuntime { client },
+    );
+    let value: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 20);
+    assert_eq!(value["error"]["code"], "draft.validation_failed");
+    assert_eq!(value["error"]["upstream_transient"], false);
+    assert_eq!(value["error"]["safe_to_retry"], false);
+    assert_eq!(value["partial"]["publication"], "unattempted");
+    assert_eq!(value["partial"]["failed_stage"], "validate");
+    assert_eq!(
+        value["next_actions"][0]["command"],
+        "flea draft update draft-1 --category VALUE"
+    );
+    let guidance = value["error"]["retry_guidance"].as_str().unwrap();
+    assert!(guidance.contains("Validation found `category`"));
+    assert!(!guidance.contains("upstream failure"));
+}
+
+#[test]
 fn publish_flows_through_every_http_step() {
     let values = json!({
         "category": "furniture/chairs",

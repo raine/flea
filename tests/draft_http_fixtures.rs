@@ -2306,13 +2306,22 @@ async fn publish_validation_rejects_missing_fields_and_missing_delivery() {
     let error = workflow.publish("draft-1").await.unwrap_err();
     assert_eq!(error.code, "draft.validation_failed");
     assert_eq!(error.details.unwrap()["missing"][0]["field"], "title");
+    let recovery = error.recovery.unwrap();
+    assert!(!recovery.upstream_transient);
+    assert!(!recovery.safe_to_retry);
+    assert_eq!(recovery.failed_stage.as_deref(), Some("validate"));
+    assert_eq!(recovery.publication, Some(RecoveryStatus::Unattempted));
     assert_eq!(
-        error.recovery.unwrap().completed_steps,
+        recovery.completed_steps,
         [
             "fetch_draft",
             "fetch_delivery_options",
             "fetch_category_taxonomy"
         ]
+    );
+    assert_eq!(
+        recovery.next_safe_actions[0],
+        "flea draft update draft-1 --title VALUE"
     );
 
     let no_delivery = draft(
@@ -2338,6 +2347,154 @@ async fn publish_validation_rejects_missing_fields_and_missing_delivery() {
         error.recovery.unwrap().next_safe_actions[0],
         "flea draft update draft-1 --delivery VALUE"
     );
+}
+
+#[tokio::test]
+async fn truncated_composer_options_are_local_unverifiable_validation() {
+    let truncated = draft(
+        "one",
+        json!({
+            "values": {
+                "category": "furniture/chairs",
+                "title": "Chair",
+                "description": "Solid birch chair",
+                "trade_type": "sell",
+                "price": 45,
+                "postal_code": "00100",
+                "condition": 49
+            },
+            "fields": [{
+                "key": "condition",
+                "label": "Condition",
+                "type": "select",
+                "requirement": "required",
+                "status": "set",
+                "value": 49,
+                "section": "details",
+                "option_count": 60,
+                "options_returned": 1,
+                "options_truncated": true
+            }],
+            "options": [{ "field": "condition", "value": 0, "label": "New" }],
+            "required_fields": ["title", "delivery", "condition"],
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        }),
+    );
+    let workflow = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, truncated),
+            response(200, delivery_page(Some("pickup"))),
+            category_taxonomy("furniture/chairs", true),
+        ])),
+        config(),
+    );
+
+    let error = workflow.publish("draft-1").await.unwrap_err();
+    let details = error.details.unwrap();
+    let recovery = error.recovery.unwrap();
+
+    assert_eq!(details["unverifiable"][0]["field"], "condition");
+    assert!(details.get("evidence_failures").is_none());
+    assert!(!recovery.upstream_transient);
+    assert!(!recovery.safe_to_retry);
+    assert_eq!(recovery.failed_stage.as_deref(), Some("validate"));
+    assert_eq!(recovery.publication, Some(RecoveryStatus::Unattempted));
+    assert_eq!(recovery.next_safe_actions[0], "flea draft show draft-1");
+}
+
+#[tokio::test]
+async fn publish_marks_transient_validation_evidence_reads_as_unverifiable() {
+    let valid = draft(
+        "one",
+        json!({
+            "values": publication_values(),
+            "required_fields": ["title", "delivery"],
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        }),
+    );
+
+    for (responses, failed_stage, action, completed_steps) in [
+        (
+            vec![
+                response(200, valid.clone()),
+                response(503, json!({ "message": "delivery unavailable" })),
+                category_taxonomy("furniture/chairs", true),
+            ],
+            "fetch_delivery_options",
+            "flea draft show draft-1",
+            vec!["fetch_draft", "fetch_category_taxonomy"],
+        ),
+        (
+            vec![
+                response(200, valid.clone()),
+                response(200, delivery_page(Some("pickup"))),
+                response(503, json!({ "message": "taxonomy unavailable" })),
+            ],
+            "fetch_category_taxonomy",
+            "flea category list",
+            vec!["fetch_draft", "fetch_delivery_options"],
+        ),
+    ] {
+        let workflow = DraftWorkflow::new(
+            HttpAdInputApi::new(FixtureTransport::new(responses)),
+            config(),
+        );
+
+        let error = workflow.publish("draft-1").await.unwrap_err();
+        let details = error.details.unwrap();
+        let recovery = error.recovery.unwrap();
+
+        assert_eq!(error.code, "draft.validation_failed");
+        assert_eq!(
+            details["evidence_failures"][0]["failed_stage"],
+            failed_stage
+        );
+        assert_eq!(
+            details["unverifiable"][0]["field"],
+            details["evidence_failures"][0]["field"]
+        );
+        assert!(recovery.upstream_transient);
+        assert!(recovery.safe_to_retry);
+        assert_eq!(recovery.failed_stage.as_deref(), Some(failed_stage));
+        assert_eq!(recovery.publication, Some(RecoveryStatus::Unattempted));
+        assert_eq!(recovery.completed_steps, completed_steps);
+        assert_eq!(recovery.next_safe_actions[0], action);
+    }
+}
+
+#[tokio::test]
+async fn corrected_validation_state_can_publish_successfully() {
+    let mut missing_title_values = publication_values();
+    missing_title_values
+        .as_object_mut()
+        .unwrap()
+        .remove("title");
+    let invalid = draft(
+        "one",
+        json!({
+            "values": missing_title_values,
+            "required_fields": ["title", "delivery"],
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        }),
+    );
+    let invalid_workflow = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, invalid),
+            response(200, delivery_page(Some("pickup"))),
+            category_taxonomy("furniture/chairs", true),
+        ])),
+        config(),
+    );
+
+    let error = invalid_workflow.publish("draft-1").await.unwrap_err();
+    assert!(!error.recovery.unwrap().safe_to_retry);
+
+    let corrected_workflow = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new(successful_publish_responses())),
+        config(),
+    );
+    let published = corrected_workflow.publish("draft-1").await.unwrap();
+    assert_eq!(published.listing_id, "listing-9");
 }
 
 #[tokio::test]

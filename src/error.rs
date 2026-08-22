@@ -173,19 +173,81 @@ pub struct ErrorBody {
     pub details: Option<Value>,
 }
 
-fn retry_guidance(error: &AppError) -> Option<&'static str> {
-    match (error.upstream_transient, error.safe_to_retry) {
-        (true, true) => {
-            Some("The upstream failure appears temporary, and repeating this operation is safe.")
+fn validation_retry_guidance(error: &AppError) -> Option<String> {
+    let details = error.details.as_deref()?;
+    for state in ["missing", "invalid"] {
+        if let Some(requirement) = details
+            .get(state)
+            .and_then(Value::as_array)
+            .and_then(|requirements| requirements.first())
+        {
+            let field = requirement.get("field")?.as_str()?;
+            let reason = requirement.get("reason")?.as_str()?;
+            let command = requirement.get("command")?.as_str()?;
+            return Some(format!(
+                "Validation found `{field}`: {reason}. Run `{command}` before publishing again."
+            ));
         }
+    }
+    if let Some(failure) = details
+        .get("evidence_failures")
+        .and_then(Value::as_array)
+        .and_then(|failures| failures.first())
+    {
+        let field = failure.get("field")?.as_str()?;
+        let stage = failure.get("failed_stage")?.as_str()?;
+        let command = failure.get("command")?.as_str()?;
+        let temporary = failure
+            .get("upstream_transient")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        return Some(if temporary {
+            format!(
+                "Validation could not verify `{field}` because `{stage}` failed temporarily. Run `{command}` to repeat that read before publishing."
+            )
+        } else {
+            format!(
+                "Validation could not verify `{field}` because `{stage}` failed. Run `{command}` to inspect the required evidence before publishing."
+            )
+        });
+    }
+    for state in ["pending", "unverifiable"] {
+        if let Some(requirement) = details
+            .get(state)
+            .and_then(Value::as_array)
+            .and_then(|requirements| requirements.first())
+        {
+            let field = requirement.get("field")?.as_str()?;
+            let reason = requirement.get("reason")?.as_str()?;
+            let command = requirement.get("command")?.as_str()?;
+            return Some(format!(
+                "Validation could not complete `{field}`: {reason}. Run `{command}` before publishing again."
+            ));
+        }
+    }
+    None
+}
+
+fn retry_guidance(error: &AppError) -> Option<String> {
+    if error.code == "draft.validation_failed" {
+        return validation_retry_guidance(error);
+    }
+    match (error.upstream_transient, error.safe_to_retry) {
+        (true, true) => Some(
+            "The upstream failure appears temporary, and repeating this operation is safe."
+                .to_owned(),
+        ),
         (true, false) => Some(
-            "The upstream failure appears temporary, but repeating this operation could duplicate a remote mutation. Inspect authoritative state first.",
+            "The upstream failure appears temporary, but repeating this operation could duplicate a remote mutation. Inspect authoritative state first."
+                .to_owned(),
         ),
         (false, true) => Some(
-            "Repeating this operation is safe, but the upstream failure is not classified as temporary.",
+            "Repeating this operation is safe, but the upstream failure is not classified as temporary."
+                .to_owned(),
         ),
         (false, false) if error.code == "mutation.uncertain" => Some(
-            "The remote mutation outcome is uncertain. Do not repeat the operation; inspect authoritative state first.",
+            "The remote mutation outcome is uncertain. Do not repeat the operation; inspect authoritative state first."
+                .to_owned(),
         ),
         (false, false) => None,
     }
@@ -202,7 +264,8 @@ impl From<&AppError> for ErrorBody {
             message: crate::diagnostics::redact_text(&error.message),
             upstream_transient: error.upstream_transient,
             safe_to_retry: error.safe_to_retry,
-            retry_guidance: retry_guidance(error).map(str::to_owned),
+            retry_guidance: retry_guidance(error)
+                .map(|guidance| crate::diagnostics::redact_text(&guidance)),
             details,
         }
     }

@@ -427,12 +427,43 @@ impl WorkflowError {
     }
 
     pub(super) fn validation(completed_steps: &[String], report: PublicationValidation) -> Self {
-        let repeatable = !report.pending.is_empty() || !report.unverifiable.is_empty();
+        let deterministic = !report.missing.is_empty() || !report.invalid.is_empty();
+        let upstream_transient = report
+            .evidence_failures
+            .iter()
+            .any(|failure| failure.upstream_transient);
+        let safe_to_retry = if deterministic {
+            false
+        } else if !report.evidence_failures.is_empty() {
+            report
+                .evidence_failures
+                .iter()
+                .all(|failure| failure.safe_to_retry)
+        } else {
+            !report.pending.is_empty() && report.unverifiable.is_empty()
+        };
+        let failed_stage = if deterministic {
+            "validate".to_owned()
+        } else {
+            report
+                .evidence_failures
+                .first()
+                .map(|failure| failure.failed_stage.clone())
+                .unwrap_or_else(|| "validate".to_owned())
+        };
         let mut next_safe_actions = report
             .missing
             .iter()
+            .chain(&report.invalid)
             .chain(&report.pending)
+            .chain(&report.unverifiable)
             .map(|requirement| requirement.command.clone())
+            .chain(
+                report
+                    .evidence_failures
+                    .iter()
+                    .map(|failure| failure.command.clone()),
+            )
             .collect::<Vec<_>>();
         next_safe_actions.push(format!("flea draft show {}", report.draft_id));
         let mut seen_actions = BTreeSet::new();
@@ -499,10 +530,10 @@ impl WorkflowError {
             message: "The draft is not ready for publication".to_owned(),
             source: None,
             recovery: Some(Recovery {
-                upstream_transient: repeatable,
-                safe_to_retry: repeatable,
+                upstream_transient,
+                safe_to_retry,
                 next_safe_actions,
-                failed_stage: Some("validate".to_owned()),
+                failed_stage: Some(failed_stage),
                 absent_fields,
                 indeterminate_fields,
                 field_summary,
