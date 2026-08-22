@@ -4,6 +4,8 @@ use std::{
     process::{Command, Output},
 };
 
+const CANONICAL_SKILL: &str = include_str!("../skills/tori-cli/SKILL.md");
+
 fn invoke(home: &Path, cwd: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_tori"))
         .env("HOME", home)
@@ -27,7 +29,7 @@ fn skill_prints_the_project_skill_source() {
     let output = invoke(directory.path(), directory.path(), &["skill"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), include_str!("../skills/tori-cli/SKILL.md"));
+    assert_eq!(stdout(&output), CANONICAL_SKILL);
     assert!(stderr(&output).is_empty());
 }
 
@@ -44,7 +46,7 @@ fn skill_install_targets_an_explicit_agent() {
     );
     assert_eq!(
         fs::read_to_string(home.join(".claude/skills/tori-cli/SKILL.md")).unwrap(),
-        include_str!("../skills/tori-cli/SKILL.md")
+        CANONICAL_SKILL
     );
     assert!(!home.join(".codex/skills/tori-cli/SKILL.md").exists());
 }
@@ -65,12 +67,13 @@ fn skill_install_defaults_to_detected_user_and_workspace_agents() {
     assert!(printed.contains("installed tori-cli skill for Claude Code"));
     assert!(printed.contains("installed tori-cli skill for OpenCode"));
     assert!(printed.contains("installed tori-cli skill for Codex"));
-    assert!(home.join(".claude/skills/tori-cli/SKILL.md").exists());
-    assert!(
-        home.join(".config/opencode/skills/tori-cli/SKILL.md")
-            .exists()
-    );
-    assert!(home.join(".codex/skills/tori-cli/SKILL.md").exists());
+    for path in [
+        home.join(".claude/skills/tori-cli/SKILL.md"),
+        home.join(".config/opencode/skills/tori-cli/SKILL.md"),
+        home.join(".codex/skills/tori-cli/SKILL.md"),
+    ] {
+        assert_eq!(fs::read_to_string(path).unwrap(), CANONICAL_SKILL);
+    }
 }
 
 #[test]
