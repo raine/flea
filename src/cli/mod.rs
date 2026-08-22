@@ -2,6 +2,7 @@ pub mod auth;
 mod auth_callback;
 pub mod category;
 pub mod draft;
+pub mod item;
 pub mod listing;
 pub mod location;
 pub mod runtime;
@@ -46,6 +47,11 @@ pub enum Command {
         long_about = "Create, inspect, update, publish, or delete remote drafts and manage their images."
     )]
     Draft(Box<draft::DraftArgs>),
+    #[command(
+        about = "Inspect public marketplace listings",
+        long_about = "Inspect normalized public marketplace listing details by search result ID without account authentication."
+    )]
+    Item(item::ItemArgs),
     #[command(
         about = "Manage published listings",
         long_about = "List, inspect, update, mark sold, or permanently delete published listings."

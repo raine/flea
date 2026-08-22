@@ -25,6 +25,8 @@ fn every_command_leaf_parses() {
         vec!["tori", "listing", "update", "listing-1", "--price", "45"],
         vec!["tori", "listing", "dispose", "listing-1"],
         vec!["tori", "listing", "delete", "listing-1"],
+        vec!["tori", "item", "show", "42346404"],
+        vec!["tori", "item", "show", "42346404", "--raw"],
         vec!["tori", "search", "chair"],
         vec!["tori", "search", "chair", "--area", "Helsinki,Espoo,Vantaa"],
         vec!["tori", "location", "search", "Helsinki"],

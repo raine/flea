@@ -14,6 +14,34 @@ tori search "takki" --shipping --sort newest --page 2 --limit 20
 
 The positional query is optional when filters identify the desired listings.
 
+## Inspect a search result
+
+Search summaries can omit the description and other details that caused a match. Pass the numeric
+`listing_id` from a search result to the public item command:
+
+```sh
+tori search "Micro Mini" --limit 20
+tori item show 42346404
+tori item show 42346404 --format json
+```
+
+`tori item show` uses the public listing-detail service and does not read account credentials or
+attach an authorization header. Normalized output includes the title, full description, structured
+price and textual location, condition, seller and shipping metadata, images, publication time, and
+canonical URL when Tori supplies each value. Seller and shipping objects remain present with null
+fields when Tori withholds those details from anonymous clients. Precise coordinates and upstream
+owner identifiers are omitted.
+
+Use `--raw` to inspect the bounded upstream protocol document:
+
+```sh
+tori item show 42346404 --raw --format json
+```
+
+The command rejects malformed IDs locally. Removed or missing listings return `item.not_found`, and
+an upstream expiration response returns `item.expired`. These structured errors include the
+requested ID and an action that returns to public search.
+
 ## Categories and dynamic facets
 
 `--category` accepts a Tori taxonomy value and selects the upstream parameter from its depth:

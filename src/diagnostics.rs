@@ -679,7 +679,7 @@ pub fn command_name(args: &[OsString]) -> String {
     let Some(root_index) = arguments.iter().position(|argument| {
         matches!(
             *argument,
-            "auth" | "category" | "draft" | "listing" | "search" | "location"
+            "auth" | "category" | "draft" | "item" | "listing" | "search" | "location"
         )
     }) else {
         return "unknown".to_owned();
@@ -689,6 +689,7 @@ pub fn command_name(args: &[OsString]) -> String {
         "auth" => &["start", "complete", "status", "logout"],
         "category" => &["search", "list"],
         "draft" => &["create", "show", "update", "publish", "delete", "image"],
+        "item" => &["show"],
         "listing" => &["list", "show", "update", "dispose", "delete"],
         "location" => &["search"],
         "search" => &[],
@@ -880,6 +881,14 @@ mod tests {
             OsString::from("tori://oauth/callback?code=secret"),
         ];
         assert_eq!(command_name(&args), "auth complete");
+
+        let item = [
+            OsString::from("tori"),
+            OsString::from("item"),
+            OsString::from("show"),
+            OsString::from("42346404"),
+        ];
+        assert_eq!(command_name(&item), "item show");
     }
 
     #[test]

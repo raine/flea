@@ -36,6 +36,7 @@ pub mod compatibility {
     pub const SERVICE_DELIVERY: &str = "TJT-API";
     pub const SERVICE_AD_ACTION: &str = "AD-ACTION";
     pub const SERVICE_AD_SUMMARIES: &str = "AD-SUMMARIES";
+    pub const SERVICE_ADVIEW: &str = "ADVIEW-PROVIDER-RC";
     pub const SERVICE_BILLING_TRACKING: &str = "BILLING-TRACKING-SERVICE";
     pub const SERVICE_ORDER_PAYMENT: &str = "ORDER-PAYMENT-SERVER";
     pub const SERVICE_LOGIN: &str = "LOGIN-SERVER-AUTH";

@@ -119,8 +119,14 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(top.contains("auth      Manage browser authentication"));
     assert!(top.contains("category  Discover Tori category machine values"));
     assert!(top.contains("draft     Create and manage remote drafts"));
+    assert!(top.contains("item      Inspect public marketplace listings"));
     assert!(top.contains("listing   Manage published listings"));
     assert!(top.contains("skill     Print or install the coding-agent skill"));
+
+    let item = stdout(&invoke(&["item", "show", "--help"]));
+    assert!(item.contains("Usage: tori item show [OPTIONS] <LISTING_ID>"));
+    assert!(item.contains("Numeric marketplace listing ID returned by `tori search`"));
+    assert!(item.contains("--raw"));
 
     let draft = stdout(&invoke(&["draft", "--help"]));
     assert!(draft.contains("create   Create a remote draft"));

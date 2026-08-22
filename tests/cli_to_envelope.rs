@@ -16,13 +16,14 @@ use tori::{
             SecretString, ToriSession,
         },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
+        item::HttpPublicItemApi,
         listings::HttpListingsApi,
         search::HttpPublicSearchApi,
     },
     cli::{
         Command, CommandRuntime,
         auth::{AuthCommandHandler, AuthStore},
-        category, draft, listing, location, search,
+        category, draft, item, listing, location, search,
     },
     error::AppError,
     run_with_runtime,
@@ -84,6 +85,10 @@ impl CommandRuntime for TestRuntime {
                 HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
                 WorkflowConfig::default(),
             )),
+            Command::Item(args) => {
+                let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
+                item::dispatch_with_api(args, &api)
+            }
             Command::Listing(args) => {
                 let api = HttpListingsApi::new(Arc::new(self.client.clone()));
                 listing::dispatch_with_api(args, &api)
@@ -364,6 +369,71 @@ fn public_search_flows_without_authentication_through_one_envelope() {
     assert_eq!(requests[0].service, "SEARCH-QUEST");
     assert!(requests[0].path_and_query.contains("client=android"));
     assert!(!requests[0].path_and_query.contains("include_filters"));
+}
+
+#[test]
+fn public_search_result_flows_into_unauthenticated_item_detail() {
+    let client = MockClient::with_responses([
+        response(
+            StatusCode::OK,
+            json!({
+                "docs": [{"id": "42346404", "heading": "Potkulauta"}],
+                "metadata": {
+                    "result_size": {"match_count": 1},
+                    "paging": {"current": 1, "last": 1}
+                }
+            }),
+        ),
+        response(
+            StatusCode::OK,
+            json!({
+                "ad": {
+                    "title": "Potkulauta",
+                    "description": "Micro Mini lasten potkulauta",
+                    "price": 25,
+                    "location": {"postalName": "Helsinki", "postalCode": "00100"},
+                    "condition": {"id": 3, "value": "Hyvä"},
+                    "images": [{"uri": "https://img.tori.net/item/one"}]
+                },
+                "meta": {
+                    "adId": 42346404,
+                    "history": [{"mode": "PLAY", "broadcasted": "2026-08-22T12:00:00+03:00"}]
+                },
+                "canonical_url": "https://www.tori.fi/recommerce/forsale/item/42346404"
+            }),
+        ),
+    ]);
+    let runtime = TestRuntime {
+        client: client.clone(),
+    };
+    let search = invoke(
+        &runtime,
+        ["tori", "--format", "json", "search", "Micro Mini"],
+    );
+    let listing_id = search["data"]["results"][0]["listing_id"].as_str().unwrap();
+    let value = invoke_vec(
+        &runtime,
+        vec![
+            "tori".to_owned(),
+            "--format".to_owned(),
+            "json".to_owned(),
+            "item".to_owned(),
+            "show".to_owned(),
+            listing_id.to_owned(),
+        ],
+    );
+
+    assert_eq!(value["data"]["title"], "Potkulauta");
+    assert!(
+        value["data"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Micro Mini")
+    );
+    assert_eq!(value["data"]["condition"]["value"], "Hyvä");
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests[1].path_and_query, "/adview/42346404");
+    assert_eq!(requests[1].service, "ADVIEW-PROVIDER-RC");
 }
 
 #[test]

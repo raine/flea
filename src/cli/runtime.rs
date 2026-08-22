@@ -7,6 +7,7 @@ use crate::{
         adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
         auth::SchibstedToriAuthenticationApi,
         client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
+        item::HttpPublicItemApi,
         listings::HttpListingsApi,
         search::HttpPublicSearchApi,
     },
@@ -35,6 +36,10 @@ impl CommandRuntime for ProductionRuntime {
                 let client = authenticated_client()?;
                 let api = HttpAdInputApi::new(ClientTransport::new(client));
                 block_on(draft::execute(args.command, api, WorkflowConfig::default()))
+            }
+            Command::Item(args) => {
+                let api = HttpPublicItemApi::new(Arc::new(public_client()));
+                super::item::dispatch_with_api(args, &api)
             }
             Command::Listing(args) => {
                 let client = authenticated_client()?;
