@@ -7,6 +7,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+use fs2::FileExt;
 use serde_json::Value;
 use tracing::{Subscriber, info, info_span};
 use tracing_subscriber::{EnvFilter, Layer, fmt::MakeWriter, layer::SubscriberExt};
@@ -220,6 +221,7 @@ fn open_private_log(path: &Path) -> io::Result<File> {
     }
     let file = options.open(path)?;
     set_mode(path, 0o600)?;
+    file.lock_shared()?;
     Ok(file)
 }
 
@@ -236,10 +238,25 @@ fn set_mode(_path: &Path, _mode: u32) -> io::Result<()> {
 
 fn roll_active_log(log_dir: &Path, max_bytes: u64) -> io::Result<()> {
     let active = log_dir.join(LOG_FILE);
-    let Ok(metadata) = fs::symlink_metadata(&active) else {
-        return Ok(());
+    let metadata = match fs::symlink_metadata(&active) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() < max_bytes {
+        return Ok(());
+    }
+    let file = match OpenOptions::new().read(true).write(true).open(&active) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    match file.try_lock_exclusive() {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+        Err(error) => return Err(error),
+    }
+    if file.metadata()?.len() < max_bytes {
         return Ok(());
     }
     let timestamp = SystemTime::now()
@@ -247,7 +264,11 @@ fn roll_active_log(log_dir: &Path, max_bytes: u64) -> io::Result<()> {
         .unwrap_or_default()
         .as_secs();
     let archive = log_dir.join(format!("{LOG_PREFIX}.{timestamp}.{}.jsonl", Uuid::new_v4()));
-    fs::rename(active, archive)
+    match fs::rename(active, archive) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn enforce_retention(log_dir: &Path, policy: RetentionPolicy) -> io::Result<()> {
@@ -261,7 +282,7 @@ fn enforce_retention(log_dir: &Path, policy: RetentionPolicy) -> io::Result<()> 
             .duration_since(file.modified)
             .is_ok_and(|age| age > policy.max_age)
         {
-            fs::remove_file(&file.path)?;
+            remove_file_if_present(&file.path)?;
         }
     }
 
@@ -275,7 +296,7 @@ fn enforce_retention(log_dir: &Path, policy: RetentionPolicy) -> io::Result<()> 
         if file.path.file_name().is_some_and(|name| name == LOG_FILE) {
             continue;
         }
-        fs::remove_file(&file.path)?;
+        remove_file_if_present(&file.path)?;
         total = total.saturating_sub(file.size);
     }
     Ok(())
@@ -297,11 +318,7 @@ fn log_files(log_dir: &Path) -> io::Result<Vec<LogFile>> {
         let Some(name) = name.to_str() else {
             continue;
         };
-        if metadata.file_type().is_symlink()
-            || !metadata.is_file()
-            || !name.starts_with(LOG_PREFIX)
-            || !name.ends_with(LOG_SUFFIX)
-        {
+        if metadata.file_type().is_symlink() || !metadata.is_file() || !is_log_file_name(name) {
             continue;
         }
         files.push(LogFile {
@@ -311,6 +328,32 @@ fn log_files(log_dir: &Path) -> io::Result<Vec<LogFile>> {
         });
     }
     Ok(files)
+}
+
+fn is_log_file_name(name: &str) -> bool {
+    if name == LOG_FILE {
+        return true;
+    }
+    let Some(stem) = name
+        .strip_prefix("tori-cli.")
+        .and_then(|name| name.strip_suffix(LOG_SUFFIX))
+    else {
+        return false;
+    };
+    let Some((timestamp, id)) = stem.split_once('.') else {
+        return false;
+    };
+    !timestamp.is_empty()
+        && timestamp.bytes().all(|byte| byte.is_ascii_digit())
+        && Uuid::parse_str(id).is_ok()
+}
+
+fn remove_file_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 #[derive(Clone)]
@@ -771,7 +814,9 @@ mod tests {
         fs::create_dir_all(&logs_dir).expect("logs directory");
         fs::write(auth_dir.join("credentials.json"), "keep").expect("credential fixture");
         fs::write(logs_dir.join("unrelated.txt"), "keep").expect("unrelated fixture");
-        fs::write(logs_dir.join("tori-cli.1.old.jsonl"), vec![0; 32]).expect("log fixture");
+        fs::write(logs_dir.join("tori-cli.1.old.jsonl"), "keep").expect("lookalike fixture");
+        let archive = logs_dir.join("tori-cli.1.00000000-0000-4000-8000-000000000000.jsonl");
+        fs::write(&archive, vec![0; 32]).expect("log fixture");
 
         let policy = RetentionPolicy {
             max_age: Duration::MAX,
@@ -783,7 +828,36 @@ mod tests {
 
         assert!(auth_dir.join("credentials.json").exists());
         assert!(logs_dir.join("unrelated.txt").exists());
-        assert!(!logs_dir.join("tori-cli.1.old.jsonl").exists());
+        assert!(logs_dir.join("tori-cli.1.old.jsonl").exists());
+        assert!(!archive.exists());
+    }
+
+    #[test]
+    fn active_writer_lock_prevents_concurrent_rotation() {
+        let state = tempdir().expect("temporary state directory");
+        let policy = RetentionPolicy {
+            max_age: Duration::MAX,
+            max_total_bytes: u64::MAX,
+            max_active_bytes: 1,
+        };
+        let first = DiagnosticsSession::initialize_at(state.path(), policy)
+            .expect("first diagnostics session");
+        first.run("draft show", || ((), 0));
+
+        let second = DiagnosticsSession::initialize_at(state.path(), policy)
+            .expect("second diagnostics session");
+        second.run("listing show", || ((), 0));
+
+        let archives = fs::read_dir(state.path().join("logs"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name != LOG_FILE && is_log_file_name(&name)
+            })
+            .count();
+        assert_eq!(archives, 0);
     }
 
     #[test]

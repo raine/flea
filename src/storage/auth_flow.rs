@@ -89,6 +89,7 @@ impl<W: AtomicFileStore> AuthFlowStore<W> {
     pub fn load(&self, flow_id: &str, now_unix: u64) -> Result<AuthFlow, AuthFlowStoreError> {
         validate_flow_id(flow_id)?;
         let path = self.flow_path(flow_id);
+        reject_symlink(&path)?;
         let contents = match fs::read(&path) {
             Ok(contents) => contents,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -134,6 +135,18 @@ fn validate_flow_id(flow_id: &str) -> Result<(), AuthFlowStoreError> {
         return Err(AuthFlowStoreError::InvalidFlowId);
     }
     Ok(())
+}
+
+fn reject_symlink(path: &std::path::Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "OAuth flow path is a symbolic link",
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 fn mismatched_flow_id_error() -> serde_json::Error {

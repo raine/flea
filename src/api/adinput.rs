@@ -6,6 +6,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     api::client::{MultipartPart, RequestSpec, ToriClient, compatibility},
+    diagnostics,
     domain::field::Field,
 };
 
@@ -30,7 +31,7 @@ impl Method {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum RequestBody {
     Empty,
     Json(Value),
@@ -40,6 +41,31 @@ pub enum RequestBody {
         width: u32,
         height: u32,
     },
+}
+
+impl fmt::Debug for RequestBody {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("Empty"),
+            Self::Json(value) => {
+                let mut redacted = value.clone();
+                diagnostics::redact_value(&mut redacted);
+                formatter.debug_tuple("Json").field(&redacted).finish()
+            }
+            Self::Image {
+                bytes,
+                file_name,
+                width,
+                height,
+            } => formatter
+                .debug_struct("Image")
+                .field("byte_len", &bytes.len())
+                .field("file_name", file_name)
+                .field("width", width)
+                .field("height", height)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -80,7 +106,7 @@ pub struct HttpResponse {
     pub body: Value,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct ApiError {
     pub code: String,
     pub message: String,
@@ -105,12 +131,32 @@ impl ApiError {
             .body
             .get("message")
             .and_then(Value::as_str)
-            .unwrap_or("Tori rejected the request");
+            .map(diagnostics::redact_text)
+            .unwrap_or_else(|| "Tori rejected the request".to_owned());
+        let mut details = response.body.clone();
+        diagnostics::redact_value(&mut details);
         let mut error = Self::new("upstream.request_failed", message);
         error.status = Some(response.status);
         error.retryable = response.status >= 500;
-        error.details = Some(Box::new(response.body.clone()));
+        error.details = Some(Box::new(details));
         error
+    }
+}
+
+impl fmt::Debug for ApiError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut details = self.details.as_deref().cloned();
+        if let Some(details) = &mut details {
+            diagnostics::redact_value(details);
+        }
+        formatter
+            .debug_struct("ApiError")
+            .field("code", &self.code)
+            .field("message", &diagnostics::redact_text(&self.message))
+            .field("retryable", &self.retryable)
+            .field("status", &self.status)
+            .field("details", &details)
+            .finish()
     }
 }
 
@@ -288,10 +334,20 @@ pub struct ListingDraftSeed {
     pub images: Vec<SourceImage>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct SourceImage {
     pub file_name: String,
     pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for SourceImage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SourceImage")
+            .field("file_name", &self.file_name)
+            .field("byte_len", &self.bytes.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -415,6 +471,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 
     async fn get_draft(&self, draft_id: &str) -> Result<DraftState, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
         self.draft_request(HttpRequest::read(format!("/drafts/{draft_id}/with-model")))
             .await
     }
@@ -425,6 +482,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         etag: &str,
         values: &Map<String, Value>,
     ) -> Result<DraftState, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
         let mut request = HttpRequest::mutation(
             Method::Patch,
             format!("/drafts/{draft_id}/item"),
@@ -440,6 +498,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         etag: &str,
         state: &DraftState,
     ) -> Result<DraftState, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
         let mut request = HttpRequest::mutation(
             Method::Put,
             format!("/drafts/{draft_id}/adinput"),
@@ -450,6 +509,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 
     async fn delete_draft(&self, draft_id: &str) -> Result<(), ApiError> {
+        validate_resource_id(draft_id, "draft")?;
         self.json(HttpRequest::mutation(
             Method::Delete,
             format!("/drafts/{draft_id}"),
@@ -467,6 +527,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         width: u32,
         height: u32,
     ) -> Result<UploadedImage, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
         let response = self
             .json(HttpRequest::mutation(
                 Method::Post,
@@ -489,6 +550,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         etag: &str,
         image_ids: &[String],
     ) -> Result<DraftState, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
         let mut request = HttpRequest::mutation(
             Method::Put,
             format!("/drafts/{draft_id}/images/order"),
@@ -502,6 +564,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         &self,
         draft_id: &str,
     ) -> Result<Vec<CategoryPrediction>, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
         let response = self
             .json(HttpRequest::read(format!(
                 "/drafts/{draft_id}/category-predictions"
@@ -512,6 +575,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
+        validate_resource_id(listing_id, "listing")?;
         let response = self
             .json(HttpRequest::read(format!(
                 "/listings/{listing_id}/draft-source"
@@ -527,6 +591,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         revision: &str,
         delivery: &Value,
     ) -> Result<(), ApiError> {
+        validate_resource_id(draft_id, "draft")?;
         self.json(HttpRequest::mutation(
             Method::Put,
             format!("/drafts/{draft_id}/delivery"),
@@ -541,6 +606,8 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         draft_id: &str,
         revision: &str,
     ) -> Result<ProductContext, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
+        let revision: String = url::form_urlencoded::byte_serialize(revision.as_bytes()).collect();
         let response = self
             .json(HttpRequest::read(format!(
                 "/drafts/{draft_id}/products?revision={revision}"
@@ -555,6 +622,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         draft_id: &str,
         context: &ProductContext,
     ) -> Result<Publication, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
         let response = self
             .json(HttpRequest::mutation(
                 Method::Post,
@@ -571,6 +639,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 
     async fn confirmation(&self, listing_id: &str) -> Result<Confirmation, ApiError> {
+        validate_resource_id(listing_id, "listing")?;
         let response = self
             .json(HttpRequest::read(format!(
                 "/listings/{listing_id}/confirmation"
@@ -591,10 +660,26 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 
     async fn observed_listing(&self, listing_id: &str) -> Result<Value, ApiError> {
+        validate_resource_id(listing_id, "listing")?;
         self.json(HttpRequest::read(format!("/listings/{listing_id}")))
             .await
             .map(|response| response.body)
     }
+}
+
+fn validate_resource_id(value: &str, resource: &str) -> Result<(), ApiError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(ApiError::new(
+            format!("{resource}.invalid_id"),
+            format!("The {resource} ID is invalid"),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -617,6 +702,8 @@ impl Default for WorkflowConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Recovery {
     pub draft_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing_id: Option<String>,
     pub completed_steps: Vec<String>,
     pub retryable: bool,
     pub next_safe_actions: Vec<String>,
@@ -624,7 +711,7 @@ pub struct Recovery {
     pub fresh_state: Option<DraftState>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct WorkflowError {
     pub code: String,
     pub message: String,
@@ -656,6 +743,7 @@ impl WorkflowError {
             source: Some(error),
             recovery: Some(Recovery {
                 draft_id: draft_id.to_owned(),
+                listing_id: None,
                 completed_steps: completed_steps.to_vec(),
                 retryable,
                 next_safe_actions: vec![format!("tori draft show {draft_id}")],
@@ -665,6 +753,13 @@ impl WorkflowError {
         }
     }
 
+    fn with_listing_id(mut self, listing_id: &str) -> Self {
+        if let Some(recovery) = &mut self.recovery {
+            recovery.listing_id = Some(listing_id.to_owned());
+        }
+        self
+    }
+
     fn validation(draft_id: &str, completed_steps: &[String], missing: Vec<String>) -> Self {
         Self {
             code: "draft.validation_failed".to_owned(),
@@ -672,6 +767,7 @@ impl WorkflowError {
             source: None,
             recovery: Some(Recovery {
                 draft_id: draft_id.to_owned(),
+                listing_id: None,
                 completed_steps: completed_steps.to_vec(),
                 retryable: false,
                 next_safe_actions: vec![format!("tori draft update {draft_id} --input PATH")],
@@ -679,6 +775,30 @@ impl WorkflowError {
             }),
             details: Some(json!({ "missing_fields": missing })),
         }
+    }
+}
+
+impl fmt::Debug for WorkflowError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut details = self.details.clone();
+        let mut recovery = self
+            .recovery
+            .as_ref()
+            .and_then(|recovery| serde_json::to_value(recovery).ok());
+        if let Some(details) = &mut details {
+            diagnostics::redact_value(details);
+        }
+        if let Some(recovery) = &mut recovery {
+            diagnostics::redact_value(recovery);
+        }
+        formatter
+            .debug_struct("WorkflowError")
+            .field("code", &self.code)
+            .field("message", &diagnostics::redact_text(&self.message))
+            .field("source", &self.source)
+            .field("recovery", &recovery)
+            .field("details", &details)
+            .finish()
     }
 }
 
@@ -783,13 +903,17 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .api
             .update_item(&draft.draft_id, &draft.etag, &seed.values)
             .await
-            .map_err(|error| WorkflowError::for_draft(&draft.draft_id, &completed, error, false))?;
+            .map_err(|error| {
+                WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
+                    .with_listing_id(listing_id)
+            })?;
         completed.push("copy_fields".to_owned());
 
         let mut ordered = Vec::new();
         for source in seed.images {
             let (width, height) = image_dimensions(&source.bytes).map_err(|error| {
                 WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
+                    .with_listing_id(listing_id)
             })?;
             let uploaded = self
                 .api
@@ -803,6 +927,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .await
                 .map_err(|error| {
                     WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
+                        .with_listing_id(listing_id)
                 })?;
             ordered.push(uploaded.image_id);
             completed.push(format!("upload_image:{}", ordered.len() - 1));
@@ -814,6 +939,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .await
                 .map_err(|error| {
                     WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
+                        .with_listing_id(listing_id)
                 })?;
             completed.push("attach_images".to_owned());
         }
@@ -1071,6 +1197,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             Err(error) => {
                 let mut workflow = WorkflowError::for_draft(draft_id, &completed, error, true);
                 if let Some(recovery) = &mut workflow.recovery {
+                    recovery.listing_id = Some(publication.listing_id.clone());
                     recovery.next_safe_actions =
                         vec![format!("tori listing show {}", publication.listing_id)];
                 }
@@ -1127,28 +1254,40 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             if poll == self.config.image_poll_limit
                 || started.elapsed() >= self.config.image_processing_timeout
             {
-                let mut error = ApiError::new(
-                    "draft.image_processing",
-                    "Images did not finish processing before the bounded timeout",
-                );
-                error.retryable = true;
-                return Err(WorkflowError::for_draft(
-                    &state.draft_id,
-                    completed,
-                    error,
-                    true,
-                ));
+                return Err(image_processing_timeout(&state.draft_id, completed));
             }
-            tokio::time::sleep(self.config.image_poll_interval).await;
-            state = self.api.get_draft(&state.draft_id).await.map_err(|error| {
-                WorkflowError::for_draft(&state.draft_id, completed, error, true)
-            })?;
+            let remaining = self
+                .config
+                .image_processing_timeout
+                .saturating_sub(started.elapsed());
+            tokio::time::sleep(self.config.image_poll_interval.min(remaining)).await;
+            let remaining = self
+                .config
+                .image_processing_timeout
+                .saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err(image_processing_timeout(&state.draft_id, completed));
+            }
+            state = tokio::time::timeout(remaining, self.api.get_draft(&state.draft_id))
+                .await
+                .map_err(|_| image_processing_timeout(&state.draft_id, completed))?
+                .map_err(|error| {
+                    WorkflowError::for_draft(&state.draft_id, completed, error, true)
+                })?;
         }
         unreachable!("bounded image loop always returns")
     }
 }
 
-#[allow(clippy::result_large_err)]
+fn image_processing_timeout(draft_id: &str, completed: &[String]) -> WorkflowError {
+    let mut error = ApiError::new(
+        "draft.image_processing",
+        "Images did not finish processing before the bounded timeout",
+    );
+    error.retryable = true;
+    WorkflowError::for_draft(draft_id, completed, error, true)
+}
+
 fn image_dimensions(bytes: &[u8]) -> Result<(u32, u32), ApiError> {
     let image = image::load_from_memory(bytes)
         .map_err(|error| ApiError::new("draft.invalid_image", error.to_string()))?;

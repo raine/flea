@@ -47,11 +47,7 @@ impl CommandRuntime for ProductionRuntime {
 fn execute_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
     let paths = state_paths()?;
     let store = FileAuthStore::new(paths);
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| upstream("failed to initialize authentication HTTP client", error))?;
-    let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(client), store);
+    let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
     block_on(handler.dispatch(args.command, unix_time_now()?))
 }
 
@@ -65,11 +61,7 @@ fn authenticated_client() -> Result<HttpClient<ReqwestTransport>, AppError> {
         .ok_or_else(auth_required)?;
     let now = unix_time_now()?;
     if !record.bearer_is_valid_at(now, 30) {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|error| upstream("failed to initialize authentication HTTP client", error))?;
-        let api = SchibstedToriAuthenticationApi::new(client);
+        let api = SchibstedToriAuthenticationApi::new();
         let credentials = block_on(api.refresh_credentials(
             &record.refresh_token,
             &record.device_id,
@@ -116,13 +108,6 @@ fn auth_required() -> AppError {
             command: "tori auth start".to_owned(),
         });
     error
-}
-
-fn upstream(
-    message: &'static str,
-    source: impl std::error::Error + Send + Sync + 'static,
-) -> AppError {
-    AppError::upstream("upstream.client_initialization_failed", message).with_source(source)
 }
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {

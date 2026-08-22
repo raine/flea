@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    fmt,
     sync::Arc,
 };
 
@@ -169,7 +170,7 @@ impl ListingsApi for HttpListingsApi {
     }
 }
 
-#[derive(Clone, Debug, thiserror::Error, PartialEq)]
+#[derive(Clone, thiserror::Error, PartialEq)]
 pub enum ListingsApiError {
     #[error("resource was not found")]
     NotFound,
@@ -184,6 +185,22 @@ pub enum ListingsApiError {
     Upstream(String),
     #[error("unexpected upstream response: {0}")]
     UnexpectedResponse(String),
+}
+
+impl fmt::Debug for ListingsApiError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => formatter.write_str("NotFound"),
+            Self::Conflict => formatter.write_str("Conflict"),
+            Self::Validation { fields, .. } => formatter
+                .debug_struct("Validation")
+                .field("message", &"[REDACTED]")
+                .field("field_names", &fields.keys().collect::<Vec<_>>())
+                .finish(),
+            Self::Upstream(_) => formatter.write_str("Upstream([REDACTED])"),
+            Self::UnexpectedResponse(_) => formatter.write_str("UnexpectedResponse([REDACTED])"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -464,7 +481,7 @@ impl<'a> Listings<'a> {
                 })));
                 Err(error)
             }
-            Err(error) => Err(listing_error(error, Some(listing_id))),
+            Err(error) => Err(listing_mutation_error(error, listing_id, "update")),
         }
     }
 
@@ -472,7 +489,7 @@ impl<'a> Listings<'a> {
         validate_id(listing_id)?;
         self.api
             .dispose_listing(listing_id)
-            .map_err(|error| listing_error(error, Some(listing_id)))?;
+            .map_err(|error| listing_mutation_error(error, listing_id, "dispose"))?;
         Ok(ListingMutation {
             listing_id: listing_id.to_owned(),
             state: ListingState::Disposed,
@@ -483,7 +500,7 @@ impl<'a> Listings<'a> {
         validate_id(listing_id)?;
         self.api
             .delete_listing(listing_id)
-            .map_err(|error| listing_error(error, Some(listing_id)))?;
+            .map_err(|error| listing_mutation_error(error, listing_id, "delete"))?;
         Ok(ListingRef {
             listing_id: listing_id.to_owned(),
         })
@@ -720,8 +737,13 @@ fn is_semantic_value(value: &str) -> bool {
 }
 
 fn validate_id(listing_id: &str) -> Result<(), AppError> {
-    if listing_id.trim().is_empty() {
-        Err(AppError::usage("listing ID must not be empty"))
+    if listing_id.is_empty()
+        || listing_id.len() > 128
+        || !listing_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Err(AppError::usage("listing ID is invalid"))
     } else {
         Ok(())
     }
@@ -768,12 +790,16 @@ fn listing_error(error: ListingsApiError, listing_id: Option<&str>) -> AppError 
             "listing changed remotely",
             ExitClass::Conflict,
         ),
-        ListingsApiError::Validation { message, fields } => {
-            let mut error =
-                AppError::new("listing.validation_failed", message, ExitClass::Validation);
-            error.details = Some(Box::new(
-                json!({ "listing_id": listing_id, "fields": fields }),
-            ));
+        ListingsApiError::Validation { fields, .. } => {
+            let mut error = AppError::new(
+                "listing.validation_failed",
+                "listing validation failed",
+                ExitClass::Validation,
+            );
+            error.details = Some(Box::new(json!({
+                "listing_id": listing_id,
+                "fields": fields
+            })));
             error
         }
         other => upstream_error(other),
@@ -790,13 +816,33 @@ fn resource_not_found(code: &str, resource: &str, id: &str) -> AppError {
     error
 }
 
+fn listing_mutation_error(error: ListingsApiError, listing_id: &str, operation: &str) -> AppError {
+    let app_error = listing_error(error, Some(listing_id));
+    if app_error.exit_class != ExitClass::Upstream {
+        return app_error;
+    }
+    let mut app_error = app_error.with_partial(json!({
+        "listing_id": listing_id,
+        "operation": operation,
+    }));
+    app_error
+        .next_actions
+        .push(crate::domain::envelope::NextAction {
+            command: format!("tori listing show {listing_id}"),
+        });
+    app_error
+}
+
 fn upstream_error(error: ListingsApiError) -> AppError {
     let retryable = matches!(error, ListingsApiError::Upstream(_));
-    let code = match error {
-        ListingsApiError::UnexpectedResponse(_) => "upstream.unexpected_response",
-        _ => "upstream.request_failed",
+    let (code, message) = match error {
+        ListingsApiError::UnexpectedResponse(_) => (
+            "upstream.unexpected_response",
+            "Tori returned an unexpected listing response",
+        ),
+        _ => ("upstream.request_failed", "the Tori listing request failed"),
     };
-    let mut app_error = AppError::new(code, error.to_string(), ExitClass::Upstream);
+    let mut app_error = AppError::new(code, message, ExitClass::Upstream);
     app_error.retryable = retryable;
     app_error
 }

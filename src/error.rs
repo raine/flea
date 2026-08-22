@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,7 +30,7 @@ impl ExitClass {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 #[error("{message}")]
 pub struct AppError {
     pub code: String,
@@ -43,6 +43,31 @@ pub struct AppError {
     pub exit_class: ExitClass,
     #[source]
     source_error: Option<Box<dyn Error + Send + Sync>>,
+}
+
+impl fmt::Debug for AppError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut details = self.details.as_deref().cloned();
+        let mut partial = self.partial.as_deref().cloned();
+        if let Some(value) = &mut details {
+            crate::diagnostics::redact_value(value);
+        }
+        if let Some(value) = &mut partial {
+            crate::diagnostics::redact_value(value);
+        }
+        formatter
+            .debug_struct("AppError")
+            .field("code", &self.code)
+            .field("message", &crate::diagnostics::redact_text(&self.message))
+            .field("retryable", &self.retryable)
+            .field("details", &details)
+            .field("partial", &partial)
+            .field("next_actions", &self.next_actions)
+            .field("diagnostics", &self.diagnostics)
+            .field("exit_class", &self.exit_class)
+            .field("has_source", &self.source_error.is_some())
+            .finish()
+    }
 }
 
 impl AppError {
@@ -137,11 +162,15 @@ pub struct ErrorBody {
 
 impl From<&AppError> for ErrorBody {
     fn from(error: &AppError) -> Self {
+        let mut details = error.details.as_deref().cloned();
+        if let Some(details) = &mut details {
+            crate::diagnostics::redact_value(details);
+        }
         Self {
             code: error.code.clone(),
-            message: error.message.clone(),
+            message: crate::diagnostics::redact_text(&error.message),
             retryable: error.retryable,
-            details: error.details.as_deref().cloned(),
+            details,
         }
     }
 }
@@ -183,6 +212,26 @@ mod tests {
         let error =
             AppError::upstream("upstream.failed", "request failed").with_source(Outer(Inner));
         assert_eq!(error.internal_chain(), ["request failed", "outer", "inner"]);
+    }
+
+    #[test]
+    fn public_error_body_redacts_messages_and_nested_details() {
+        let mut error = AppError::upstream(
+            "upstream.failed",
+            "request failed with Bearer message-secret",
+        );
+        error.details = Some(Box::new(serde_json::json!({
+            "nested": { "refresh_token": "details-secret" }
+        })));
+
+        let body = ErrorBody::from(&error);
+        let rendered = serde_json::to_string(&body).unwrap();
+        let debug = format!("{error:?}");
+
+        assert!(!rendered.contains("message-secret"));
+        assert!(!rendered.contains("details-secret"));
+        assert!(!debug.contains("message-secret"));
+        assert!(!debug.contains("details-secret"));
     }
 
     #[test]

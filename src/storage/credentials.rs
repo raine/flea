@@ -125,7 +125,9 @@ pub struct LockedCredentials<'a, W: AtomicFileStore> {
 
 impl<W: AtomicFileStore> LockedCredentials<'_, W> {
     pub fn load(&self) -> Result<Option<CredentialRecord>, CredentialStoreError> {
-        match fs::read(self.store.paths.credentials_file()) {
+        let path = self.store.paths.credentials_file();
+        reject_symlink(&path)?;
+        match fs::read(path) {
             Ok(contents) => serde_json::from_slice(&contents)
                 .map(Some)
                 .map_err(CredentialStoreError::InvalidData),
@@ -160,6 +162,7 @@ impl<W: AtomicFileStore> Drop for LockedCredentials<'_, W> {
 }
 
 fn open_lock_file(path: &Path) -> io::Result<fs::File> {
+    reject_symlink(path)?;
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true).create(true);
     #[cfg(unix)]
@@ -167,6 +170,18 @@ fn open_lock_file(path: &Path) -> io::Result<fs::File> {
     let file = options.open(path)?;
     set_private_file_mode(path)?;
     Ok(file)
+}
+
+fn reject_symlink(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "authentication state path is a symbolic link",
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]
@@ -284,6 +299,33 @@ mod tests {
 
         drop(held);
         worker.join().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symbolic_links_for_credentials_and_lock_files() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(temporary.path().join("state"));
+        paths.ensure().unwrap();
+        let target = temporary.path().join("target");
+        fs::write(&target, b"secret").unwrap();
+        symlink(&target, paths.credentials_file()).unwrap();
+
+        assert!(matches!(
+            CredentialStore::new(paths.clone()).load(),
+            Err(CredentialStoreError::Io(_))
+        ));
+
+        fs::remove_file(paths.credentials_file()).unwrap();
+        fs::remove_file(paths.credentials_lock_file()).unwrap();
+        symlink(&target, paths.credentials_lock_file()).unwrap();
+        assert!(matches!(
+            CredentialStore::new(paths).lock(),
+            Err(CredentialStoreError::Io(_))
+        ));
+        assert_eq!(fs::read(target).unwrap(), b"secret");
     }
 
     #[test]

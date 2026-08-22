@@ -31,6 +31,13 @@ pub fn secure_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     builder.mode(DIRECTORY_MODE);
     builder.create(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "secure directory path is not a directory",
+        ));
+    }
     set_mode(path, DIRECTORY_MODE)
 }
 

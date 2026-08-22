@@ -241,7 +241,13 @@ async fn debug_and_errors_do_not_expose_credentials_or_signatures() {
     assert!(!spec_debug.contains("authorization-material"));
     assert!(!spec_debug.contains("raw-authorization-secret"));
 
-    client.send(spec).await.unwrap();
+    let error = client.send(spec).await.unwrap_err();
+    assert_eq!(error.to_string(), "invalid HTTP request");
+
+    client
+        .send(RequestSpec::new(Method::GET, "/safe", "AUTH"))
+        .await
+        .unwrap();
     let request_debug = format!("{:?}", transport.requests()[0]);
     assert!(!request_debug.contains("bearer-fixture-secret"));
     assert!(!request_debug.contains("authorization-material"));
@@ -251,5 +257,61 @@ async fn debug_and_errors_do_not_expose_credentials_or_signatures() {
                 .to_str()
                 .unwrap()
         )
+    );
+}
+
+#[tokio::test]
+async fn rejects_targets_that_url_parsing_would_rewrite() {
+    for target in [
+        "/drafts/../credentials",
+        "/drafts\\@attacker.example/secret",
+        "/query with spaces",
+        "//attacker.example/secret",
+    ] {
+        let transport = FixtureTransport::new([fixture_response(StatusCode::OK)]);
+        let error = client(transport.clone())
+            .send(RequestSpec::new(Method::GET, target, "ITEMS"))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid HTTP request",
+            "target: {target}"
+        );
+        assert!(transport.requests().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn caps_adversarial_retry_and_timeout_configuration() {
+    let responses = (0..=8).map(|_| fixture_response(StatusCode::SERVICE_UNAVAILABLE));
+    let transport = FixtureTransport::new(responses);
+    let config = ClientConfig {
+        request_timeout: Duration::MAX,
+        max_get_retries: usize::MAX,
+        retry_base_delay: Duration::ZERO,
+        ..ClientConfig::default()
+    };
+    let client = HttpClient::with_transport(
+        config,
+        DeviceIdentity {
+            installation_id: "installation".to_owned(),
+            ab_test_device_id: "ab".to_owned(),
+        },
+        None,
+        transport.clone(),
+    );
+
+    client
+        .send(RequestSpec::new(Method::GET, "/safe", "ITEMS"))
+        .await
+        .unwrap();
+
+    let requests = transport.requests();
+    assert_eq!(requests.len(), 9);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.deadline == Duration::from_secs(120))
     );
 }

@@ -5,7 +5,7 @@ use std::time::Duration;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac};
 use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256, Sha512};
 use url::Url;
 use uuid::Uuid;
@@ -29,6 +29,10 @@ const GATEWAY_HMAC_KEY: &[u8] = b"3b535f36-79be-424b-a6fd-116c6e69f137";
 const SCHIBSTED_USER_AGENT: &str = "user-webflows-sdk-android/5.0.0";
 const TORI_USER_AGENT: &str = "ToriApp_iOS/26.16.0-26903";
 const TORI_BEARER_LIFETIME_SECS: u64 = 60 * 60;
+const AUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_AUTH_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_CALLBACK_URL_BYTES: usize = 8 * 1024;
+const MAX_AUTHORIZATION_CODE_BYTES: usize = 4 * 1024;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -55,7 +59,7 @@ impl std::fmt::Debug for SecretString {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OAuthFlow {
     pub flow_id: String,
     pub expires_at_unix: u64,
@@ -65,6 +69,22 @@ pub struct OAuthFlow {
     pub device_id: String,
     pub installation_id: String,
     pub ab_test_device_id: String,
+}
+
+impl std::fmt::Debug for OAuthFlow {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OAuthFlow")
+            .field("flow_id", &self.flow_id)
+            .field("expires_at_unix", &self.expires_at_unix)
+            .field("state", &self.state)
+            .field("nonce", &self.nonce)
+            .field("pkce_verifier", &self.pkce_verifier)
+            .field("device_id", &"<redacted>")
+            .field("installation_id", &"<redacted>")
+            .field("ab_test_device_id", &"<redacted>")
+            .finish()
+    }
 }
 
 impl OAuthFlow {
@@ -82,7 +102,7 @@ pub struct AuthStart {
     pub completion_command: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AuthCredentials {
     pub user_id: String,
     pub(crate) refresh_token: SecretString,
@@ -91,6 +111,21 @@ pub struct AuthCredentials {
     pub device_id: String,
     pub installation_id: String,
     pub ab_test_device_id: String,
+}
+
+impl std::fmt::Debug for AuthCredentials {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthCredentials")
+            .field("user_id", &"<redacted>")
+            .field("refresh_token", &self.refresh_token)
+            .field("bearer_token", &self.bearer_token)
+            .field("bearer_expires_at_unix", &self.bearer_expires_at_unix)
+            .field("device_id", &"<redacted>")
+            .field("installation_id", &"<redacted>")
+            .field("ab_test_device_id", &"<redacted>")
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -187,13 +222,24 @@ pub struct SchibstedToriAuthenticationApi<S = HmacGatewaySigner> {
 }
 
 impl SchibstedToriAuthenticationApi<HmacGatewaySigner> {
-    pub fn new(client: reqwest::Client) -> Self {
+    pub fn new() -> Self {
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .build()
+            .expect("static authentication client configuration is valid");
         Self::with_signer(client, HmacGatewaySigner)
     }
 }
 
+impl Default for SchibstedToriAuthenticationApi<HmacGatewaySigner> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<S> SchibstedToriAuthenticationApi<S> {
-    pub fn with_signer(client: reqwest::Client, signer: S) -> Self {
+    fn with_signer(client: reqwest::Client, signer: S) -> Self {
         Self {
             client,
             signer,
@@ -236,14 +282,12 @@ impl<S: GatewaySigner> SchibstedToriAuthenticationApi<S> {
                 ("grant_type", "refresh_token"),
                 ("refresh_token", refresh_token),
             ])
+            .timeout(AUTH_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|_| upstream_error("token_refresh", true))?;
         ensure_success(response.status(), "token_refresh")?;
-        let tokens: TokenResponse = response
-            .json()
-            .await
-            .map_err(|_| unexpected_response("token_refresh"))?;
+        let tokens: TokenResponse = bounded_json(response, "token_refresh").await?;
         if tokens.access_token.is_empty()
             || tokens.refresh_token.is_empty()
             || tokens.id_token.is_empty()
@@ -299,14 +343,12 @@ impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
                 ("redirect_uri", REDIRECT_URI),
                 ("code_verifier", pkce_verifier),
             ])
+            .timeout(AUTH_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|_| upstream_error("token_exchange", true))?;
         ensure_success(response.status(), "token_exchange")?;
-        let tokens: TokenResponse = response
-            .json()
-            .await
-            .map_err(|_| unexpected_response("token_exchange"))?;
+        let tokens: TokenResponse = bounded_json(response, "token_exchange").await?;
         if tokens.access_token.is_empty()
             || tokens.refresh_token.is_empty()
             || tokens.id_token.is_empty()
@@ -337,14 +379,12 @@ impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
             .bearer_auth(access_token)
             .header("User-Agent", "AccountSDKIOSWeb/7.0.2 (iPhone; iOS 26.1)")
             .form(&[("clientId", EXCHANGE_CLIENT_ID), ("type", "code")])
+            .timeout(AUTH_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|_| upstream_error("spid_exchange", true))?;
         ensure_success(response.status(), "spid_exchange")?;
-        let exchange: ExchangeResponse = response
-            .json()
-            .await
-            .map_err(|_| unexpected_response("spid_exchange"))?;
+        let exchange: ExchangeResponse = bounded_json(response, "spid_exchange").await?;
         if exchange.data.code.is_empty() {
             return Err(unexpected_response("spid_exchange"));
         }
@@ -395,14 +435,12 @@ impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
             .header("finn-app-installation-id", installation_id)
             .header("ab-test-device-id", ab_test_device_id)
             .body(body)
+            .timeout(AUTH_REQUEST_TIMEOUT)
             .send()
             .await
             .map_err(|_| upstream_error("tori_login", true))?;
         ensure_success(response.status(), "tori_login")?;
-        let login: LoginResponse = response
-            .json()
-            .await
-            .map_err(|_| unexpected_response("tori_login"))?;
+        let login: LoginResponse = bounded_json(response, "tori_login").await?;
         let user_id = match login.user_id {
             serde_json::Value::String(value) if !value.is_empty() => value,
             serde_json::Value::Number(value) => value.to_string(),
@@ -565,7 +603,34 @@ fn random_identifier() -> SecretString {
     SecretString::new(URL_SAFE_NO_PAD.encode(random))
 }
 
+async fn bounded_json<T: DeserializeOwned>(
+    mut response: reqwest::Response,
+    stage: &'static str,
+) -> Result<T, AppError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_AUTH_RESPONSE_BYTES as u64)
+    {
+        return Err(unexpected_response(stage));
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| unexpected_response(stage))?
+    {
+        if body.len().saturating_add(chunk.len()) > MAX_AUTH_RESPONSE_BYTES {
+            return Err(unexpected_response(stage));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| unexpected_response(stage))
+}
+
 fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretString, AppError> {
+    if callback_url.len() > MAX_CALLBACK_URL_BYTES {
+        return Err(invalid_callback());
+    }
     let parsed = Url::parse(callback_url).map_err(|_| invalid_callback())?;
     if parsed.scheme() != CALLBACK_SCHEME
         || parsed.host_str() != Some("login")
@@ -587,7 +652,7 @@ fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretS
             "state" if state.is_none() => state = Some(value.into_owned()),
             "error" if !oauth_error => oauth_error = true,
             "code" | "state" | "error" => return Err(invalid_callback()),
-            _ => {}
+            _ => return Err(invalid_callback()),
         }
     }
     if oauth_error {
@@ -606,7 +671,11 @@ fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretS
         ));
     }
     let code = code
-        .filter(|value| !value.is_empty())
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= MAX_AUTHORIZATION_CODE_BYTES
+                && !value.chars().any(char::is_control)
+        })
         .ok_or_else(invalid_callback)?;
     Ok(SecretString::new(code))
 }
@@ -746,7 +815,11 @@ mod tests {
         assert!((43..=128).contains(&first.pkce_verifier.expose().len()));
         assert_eq!(query.get("code_challenge_method").unwrap(), "S256");
         assert_eq!(output.expires_at_unix, 1_600);
-        assert!(!format!("{first:?}").contains(first.pkce_verifier.expose()));
+        let debug = format!("{first:?}");
+        assert!(!debug.contains(first.pkce_verifier.expose()));
+        assert!(!debug.contains(&first.device_id));
+        assert!(!debug.contains(&first.installation_id));
+        assert!(!debug.contains(&first.ab_test_device_id));
     }
 
     #[tokio::test]
@@ -805,6 +878,15 @@ mod tests {
     }
 
     #[test]
+    fn callback_rejects_an_overlong_authorization_code() {
+        let callback = format!(
+            "{CALLBACK_SCHEME}://login?code={}&state=expected",
+            "x".repeat(MAX_AUTHORIZATION_CODE_BYTES + 1)
+        );
+        assert!(validate_callback(&callback, "expected").is_err());
+    }
+
+    #[test]
     fn secret_debug_output_is_redacted() {
         let secret = SecretString::new("sensitive-value".into());
         assert_eq!(format!("{secret:?}"), "<redacted>");
@@ -826,7 +908,7 @@ mod tests {
 
     #[test]
     fn test_only_endpoint_override_keeps_adapter_configurable() {
-        let api = SchibstedToriAuthenticationApi::new(reqwest::Client::new())
+        let api = SchibstedToriAuthenticationApi::new()
             .with_base_urls("http://identity.test".into(), "http://tori.test".into());
         assert_eq!(api.login_base_url, "http://identity.test");
         assert_eq!(api.tori_base_url, "http://tori.test");

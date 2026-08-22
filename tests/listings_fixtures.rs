@@ -256,6 +256,37 @@ fn json_and_flag_duplicates_are_a_structured_usage_error() {
 }
 
 #[test]
+fn ambiguous_mutation_failures_include_listing_recovery_context() {
+    let mut api = MockListingsApi::fixtures();
+    api.updates = Mutex::new(VecDeque::from([Err(ListingsApiError::Upstream(
+        "Bearer upstream-secret".to_owned(),
+    ))]));
+
+    let error = Listings::new(&api)
+        .update(
+            "36443414",
+            BTreeMap::from([("price".to_owned(), json!(60))]),
+        )
+        .unwrap_err();
+
+    assert_eq!(error.exit_class.code(), 50);
+    assert_eq!(error.partial.as_ref().unwrap()["listing_id"], "36443414");
+    assert_eq!(error.partial.as_ref().unwrap()["operation"], "update");
+    assert_eq!(error.next_actions[0].command, "tori listing show 36443414");
+    assert!(!error.message.contains("upstream-secret"));
+}
+
+#[test]
+fn rejects_listing_ids_that_can_change_request_paths() {
+    let api = MockListingsApi::fixtures();
+
+    let error = Listings::new(&api).show("../credentials").unwrap_err();
+
+    assert_eq!(error.exit_class.code(), 2);
+    assert!(api.listings.lock().unwrap().len() == 1);
+}
+
+#[test]
 fn semantic_values_and_failures_use_structured_errors() {
     let api = MockListingsApi::fixtures();
     let error = Listings::new(&api)

@@ -6,8 +6,8 @@ use std::{
 
 use serde_json::{Map, Value, json};
 use tori::api::adinput::{
-    DraftWorkflow, HttpAdInputApi, HttpRequest, HttpResponse, HttpTransport, ImageState, Method,
-    RequestBody, RetryPolicy, WorkflowConfig,
+    AdInputApi, DraftWorkflow, HttpAdInputApi, HttpRequest, HttpResponse, HttpTransport,
+    ImageState, Method, RequestBody, RetryPolicy, WorkflowConfig,
 };
 
 #[derive(Clone)]
@@ -69,6 +69,22 @@ fn draft(etag: &str, extra: Value) -> Value {
     };
     target.extend(extra);
     value
+}
+
+struct HangingPollTransport {
+    first: Mutex<Option<HttpResponse>>,
+}
+
+impl HttpTransport for HangingPollTransport {
+    async fn execute(
+        &self,
+        _request: HttpRequest,
+    ) -> Result<HttpResponse, tori::api::adinput::ApiError> {
+        if let Some(response) = self.first.lock().unwrap().take() {
+            return Ok(response);
+        }
+        std::future::pending().await
+    }
 }
 
 fn config() -> WorkflowConfig {
@@ -192,6 +208,29 @@ async fn post_creation_failure_keeps_recovery_context() {
     assert_eq!(recovery.completed_steps, ["create_draft"]);
     assert!(!recovery.retryable);
     assert_eq!(recovery.next_safe_actions, ["tori draft show draft-1"]);
+}
+
+#[tokio::test]
+async fn copy_failure_identifies_both_source_listing_and_created_draft() {
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            json!({ "listing_id": "listing-7", "values": { "title": "Chair" }, "images": [] }),
+        ),
+        response(201, draft("one", json!({}))),
+        response(503, json!({ "message": "copy failed" })),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow.create_from_listing("listing-7").await.unwrap_err();
+
+    let recovery = error.recovery.unwrap();
+    assert_eq!(recovery.draft_id, "draft-1");
+    assert_eq!(recovery.listing_id.as_deref(), Some("listing-7"));
+    assert_eq!(
+        recovery.completed_steps,
+        ["load_source_listing", "create_draft"]
+    );
 }
 
 #[tokio::test]
@@ -682,6 +721,91 @@ async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
             .iter()
             .any(|step| step == "track_confirmation")
     );
+}
+
+#[tokio::test]
+async fn rejects_resource_ids_before_constructing_transport_paths() {
+    let transport = FixtureTransport::new([]);
+    let api = HttpAdInputApi::new(transport.clone());
+
+    let error = api.get_draft("../credentials").await.unwrap_err();
+
+    assert_eq!(error.code, "draft.invalid_id");
+    assert!(transport.requests().is_empty());
+}
+
+#[tokio::test]
+async fn percent_encodes_upstream_revisions_in_signed_query_targets() {
+    let transport = FixtureTransport::new([response(
+        200,
+        json!({ "revision": "revision&admin=true", "context": {} }),
+    )]);
+    let api = HttpAdInputApi::new(transport.clone());
+
+    api.product_context("draft-1", "revision&admin=true")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        transport.requests()[0].path,
+        "/drafts/draft-1/products?revision=revision%26admin%3Dtrue"
+    );
+}
+
+#[test]
+fn image_request_debug_never_contains_raw_bytes_or_secret_json_values() {
+    let image = HttpRequest {
+        method: Method::Post,
+        path: "/images".to_owned(),
+        if_match: None,
+        retry: RetryPolicy::Never,
+        body: RequestBody::Image {
+            bytes: b"raw-image-secret".to_vec(),
+            file_name: "image.jpg".to_owned(),
+            width: 1,
+            height: 1,
+        },
+    };
+    let json = HttpRequest {
+        method: Method::Post,
+        path: "/drafts".to_owned(),
+        if_match: None,
+        retry: RetryPolicy::Never,
+        body: RequestBody::Json(json!({ "access_token": "token-secret" })),
+    };
+
+    assert!(!format!("{image:?}").contains("raw-image-secret"));
+    assert!(!format!("{json:?}").contains("token-secret"));
+}
+
+#[tokio::test]
+async fn publish_timeout_bounds_a_hung_poll_request() {
+    let processing = draft(
+        "one",
+        json!({
+            "values": { "title": "Chair", "delivery": ["pickup"] },
+            "required_fields": ["title", "delivery"],
+            "images": [{ "image_id": "image-1", "position": 0, "state": "processing" }]
+        }),
+    );
+    let workflow = DraftWorkflow::new(
+        HttpAdInputApi::new(HangingPollTransport {
+            first: Mutex::new(Some(response(200, processing))),
+        }),
+        WorkflowConfig {
+            image_processing_timeout: Duration::from_millis(20),
+            image_poll_interval: Duration::ZERO,
+            image_poll_limit: usize::MAX,
+        },
+    );
+
+    let error = tokio::time::timeout(Duration::from_secs(1), workflow.publish("draft-1"))
+        .await
+        .expect("workflow must enforce its own deadline")
+        .unwrap_err();
+
+    assert_eq!(error.code, "draft.image_processing");
+    assert!(error.recovery.unwrap().retryable);
 }
 
 #[tokio::test]

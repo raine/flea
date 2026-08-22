@@ -9,10 +9,11 @@ use std::{
 use reqwest::{
     Method, StatusCode,
     header::{
-        ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderName,
-        HeaderValue, IF_MATCH, USER_AGENT,
+        ACCEPT, ACCEPT_LANGUAGE, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, ETAG, HOST,
+        HeaderMap, HeaderName, HeaderValue, IF_MATCH, SET_COOKIE, USER_AGENT,
     },
 };
+use url::Position;
 
 use super::signing::{SigningContext, sign};
 
@@ -47,6 +48,9 @@ const DEFAULT_MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_GET_RETRIES: usize = 2;
 const DEFAULT_RETRY_BASE_DELAY: Duration = Duration::from_millis(100);
 const DEFAULT_RETRY_MAX_DELAY: Duration = Duration::from_secs(2);
+const MAX_GET_RETRIES: usize = 8;
+const MAX_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
@@ -489,7 +493,7 @@ impl<T: Transport> HttpClient<T> {
         validate_path(&request.path_and_query)?;
         let retryable_method = matches!(request.method, Method::GET | Method::HEAD);
         let max_attempts = if retryable_method {
-            self.config.max_get_retries + 1
+            self.config.max_get_retries.min(MAX_GET_RETRIES) + 1
         } else {
             1
         };
@@ -527,12 +531,10 @@ impl<T: Transport> HttpClient<T> {
             ApiHost::Gateway => &self.config.gateway_base_url,
             ApiHost::Adinput => &self.config.adinput_base_url,
         };
-        let url = format!(
-            "{}{}",
-            base_url.trim_end_matches('/'),
-            request.path_and_query
-        );
-        reqwest::Url::parse(&url).map_err(|_| HttpError::InvalidRequest)?;
+        validate_custom_headers(&request.headers)?;
+        let base_url = base_url.trim_end_matches('/');
+        let url = format!("{base_url}{}", request.path_and_query);
+        validate_canonical_url(base_url, &url, &request.path_and_query)?;
 
         let signature = sign(SigningContext {
             method: request.method.as_str(),
@@ -564,7 +566,7 @@ impl<T: Transport> HttpClient<T> {
             path_and_query: request.path_and_query.clone(),
             headers,
             body: request.body.clone(),
-            deadline: self.config.request_timeout,
+            deadline: self.config.request_timeout.min(MAX_REQUEST_TIMEOUT),
             max_response_bytes: self.config.max_response_bytes,
         })
     }
@@ -656,8 +658,54 @@ fn insert_header(
 fn validate_path(path_and_query: &str) -> Result<(), HttpError> {
     if !path_and_query.starts_with('/')
         || path_and_query.starts_with("//")
-        || path_and_query.contains('#')
+        || path_and_query.contains(['#', '\\'])
+        || path_and_query.chars().any(char::is_control)
     {
+        return Err(HttpError::InvalidRequest);
+    }
+    Ok(())
+}
+
+fn validate_canonical_url(
+    base_url: &str,
+    url: &str,
+    path_and_query: &str,
+) -> Result<(), HttpError> {
+    let base = reqwest::Url::parse(base_url).map_err(|_| HttpError::InvalidRequest)?;
+    if !matches!(base.scheme(), "https" | "http")
+        || base.cannot_be_a_base()
+        || base.username() != ""
+        || base.password().is_some()
+        || base.query().is_some()
+        || base.fragment().is_some()
+        || base.path() != "/"
+    {
+        return Err(HttpError::InvalidRequest);
+    }
+    let parsed = reqwest::Url::parse(url).map_err(|_| HttpError::InvalidRequest)?;
+    if parsed.scheme() != base.scheme()
+        || parsed.host_str() != base.host_str()
+        || parsed.port_or_known_default() != base.port_or_known_default()
+        || &parsed[Position::BeforePath..] != path_and_query
+    {
+        return Err(HttpError::InvalidRequest);
+    }
+    Ok(())
+}
+
+fn validate_custom_headers(headers: &HeaderMap) -> Result<(), HttpError> {
+    let reserved = [
+        AUTHORIZATION,
+        CONTENT_LENGTH,
+        CONTENT_TYPE,
+        COOKIE,
+        HOST,
+        IF_MATCH,
+        SET_COOKIE,
+        HeaderName::from_static("finn-gw-key"),
+        HeaderName::from_static("finn-gw-service"),
+    ];
+    if reserved.iter().any(|name| headers.contains_key(name)) {
         return Err(HttpError::InvalidRequest);
     }
     Ok(())
@@ -691,7 +739,8 @@ fn retry_delay(config: &ClientConfig, attempt: usize) -> Duration {
     let ceiling = config
         .retry_base_delay
         .saturating_mul(2_u32.saturating_pow(exponent))
-        .min(config.retry_max_delay);
+        .min(config.retry_max_delay)
+        .min(MAX_RETRY_DELAY);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()

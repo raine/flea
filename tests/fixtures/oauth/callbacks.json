@@ -7,6 +7,7 @@
   {"callback":"fi.tori.www.6079834b9b0b741812e7e91f://login?state=expected","valid":false},
   {"callback":"fi.tori.www.6079834b9b0b741812e7e91f://login?code=one&code=two&state=expected","valid":false},
   {"callback":"fi.tori.www.6079834b9b0b741812e7e91f://login?code=ok&state=expected&state=expected","valid":false},
+  {"callback":"fi.tori.www.6079834b9b0b741812e7e91f://login?code=ok&state=expected&next=https://evil.test","valid":false},
   {"callback":"fi.tori.www.6079834b9b0b741812e7e91f://login?code=&state=expected","valid":false},
   {"callback":"not a url","valid":false}
 ]

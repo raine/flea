@@ -7,9 +7,9 @@ pub mod output;
 pub mod storage;
 
 use std::{
-    any::Any,
     ffi::OsString,
     panic::{AssertUnwindSafe, catch_unwind},
+    sync::Once,
 };
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
@@ -27,6 +27,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
+    install_safe_panic_hook();
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
     let requested_format = output::format_from_args(args.iter().cloned()).unwrap_or_default();
     let command = diagnostics::command_name(&args);
@@ -40,10 +41,10 @@ where
         let result = catch_unwind(AssertUnwindSafe(|| {
             run_parsed(args, requested_format, Some(session.context()), &runtime)
         }))
-        .unwrap_or_else(|panic| {
+        .unwrap_or_else(|_| {
             finish(
                 requested_format,
-                Err(AppError::unexpected(panic_message(panic))),
+                Err(AppError::unexpected("command failed unexpectedly")),
                 Some(session.context()),
             )
         });
@@ -57,15 +58,16 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
+    install_safe_panic_hook();
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
     let requested_format = output::format_from_args(args.iter().cloned()).unwrap_or_default();
     catch_unwind(AssertUnwindSafe(|| {
         run_parsed(args, requested_format, None, runtime)
     }))
-    .unwrap_or_else(|panic| {
+    .unwrap_or_else(|_| {
         finish(
             requested_format,
-            Err(AppError::unexpected(panic_message(panic))),
+            Err(AppError::unexpected("command failed unexpectedly")),
             None,
         )
     })
@@ -167,14 +169,13 @@ fn finish(
     }
 }
 
-fn panic_message(payload: Box<dyn Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        return (*message).to_owned();
-    }
-    if let Some(message) = payload.downcast_ref::<String>() {
-        return message.clone();
-    }
-    "command panicked".to_owned()
+fn install_safe_panic_hook() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        std::panic::set_hook(Box::new(|_| {
+            eprintln!("tori: command failed unexpectedly");
+        }));
+    });
 }
 
 pub fn command() -> clap::Command {
