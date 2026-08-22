@@ -58,6 +58,45 @@ fn publish_requires_an_expected_revision() {
 }
 
 #[test]
+fn parses_draft_show_expansions() {
+    let cli = Cli::parse_from([
+        "flea",
+        "draft",
+        "show",
+        "draft-1",
+        "--include-fields",
+        "--include-options",
+        "category",
+    ]);
+    let Command::Draft(draft) = cli.command else {
+        panic!("expected draft command");
+    };
+    let DraftCommand::Show {
+        draft_id,
+        include_fields,
+        include_options,
+    } = draft.command
+    else {
+        panic!("expected draft show command");
+    };
+    assert_eq!(draft_id, "draft-1");
+    assert!(include_fields);
+    assert_eq!(include_options.as_deref(), Some("category"));
+
+    let cli = Cli::parse_from(["flea", "draft", "show", "draft-1", "--include-options"]);
+    let Command::Draft(draft) = cli.command else {
+        panic!("expected draft command");
+    };
+    assert!(matches!(
+        draft.command,
+        DraftCommand::Show {
+            include_options: Some(ref value),
+            ..
+        } if value == "*"
+    ));
+}
+
+#[test]
 fn parses_category_search_hierarchy_and_pagination_options() {
     let cli = Cli::parse_from([
         "flea",

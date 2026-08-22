@@ -3532,6 +3532,41 @@ async fn composer_bounds_options_and_reports_truncation() {
 }
 
 #[tokio::test]
+async fn inspection_expansion_returns_the_complete_composer_option_set() {
+    let mut fixture = composer_fixture();
+    fixture["model"]["sections"][2]["content"][1]["items"] = Value::Array(
+        (0..60)
+            .map(|index| json!({ "label": format!("Condition {index}"), "value": index }))
+            .collect(),
+    );
+    let api = HttpAdInputApi::new(FixtureTransport::new([response(200, fixture)]));
+
+    let publication = api
+        .publication_draft_for_inspection("46000000", true)
+        .await
+        .unwrap();
+    let condition = publication
+        .draft
+        .fields
+        .iter()
+        .find(|field| field.key == "condition")
+        .unwrap();
+
+    assert_eq!(condition.option_count, 60);
+    assert_eq!(condition.options_returned, 60);
+    assert!(!condition.options_truncated);
+    assert_eq!(
+        publication
+            .draft
+            .options
+            .iter()
+            .filter(|option| option.field == "condition")
+            .count(),
+        60
+    );
+}
+
+#[tokio::test]
 async fn composer_keeps_a_selected_category_outside_the_option_bound() {
     let option_ids = (0..60).map(|index| index.to_string()).collect::<Vec<_>>();
     let api = HttpAdInputApi::new(FixtureTransport::new([response(

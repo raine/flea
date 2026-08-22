@@ -1,0 +1,123 @@
+{
+  "ok": true,
+  "data": {
+    "draft_id": "draft-1",
+    "etag": "etag-7",
+    "revision": "revision-7",
+    "values": {
+      "category": "2",
+      "title": "Chair",
+      "description": "Solid birch chair",
+      "trade_type": "sell",
+      "postal_code": "00100",
+      "price": {
+        "kind": "fixed",
+        "amount": 45,
+        "currency": "EUR"
+      },
+      "delivery": [
+        "pickup"
+      ]
+    },
+    "ready": true,
+    "category": {
+      "value": "2",
+      "label": "Chairs",
+      "exists": true,
+      "selectable": true,
+      "compatible": true,
+      "existence_source": "category_taxonomy",
+      "selectability_source": "category_taxonomy",
+      "compatibility_source": "listing_composer"
+    },
+    "images": [
+      {
+        "image_id": "image-1",
+        "position": 0,
+        "state": "ready",
+        "width": 0,
+        "height": 0
+      }
+    ],
+    "delivery": {
+      "available": true,
+      "selected": [
+        "pickup"
+      ],
+      "selected_options": [
+        {
+          "value": "pickup",
+          "label": "Pickup",
+          "mode": "pickup"
+        }
+      ],
+      "option_count": 2,
+      "options_returned": 2,
+      "options_truncated": false
+    },
+    "option_sets": [
+      {
+        "field": "category",
+        "option_count": 3,
+        "options_returned": 3,
+        "options_truncated": false
+      },
+      {
+        "field": "delivery",
+        "option_count": 2,
+        "options_returned": 2,
+        "options_truncated": false
+      }
+    ],
+    "fields": [
+      {
+        "key": "category",
+        "label": "Category",
+        "type": "select",
+        "requirement": "required",
+        "status": "set",
+        "value": "2",
+        "section": "details",
+        "option_count": 3,
+        "options_returned": 3,
+        "options_truncated": false
+      },
+      {
+        "key": "delivery",
+        "label": "Delivery",
+        "type": "multi_select",
+        "requirement": "required",
+        "status": "set",
+        "value": [
+          "pickup"
+        ],
+        "section": "delivery",
+        "option_count": 2,
+        "options_returned": 2,
+        "options_truncated": false
+      }
+    ],
+    "options": [
+      {
+        "field": "category",
+        "value": "1",
+        "label": "Tables"
+      },
+      {
+        "field": "category",
+        "value": "2",
+        "label": "Chairs"
+      },
+      {
+        "field": "category",
+        "value": "3",
+        "label": "Sofas"
+      }
+    ]
+  },
+  "next_actions": [
+    {
+      "command": "flea draft publish draft-1 --if-revision revision-7"
+    }
+  ]
+}

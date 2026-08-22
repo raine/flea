@@ -361,6 +361,167 @@ fn draft_create_flows_through_the_http_adapter() {
 }
 
 #[test]
+fn draft_show_is_compact_by_default_and_expands_deterministically() {
+    let draft = || {
+        let options = (0..593)
+            .map(|index| {
+                json!({
+                    "field": "category",
+                    "value": index.to_string(),
+                    "label": format!("Category {index}")
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "draft_id": "draft-1",
+            "etag": "etag-7",
+            "revision": "revision-7",
+            "values": {
+                "category": "258",
+                "title": "Chair",
+                "description": "Solid birch chair",
+                "trade_type": "sell",
+                "price": 45,
+                "postal_code": "00100"
+            },
+            "fields": [{
+                "key": "category",
+                "label": "Category",
+                "type": "select",
+                "requirement": "required",
+                "status": "set",
+                "value": "258",
+                "section": "details",
+                "option_count": 593,
+                "options_returned": 593,
+                "options_truncated": false
+            }],
+            "options": options,
+            "required_fields": [],
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        })
+    };
+    let client = || {
+        MockClient::with_responses([
+            response(StatusCode::OK, draft()),
+            response(StatusCode::OK, delivery_page(true)),
+            response(
+                StatusCode::OK,
+                json!({
+                    "categories": [{
+                        "id": "258",
+                        "label": "Bicycle accessories",
+                        "isSelectable": true
+                    }]
+                }),
+            ),
+        ])
+    };
+
+    let compact = invoke(
+        &TestRuntime { client: client() },
+        ["flea", "--format", "json", "draft", "show", "draft-1"],
+    );
+    assert_eq!(compact["data"]["revision"], "revision-7");
+    assert_eq!(compact["data"]["category"]["label"], "Bicycle accessories");
+    assert_eq!(compact["data"]["delivery"]["selected"][0], "pickup");
+    assert_eq!(compact["data"]["images"][0]["state"], "ready");
+    assert_eq!(compact["data"]["option_sets"][0]["option_count"], 593);
+    assert!(compact["data"].get("fields").is_none());
+    assert!(compact["data"].get("options").is_none());
+    let compact_text = compact.to_string();
+    assert!(!compact_text.contains("Category 257"));
+    assert!(!compact_text.contains("Category 259"));
+
+    let expanded = invoke(
+        &TestRuntime { client: client() },
+        [
+            "flea",
+            "--format",
+            "json",
+            "draft",
+            "show",
+            "draft-1",
+            "--include-fields",
+            "--include-options",
+            "category",
+        ],
+    );
+    assert_eq!(expanded["data"]["fields"].as_array().unwrap().len(), 2);
+    assert_eq!(expanded["data"]["options"].as_array().unwrap().len(), 593);
+    assert_eq!(expanded["data"]["options"][258]["label"], "Category 258");
+
+    let toon = run_with_runtime(
+        ["flea", "draft", "show", "draft-1"],
+        &TestRuntime { client: client() },
+    );
+    let toon_again = run_with_runtime(
+        ["flea", "draft", "show", "draft-1"],
+        &TestRuntime { client: client() },
+    );
+    assert_eq!(toon.exit_code, 0, "{}", toon.document);
+    assert_eq!(toon.document, toon_again.document);
+    let decoded: Value = toon_format::decode_default(&toon.document).unwrap();
+    assert_eq!(decoded["data"]["revision"], "revision-7");
+    assert!(decoded["data"].get("options").is_none());
+
+    let expanded_toon = run_with_runtime(
+        [
+            "flea",
+            "draft",
+            "show",
+            "draft-1",
+            "--include-fields",
+            "--include-options",
+            "category",
+        ],
+        &TestRuntime { client: client() },
+    );
+    assert_eq!(expanded_toon.exit_code, 0, "{}", expanded_toon.document);
+    let decoded: Value = toon_format::decode_default(&expanded_toon.document).unwrap();
+    assert_eq!(decoded["data"]["options"].as_array().unwrap().len(), 593);
+    assert_eq!(decoded["data"]["fields"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn draft_show_compact_and_expanded_output_matches_json_and_toon_snapshots() {
+    let run = |format: &str, expanded: bool| {
+        let mut args = vec!["flea", "--format", format, "draft", "show", "draft-1"];
+        if expanded {
+            args.extend(["--include-fields", "--include-options", "category"]);
+        }
+        run_with_runtime(
+            args,
+            &TestRuntime {
+                client: draft_show_snapshot_client(),
+            },
+        )
+        .document
+    };
+
+    let compact_json = run("json", false);
+    let compact_toon = run("toon", false);
+    let expanded_json = run("json", true);
+    let expanded_toon = run("toon", true);
+    assert_eq!(
+        compact_json,
+        include_str!("snapshots/draft-show-compact.json").trim_end()
+    );
+    assert_eq!(
+        compact_toon,
+        include_str!("snapshots/draft-show-compact.toon").trim_end()
+    );
+    assert_eq!(
+        expanded_json,
+        include_str!("snapshots/draft-show-expanded.json").trim_end()
+    );
+    assert_eq!(
+        expanded_toon,
+        include_str!("snapshots/draft-show-expanded.toon").trim_end()
+    );
+}
+
+#[test]
 fn draft_validate_is_compact_deterministic_and_read_only_in_json_and_toon() {
     let client = || {
         MockClient::with_responses([
@@ -1365,6 +1526,53 @@ fn response(status: StatusCode, body: Value) -> HttpResponse {
         headers: HeaderMap::new(),
         body: serde_json::to_vec(&body).unwrap(),
     }
+}
+
+fn draft_show_snapshot_client() -> MockClient {
+    MockClient::with_responses([
+        response(
+            StatusCode::OK,
+            json!({
+                "draft_id": "draft-1",
+                "etag": "etag-7",
+                "revision": "revision-7",
+                "values": {
+                    "category": "2",
+                    "title": "Chair",
+                    "description": "Solid birch chair",
+                    "trade_type": "sell",
+                    "price": 45,
+                    "postal_code": "00100"
+                },
+                "fields": [{
+                    "key": "category",
+                    "label": "Category",
+                    "type": "select",
+                    "requirement": "required",
+                    "status": "set",
+                    "value": "2",
+                    "section": "details",
+                    "option_count": 3,
+                    "options_returned": 3,
+                    "options_truncated": false
+                }],
+                "options": [
+                    { "field": "category", "value": "1", "label": "Tables" },
+                    { "field": "category", "value": "2", "label": "Chairs" },
+                    { "field": "category", "value": "3", "label": "Sofas" }
+                ],
+                "required_fields": [],
+                "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+            }),
+        ),
+        response(StatusCode::OK, delivery_page(true)),
+        response(
+            StatusCode::OK,
+            json!({
+                "categories": [{ "id": "2", "label": "Chairs", "isSelectable": true }]
+            }),
+        ),
+    ])
 }
 
 fn delivery_page(selected: bool) -> Value {

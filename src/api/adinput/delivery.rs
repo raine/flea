@@ -4,6 +4,14 @@ pub(super) fn normalize_delivery_composer(
     source: Value,
     draft_id: &str,
 ) -> Result<DeliveryComposer, ApiError> {
+    normalize_delivery_composer_with_limit(source, draft_id, MAX_OPTIONS_PER_FIELD)
+}
+
+pub(super) fn normalize_delivery_composer_with_limit(
+    source: Value,
+    draft_id: &str,
+    option_limit: usize,
+) -> Result<DeliveryComposer, ApiError> {
     let root = source.as_object().ok_or_else(|| {
         model_error(
             "delivery_composer",
@@ -196,13 +204,13 @@ pub(super) fn normalize_delivery_composer(
     }
 
     let option_count = options.len();
-    if option_count > MAX_OPTIONS_PER_FIELD {
+    if option_count > option_limit {
         let selected_options = options
             .iter()
             .filter(|option| selected.contains(&option.value))
             .cloned()
             .collect::<Vec<_>>();
-        let unselected_limit = MAX_OPTIONS_PER_FIELD.saturating_sub(selected_options.len());
+        let unselected_limit = option_limit.saturating_sub(selected_options.len());
         options = options
             .into_iter()
             .filter(|option| !selected.contains(&option.value))

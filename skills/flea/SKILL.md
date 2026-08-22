@@ -70,7 +70,9 @@ flea auth logout
 flea draft preview [fields]                 # Offline and zero-mutation by default
 flea draft preview --input PATH --verify-category
 flea draft create [fields]
-flea draft show DRAFT_ID
+flea draft show DRAFT_ID                    # Compact decision state
+flea draft show DRAFT_ID --include-fields
+flea draft show DRAFT_ID --include-options [FIELD]
 flea draft update DRAFT_ID [fields]
 flea draft image add DRAFT_ID PATH...
 flea draft image remove DRAFT_ID IMAGE_ID...
@@ -85,7 +87,7 @@ flea listing dispose LISTING_ID
 flea listing delete LISTING_ID
 ```
 
-Local draft preview works without authentication. Category-enriched preview and account draft or published listing work require authentication. Preview reports local assumptions and unverifiable requirements, while `draft validate DRAFT_ID` authoritatively checks an existing remote draft without changing it. Build a draft incrementally, inspect required fields and allowed options with `draft show`, and upload images. Before publication, carry the exact validated revision into the mutation:
+Local draft preview works without authentication. Category-enriched preview and account draft or published listing work require authentication. Preview reports local assumptions and unverifiable requirements, while `draft validate DRAFT_ID` authoritatively checks an existing remote draft without changing it. Start draft inspection with compact `draft show`. Request `--include-fields` only when the field schema is needed, and request `--include-options FIELD` only for a relevant option set. Bare `--include-options` returns every available option set. Build a draft incrementally and upload images. Before publication, carry the exact validated revision into the mutation:
 
 ```sh
 validation="$(flea --format json draft validate DRAFT_ID)"

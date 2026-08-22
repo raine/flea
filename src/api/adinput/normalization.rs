@@ -66,8 +66,16 @@ pub(super) fn normalize_authoritative_draft_state(
     body: Value,
     response_etag: Option<&str>,
 ) -> Result<DraftState, ApiError> {
+    normalize_authoritative_draft_state_with_limit(body, response_etag, MAX_OPTIONS_PER_FIELD)
+}
+
+fn normalize_authoritative_draft_state_with_limit(
+    body: Value,
+    response_etag: Option<&str>,
+    option_limit: usize,
+) -> Result<DraftState, ApiError> {
     if body.get("model").is_some() {
-        return normalize_source_draft_state(body, response_etag);
+        return normalize_source_draft_state_with_limit(body, response_etag, option_limit);
     }
     let root = body.as_object().ok_or_else(|| {
         model_error(
@@ -92,8 +100,17 @@ pub(super) fn normalize_publication_draft(
     body: Value,
     response_etag: Option<&str>,
 ) -> Result<PublicationDraftState, ApiError> {
+    normalize_publication_draft_with_limit(body, response_etag, MAX_OPTIONS_PER_FIELD)
+}
+
+pub(super) fn normalize_publication_draft_with_limit(
+    body: Value,
+    response_etag: Option<&str>,
+    option_limit: usize,
+) -> Result<PublicationDraftState, ApiError> {
     let composer_model = publication_composer_status(&body);
-    match normalize_authoritative_draft_state(body.clone(), response_etag) {
+    match normalize_authoritative_draft_state_with_limit(body.clone(), response_etag, option_limit)
+    {
         Ok(draft) => Ok(PublicationDraftState {
             draft,
             composer_model,
@@ -198,6 +215,14 @@ pub(super) fn normalize_source_draft_state(
     body: Value,
     response_etag: Option<&str>,
 ) -> Result<DraftState, ApiError> {
+    normalize_source_draft_state_with_limit(body, response_etag, MAX_OPTIONS_PER_FIELD)
+}
+
+fn normalize_source_draft_state_with_limit(
+    body: Value,
+    response_etag: Option<&str>,
+    option_limit: usize,
+) -> Result<DraftState, ApiError> {
     let draft_id = draft_id_from_body(&body).ok_or_else(|| {
         model_error(
             "listing_composer",
@@ -243,7 +268,7 @@ pub(super) fn normalize_source_draft_state(
                 "listing composer model is unavailable or unrecognized",
             )
         })?;
-    let normalized_model = normalize_listing_model(model, &values)?;
+    let normalized_model = normalize_listing_model(model, &values, option_limit)?;
     let images = normalize_draft_images(&values)?;
     let DraftModel {
         fields,
@@ -272,6 +297,7 @@ pub(super) fn normalize_source_draft_state(
 fn normalize_listing_model(
     model: &Map<String, Value>,
     values: &Map<String, Value>,
+    option_limit: usize,
 ) -> Result<DraftModel, ApiError> {
     let sections = model
         .get("sections")
@@ -319,6 +345,7 @@ fn normalize_listing_model(
                 values,
                 &mut field_names,
                 &mut normalized,
+                option_limit,
             )?;
         }
     }
@@ -338,6 +365,7 @@ fn normalize_widget(
     values: &Map<String, Value>,
     field_names: &mut BTreeSet<String>,
     normalized: &mut DraftModel,
+    option_limit: usize,
 ) -> Result<(), ApiError> {
     let widget = widget
         .as_object()
@@ -367,6 +395,7 @@ fn normalize_widget(
                 values,
                 field_names,
                 normalized,
+                option_limit,
             )?;
         }
         return Ok(());
@@ -427,8 +456,14 @@ fn normalize_widget(
     };
     let field_type = normalize_field_type(widget, &upstream_type, path)?;
     let value = model_field_value(values, &id);
-    let option_result =
-        normalize_widget_options(widget, &upstream_type, &id, value.as_ref(), path)?;
+    let option_result = normalize_widget_options(
+        widget,
+        &upstream_type,
+        &id,
+        value.as_ref(),
+        path,
+        option_limit,
+    )?;
     let mut field = Field::new(
         id.clone(),
         label,
@@ -646,6 +681,7 @@ fn normalize_widget_options(
     field: &str,
     selected: Option<&Value>,
     path: &str,
+    option_limit: usize,
 ) -> Result<NormalizedOptions, ApiError> {
     let selected = match selected {
         Some(Value::Array(values)) => values.clone(),
@@ -672,7 +708,13 @@ fn normalize_widget_options(
                     )
                 })?;
             for (index, item) in items.iter().enumerate() {
-                normalize_flat_option(item, field, &format!("{path}.items[{index}]"), &mut result)?;
+                normalize_flat_option(
+                    item,
+                    field,
+                    &format!("{path}.items[{index}]"),
+                    &mut result,
+                    option_limit,
+                )?;
             }
         }
         "managed" => {
@@ -693,6 +735,7 @@ fn normalize_widget_options(
                     field,
                     &format!("{path}.value-nodes[{index}]"),
                     &mut result,
+                    option_limit,
                 )?;
             }
         }
@@ -704,7 +747,13 @@ fn normalize_widget_options(
                     "tree options are unavailable",
                 )
             })?;
-            normalize_option_node(root, field, &format!("{path}.value"), &mut result)?;
+            normalize_option_node(
+                root,
+                field,
+                &format!("{path}.value"),
+                &mut result,
+                option_limit,
+            )?;
         }
         _ => {}
     }
@@ -716,7 +765,7 @@ fn normalize_widget_options(
         {
             continue;
         }
-        if result.options.len() == MAX_OPTIONS_PER_FIELD {
+        if result.options.len() == option_limit {
             result.options.pop();
         }
         result.options.push(selected);
@@ -729,6 +778,7 @@ fn normalize_flat_option(
     field: &str,
     path: &str,
     result: &mut NormalizedOptions,
+    option_limit: usize,
 ) -> Result<(), ApiError> {
     let option = option
         .as_object()
@@ -755,7 +805,7 @@ fn normalize_flat_option(
                 "option label is unavailable",
             )
         })?;
-    push_option(result, field, value, label);
+    push_option(result, field, value, label, option_limit);
     Ok(())
 }
 
@@ -764,6 +814,7 @@ fn normalize_option_node(
     field: &str,
     path: &str,
     result: &mut NormalizedOptions,
+    option_limit: usize,
 ) -> Result<(), ApiError> {
     let node = node
         .as_object()
@@ -806,17 +857,29 @@ fn normalize_option_node(
                     "option node label is unavailable",
                 )
             })?;
-        push_option(result, field, value, label);
+        push_option(result, field, value, label, option_limit);
     }
     if let Some(children) = children {
         for (index, child) in children.iter().enumerate() {
-            normalize_option_node(child, field, &format!("{path}.children[{index}]"), result)?;
+            normalize_option_node(
+                child,
+                field,
+                &format!("{path}.children[{index}]"),
+                result,
+                option_limit,
+            )?;
         }
     }
     Ok(())
 }
 
-fn push_option(result: &mut NormalizedOptions, field: &str, value: Value, label: &str) {
+fn push_option(
+    result: &mut NormalizedOptions,
+    field: &str,
+    value: Value,
+    label: &str,
+    option_limit: usize,
+) {
     result.total += 1;
     let option = FieldOption {
         field: field.to_owned(),
@@ -830,7 +893,7 @@ fn push_option(result: &mut NormalizedOptions, field: &str, value: Value, label:
     {
         result.selected_options.push(option.clone());
     }
-    if result.options.len() < MAX_OPTIONS_PER_FIELD {
+    if result.options.len() < option_limit {
         result.options.push(option);
     }
 }

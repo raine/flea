@@ -1,0 +1,41 @@
+ok: true
+data:
+  draft_id: "draft-1"
+  etag: "etag-7"
+  revision: "revision-7"
+  values:
+    category: "2"
+    title: Chair
+    description: Solid birch chair
+    trade_type: sell
+    postal_code: "00100"
+    price:
+      kind: fixed
+      amount: 45
+      currency: EUR
+    delivery[1]: pickup
+  ready: true
+  category:
+    value: "2"
+    label: Chairs
+    exists: true
+    selectable: true
+    compatible: true
+    existence_source: category_taxonomy
+    selectability_source: category_taxonomy
+    compatibility_source: listing_composer
+  images[1]{image_id,position,state,width,height}:
+    "image-1",0,ready,0,0
+  delivery:
+    available: true
+    selected[1]: pickup
+    selected_options[1]{value,label,mode}:
+      pickup,Pickup,pickup
+    option_count: 2
+    options_returned: 2
+    options_truncated: false
+  option_sets[2]{field,option_count,options_returned,options_truncated}:
+    category,3,3,false
+    delivery,2,2,false
+next_actions[1]{command}:
+  "flea draft publish draft-1 --if-revision revision-7"

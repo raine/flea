@@ -12,6 +12,13 @@ pub trait AdInputApi: Send + Sync {
                 composer_model: ComposerModelStatus::Available,
             })
     }
+    async fn publication_draft_for_inspection(
+        &self,
+        draft_id: &str,
+        _include_all_options: bool,
+    ) -> Result<PublicationDraftState, ApiError> {
+        self.publication_draft(draft_id).await
+    }
     async fn update_item(
         &self,
         draft_id: &str,
@@ -59,6 +66,13 @@ pub trait AdInputApi: Send + Sync {
     async fn publication_categories(&self) -> Result<Vec<PublicationCategory>, ApiError>;
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError>;
     async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError>;
+    async fn delivery_composer_for_inspection(
+        &self,
+        draft_id: &str,
+        _include_all_options: bool,
+    ) -> Result<DeliveryComposer, ApiError> {
+        self.delivery_composer(draft_id).await
+    }
     async fn apply_delivery(
         &self,
         draft_id: &str,
@@ -281,6 +295,14 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 
     async fn publication_draft(&self, draft_id: &str) -> Result<PublicationDraftState, ApiError> {
+        self.publication_draft_for_inspection(draft_id, false).await
+    }
+
+    async fn publication_draft_for_inspection(
+        &self,
+        draft_id: &str,
+        include_all_options: bool,
+    ) -> Result<PublicationDraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
         let response = self
             .json(HttpRequest::read(format!(
@@ -290,7 +312,15 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         if response.body_is_unparseable {
             return Err(malformed_read_response("publication_draft"));
         }
-        normalize_publication_draft(response.body, response.etag.as_deref())
+        if include_all_options {
+            normalize_publication_draft_with_limit(
+                response.body,
+                response.etag.as_deref(),
+                usize::MAX,
+            )
+        } else {
+            normalize_publication_draft(response.body, response.etag.as_deref())
+        }
     }
 
     async fn update_item(
@@ -518,6 +548,14 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 
     async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError> {
+        self.delivery_composer_for_inspection(draft_id, false).await
+    }
+
+    async fn delivery_composer_for_inspection(
+        &self,
+        draft_id: &str,
+        include_all_options: bool,
+    ) -> Result<DeliveryComposer, ApiError> {
         validate_resource_id(draft_id, "draft")?;
         let draft_id_query: String =
             url::form_urlencoded::byte_serialize(draft_id.as_bytes()).collect();
@@ -526,7 +564,11 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
                 "/ui/addelivery?adId={draft_id_query}&editMode=false"
             )))
             .await?;
-        normalize_delivery_composer(response.body, draft_id)
+        if include_all_options {
+            normalize_delivery_composer_with_limit(response.body, draft_id, usize::MAX)
+        } else {
+            normalize_delivery_composer(response.body, draft_id)
+        }
     }
 
     async fn apply_delivery(
