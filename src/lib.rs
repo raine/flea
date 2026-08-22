@@ -6,9 +6,14 @@ pub mod error;
 pub mod output;
 pub mod storage;
 
-use std::ffi::OsString;
+use std::{
+    any::Any,
+    ffi::OsString,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use clap::{CommandFactory, Parser, error::ErrorKind};
+use diagnostics::{DiagnosticsContext, DiagnosticsSession};
 use domain::envelope::Envelope;
 use error::{AppError, ExitClass};
 
@@ -24,9 +29,35 @@ where
 {
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
     let requested_format = output::format_from_args(args.iter().cloned()).unwrap_or_default();
+    let command = diagnostics::command_name(&args);
 
+    let session = match DiagnosticsSession::initialize() {
+        Ok(session) => session,
+        Err(error) => return finish(requested_format, Err(error.into_app_error()), None),
+    };
+    session.run(&command, || {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            run_parsed(args, requested_format, Some(session.context()))
+        }))
+        .unwrap_or_else(|panic| {
+            finish(
+                requested_format,
+                Err(AppError::unexpected(panic_message(panic))),
+                Some(session.context()),
+            )
+        });
+        let exit_code = result.exit_code;
+        (result, exit_code)
+    })
+}
+
+fn run_parsed(
+    args: Vec<OsString>,
+    requested_format: output::OutputFormat,
+    diagnostics: Option<&DiagnosticsContext>,
+) -> RunResult {
     match cli::Cli::try_parse_from(args) {
-        Ok(cli) => finish(cli.format, cli::dispatch(cli.command)),
+        Ok(cli) => finish(cli.format, cli::dispatch(cli.command), diagnostics),
         Err(error)
             if matches!(
                 error.kind(),
@@ -36,17 +67,36 @@ where
             finish(
                 requested_format,
                 Ok(serde_json::json!({ "text": error.to_string() })),
+                diagnostics,
             )
         }
-        Err(error) => finish(requested_format, Err(AppError::usage(error.to_string()))),
+        Err(error) => finish(
+            requested_format,
+            Err(AppError::usage(error.to_string())),
+            diagnostics,
+        ),
     }
 }
 
-fn finish(format: output::OutputFormat, result: Result<serde_json::Value, AppError>) -> RunResult {
+fn finish(
+    format: output::OutputFormat,
+    result: Result<serde_json::Value, AppError>,
+    diagnostics: Option<&DiagnosticsContext>,
+) -> RunResult {
     let (envelope, exit_code) = match result {
         Ok(data) => (Envelope::success(data), ExitClass::Success.code()),
-        Err(error) => {
+        Err(mut error) => {
+            if error.diagnostics.is_none() {
+                error.diagnostics = diagnostics.map(|context| Box::new(context.envelope()));
+            }
             let exit_code = error.exit_class.code();
+            tracing::error!(
+                event = "command.failed",
+                error.code = error.code,
+                error.retryable = error.retryable,
+                error.chain = ?error.internal_chain(),
+                partial = ?error.partial
+            );
             (Envelope::failure(error), exit_code)
         }
     };
@@ -56,16 +106,32 @@ fn finish(format: output::OutputFormat, result: Result<serde_json::Value, AppErr
             document,
             exit_code,
         },
-        Err(render_error) => {
+        Err(mut render_error) => {
+            render_error.diagnostics = diagnostics.map(|context| Box::new(context.envelope()));
+            tracing::error!(
+                event = "output.failed",
+                error.chain = ?render_error.internal_chain()
+            );
             let fallback = Envelope::failure(render_error);
-            let document = serde_json::to_string(&fallback)
-                .unwrap_or_else(|_| "{\"ok\":false,\"error\":{\"code\":\"output.failed\",\"message\":\"failed to serialize output\",\"retryable\":false}}".to_owned());
+            let document = serde_json::to_string(&fallback).unwrap_or_else(|_| {
+                "{\"ok\":false,\"error\":{\"code\":\"output.failed\",\"message\":\"failed to serialize output\",\"retryable\":false},\"warnings\":[],\"next_actions\":[]}".to_owned()
+            });
             RunResult {
                 document,
                 exit_code: ExitClass::Upstream.code(),
             }
         }
     }
+}
+
+fn panic_message(payload: Box<dyn Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_owned();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    "command panicked".to_owned()
 }
 
 pub fn command() -> clap::Command {

@@ -26,8 +26,9 @@ pub enum CategoryCommand {
 }
 
 pub fn dispatch(command: CategoryArgs) -> Result<Value, AppError> {
-    let details = serde_json::to_value(command.command)
-        .map_err(|error| AppError::output(error.to_string()))?;
+    let details = serde_json::to_value(command.command).map_err(|error| {
+        AppError::output("failed to serialize category command context").with_source(error)
+    })?;
     Err(AppError::protocol_unavailable("category", details))
 }
 

@@ -15,12 +15,12 @@ pub enum OutputFormat {
 
 pub fn render<T: Serialize>(value: &T, format: OutputFormat) -> Result<String, AppError> {
     match format {
-        OutputFormat::Json => {
-            serde_json::to_string_pretty(value).map_err(|error| AppError::output(error.to_string()))
-        }
-        OutputFormat::Toon => {
-            toon_format::encode_default(value).map_err(|error| AppError::output(error.to_string()))
-        }
+        OutputFormat::Json => serde_json::to_string_pretty(value).map_err(|error| {
+            AppError::output("failed to serialize JSON output").with_source(error)
+        }),
+        OutputFormat::Toon => toon_format::encode_default(value).map_err(|error| {
+            AppError::output("failed to serialize TOON output").with_source(error)
+        }),
     }
 }
 

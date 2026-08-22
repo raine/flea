@@ -39,10 +39,10 @@ impl Envelope<Value> {
             ok: false,
             data: None,
             error: Some(body),
-            partial: error.partial,
+            partial: error.partial.map(|partial| *partial),
             warnings: Vec::new(),
             next_actions: error.next_actions,
-            diagnostics: error.diagnostics,
+            diagnostics: error.diagnostics.map(|diagnostics| *diagnostics),
         }
     }
 }
@@ -61,5 +61,6 @@ pub struct NextAction {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Diagnostics {
     pub trace_id: String,
+    pub correlation_id: String,
     pub log_path: String,
 }

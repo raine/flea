@@ -183,7 +183,8 @@ pub fn unix_time_now() -> Result<u64, AppError> {
 }
 
 fn serialize<T: Serialize>(value: T) -> Result<Value, AppError> {
-    serde_json::to_value(value).map_err(|_| AppError::output("failed to serialize auth output"))
+    serde_json::to_value(value)
+        .map_err(|error| AppError::output("failed to serialize auth output").with_source(error))
 }
 
 fn flow_not_found() -> AppError {
@@ -214,12 +215,13 @@ fn flow_expired() -> AppError {
     error
 }
 
-fn storage_error(_source: AppError) -> AppError {
+fn storage_error(source: AppError) -> AppError {
     AppError::new(
         "auth.storage_failed",
         "authentication state could not be updated safely",
         ExitClass::Authentication,
     )
+    .with_source(source)
 }
 
 #[cfg(test)]

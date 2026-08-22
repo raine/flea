@@ -370,8 +370,9 @@ fn workflow_error(error: WorkflowError) -> AppError {
 }
 
 pub fn dispatch(command: DraftArgs) -> Result<Value, AppError> {
-    let details = serde_json::to_value(command.command)
-        .map_err(|error| AppError::output(error.to_string()))?;
+    let details = serde_json::to_value(command.command).map_err(|error| {
+        AppError::output("failed to serialize draft command context").with_source(error)
+    })?;
     Err(AppError::protocol_unavailable("draft", details))
 }
 

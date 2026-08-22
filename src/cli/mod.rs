@@ -23,7 +23,7 @@ pub struct Cli {
 pub enum Command {
     Auth(auth::AuthArgs),
     Category(category::CategoryArgs),
-    Draft(draft::DraftArgs),
+    Draft(Box<draft::DraftArgs>),
     Listing(listing::ListingArgs),
 }
 
@@ -31,7 +31,7 @@ pub fn dispatch(command: Command) -> Result<Value, AppError> {
     match command {
         Command::Auth(args) => auth::dispatch(args),
         Command::Category(args) => category::dispatch(args),
-        Command::Draft(args) => draft::dispatch(args),
+        Command::Draft(args) => draft::dispatch(*args),
         Command::Listing(args) => listing::dispatch(args),
     }
 }
