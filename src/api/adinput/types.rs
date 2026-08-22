@@ -149,6 +149,7 @@ pub struct ValidationEvidenceFailure {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PublicationValidation {
     pub draft_id: String,
+    pub revision: String,
     pub ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category_validation: Option<CategoryValidation>,

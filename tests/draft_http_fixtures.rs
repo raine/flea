@@ -264,6 +264,7 @@ fn successful_publish_responses() -> Vec<HttpResponse> {
         response(200, valid.clone()),
         response(200, delivery_page(Some("pickup"))),
         category_taxonomy("furniture/chairs", true),
+        response(200, valid.clone()),
         response(200, item_update("draft-1", "two", json!(45))),
         response(200, fresh),
         response(
@@ -1995,6 +1996,7 @@ async fn validate_reports_complete_drafts_and_uses_only_read_requests() {
     let report = workflow.validate("draft-1").await.unwrap();
 
     assert!(report.ready);
+    assert_eq!(report.revision, "one");
     assert!(report.missing.is_empty());
     assert!(report.invalid.is_empty());
     assert!(report.pending.is_empty());
@@ -2004,6 +2006,41 @@ async fn validate_reports_complete_drafts_and_uses_only_read_requests() {
     assert!(requests.iter().all(|request| {
         request.method == Method::Get && request.retry == RetryPolicy::BoundedRead
     }));
+}
+
+#[tokio::test]
+async fn show_and_validate_expose_the_same_authoritative_revision() {
+    let state = draft(
+        "revision-42",
+        json!({
+            "values": publication_values(),
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        }),
+    );
+    let shown = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, state.clone()),
+            response(200, delivery_page(Some("pickup"))),
+        ])),
+        config(),
+    )
+    .show("draft-1")
+    .await
+    .unwrap();
+    let validated = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, state),
+            response(200, delivery_page(Some("pickup"))),
+            category_taxonomy("furniture/chairs", true),
+        ])),
+        config(),
+    )
+    .validate("draft-1")
+    .await
+    .unwrap();
+
+    assert_eq!(shown.revision.as_deref(), Some("revision-42"));
+    assert_eq!(validated.revision, "revision-42");
 }
 
 #[tokio::test]
@@ -2226,7 +2263,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
     let transport = FixtureTransport::new(successful_publish_responses());
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
-    let published = workflow.publish("draft-1").await.unwrap();
+    let published = workflow.publish("draft-1", "one").await.unwrap();
 
     assert_eq!(published.listing_id, "draft-1");
     assert_eq!(published.state, "pending");
@@ -2238,6 +2275,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
             "fetch_category_taxonomy",
             "validate",
             "wait_for_images",
+            "verify_revision",
             "patch_item_fields",
             "fetch_fresh_model",
             "update_recommerce",
@@ -2253,7 +2291,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
     assert!(published.warnings.is_empty());
 
     let requests = transport.requests();
-    assert_eq!(requests.len(), 14);
+    assert_eq!(requests.len(), 15);
     let observed_sequence = requests
         .iter()
         .map(|request| (request.method.clone(), request.path.as_str()))
@@ -2265,6 +2303,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
             (Method::Get, "/adinput/ad/withModel/draft-1"),
             (Method::Get, "/ui/addelivery?adId=draft-1&editMode=false"),
             (Method::Get, "/categories/taxonomy"),
+            (Method::Get, "/adinput/ad/withModel/draft-1"),
             (Method::Patch, "/items/draft-1"),
             (Method::Get, "/adinput/ad/withModel/draft-1"),
             (Method::Put, "/adinput/ad/recommerce/draft-1/update"),
@@ -2284,7 +2323,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
         ]
     );
     assert_eq!(
-        requests[7].body,
+        requests[8].body,
         RequestBody::Json(json!({
             "meetup": true,
             "shipping": false,
@@ -2293,9 +2332,9 @@ async fn publish_runs_the_complete_bounded_sequence() {
             "buyNow": false
         }))
     );
-    assert_eq!(requests[4].if_match.as_deref(), Some("one"));
+    assert_eq!(requests[5].if_match.as_deref(), Some("one"));
     assert_eq!(
-        requests[4].body,
+        requests[5].body,
         RequestBody::Json(json!({
             "data": {
                 "title": "Chair",
@@ -2304,8 +2343,8 @@ async fn publish_runs_the_complete_bounded_sequence() {
             }
         }))
     );
-    assert_eq!(requests[6].if_match.as_deref(), Some("two"));
-    let RequestBody::Json(recommerce_values) = &requests[6].body else {
+    assert_eq!(requests[7].if_match.as_deref(), Some("two"));
+    let RequestBody::Json(recommerce_values) = &requests[7].body else {
         panic!("expected recommerce update")
     };
     assert_eq!(
@@ -2313,7 +2352,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
         json!([{ "price_amount": "45" }])
     );
     assert_eq!(
-        requests[10].body,
+        requests[11].body,
         RequestBody::Form(vec![(
             "choices".to_owned(),
             "urn:product:package-specification:10".to_owned()
@@ -2330,7 +2369,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
 #[tokio::test]
 async fn publish_polls_detail_then_uses_the_active_collection_fallback() {
     let mut responses = successful_publish_responses();
-    responses[12] = response(404, json!({ "message": "detail pending" }));
+    responses[13] = response(404, json!({ "message": "detail pending" }));
     responses.push(response(404, json!({ "message": "detail pending" })));
     let transport = FixtureTransport::new(responses).with_search_responses([
         response(200, json!({ "summaries": [], "total": 0 })),
@@ -2340,7 +2379,7 @@ async fn publish_polls_detail_then_uses_the_active_collection_fallback() {
     let mut workflow_config = config();
     workflow_config.listing_poll_limit = 1;
     let result = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), workflow_config)
-        .publish("draft-1")
+        .publish("draft-1", "one")
         .await
         .unwrap();
 
@@ -2364,13 +2403,13 @@ async fn publish_polls_detail_then_uses_the_active_collection_fallback() {
 #[tokio::test]
 async fn publish_uses_collection_when_detail_response_model_is_unexpected() {
     let mut responses = successful_publish_responses();
-    responses[12] = response(200, json!({ "unexpected": true }));
+    responses[13] = response(200, json!({ "unexpected": true }));
     let transport = FixtureTransport::new(responses).with_search_responses([
         response(200, json!({ "summaries": [], "total": 0 })),
         listing_collection("draft-1", "ACTIVE"),
     ]);
     let result = DraftWorkflow::new(HttpAdInputApi::new(transport), config())
-        .publish("draft-1")
+        .publish("draft-1", "one")
         .await
         .unwrap();
 
@@ -2383,7 +2422,7 @@ async fn publish_returns_idempotent_success_for_an_already_active_listing() {
     let transport =
         FixtureTransport::new([]).with_search_responses([listing_collection("46031010", "ACTIVE")]);
     let result = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config())
-        .publish("46031010")
+        .publish("46031010", "stale")
         .await
         .unwrap();
 
@@ -2400,12 +2439,98 @@ async fn publish_returns_idempotent_success_for_an_already_active_listing() {
 }
 
 #[tokio::test]
+async fn stale_publish_revision_is_a_read_only_conflict() {
+    let mut responses = successful_publish_responses();
+    responses.truncate(4);
+    let transport = FixtureTransport::new(responses);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow.publish("draft-1", "stale").await.unwrap_err();
+
+    assert_eq!(error.code, "draft.revision_conflict");
+    assert_eq!(
+        error.details.as_ref().unwrap()["expected_revision"],
+        "stale"
+    );
+    assert_eq!(error.details.as_ref().unwrap()["observed_revision"], "one");
+    assert_eq!(error.details.as_ref().unwrap()["safe_to_retry"], false);
+    assert_eq!(
+        error.details.as_ref().unwrap()["next_action"],
+        "flea draft show draft-1"
+    );
+    let recovery = error.recovery.unwrap();
+    assert!(!recovery.upstream_transient);
+    assert!(!recovery.safe_to_retry);
+    assert_eq!(recovery.failed_stage.as_deref(), Some("verify_revision"));
+    assert_eq!(
+        recovery.next_safe_actions,
+        ["flea draft show draft-1", "flea draft validate draft-1"]
+    );
+    assert!(
+        transport
+            .requests()
+            .iter()
+            .all(|request| request.method == Method::Get)
+    );
+}
+
+#[tokio::test]
+async fn publish_detects_a_draft_changed_during_validation() {
+    let mut responses = successful_publish_responses();
+    responses[3].body["etag"] = json!("two");
+    responses.truncate(4);
+    let transport = FixtureTransport::new(responses);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
+
+    assert_eq!(error.code, "draft.revision_conflict");
+    assert_eq!(error.details.as_ref().unwrap()["expected_revision"], "one");
+    assert_eq!(error.details.as_ref().unwrap()["observed_revision"], "two");
+    assert_eq!(transport.requests().len(), 5);
+    assert!(
+        transport
+            .requests()
+            .iter()
+            .all(|request| request.method == Method::Get)
+    );
+}
+
+#[tokio::test]
+async fn publish_requires_an_authoritative_upstream_revision() {
+    let state = draft(
+        "",
+        json!({
+            "values": publication_values(),
+            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+        }),
+    );
+    let transport = FixtureTransport::new([response(200, state)]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
+
+    assert_eq!(error.code, "upstream.unrecognized_model");
+    assert_eq!(
+        error.source.unwrap().details.unwrap()["reason"],
+        "draft revision is unavailable"
+    );
+    assert_eq!(transport.requests().len(), 2);
+    assert!(
+        transport
+            .requests()
+            .iter()
+            .all(|request| request.method == Method::Get)
+    );
+}
+
+#[tokio::test]
 async fn publication_model_failures_before_dispatch_are_not_mutation_uncertainty() {
     let transport =
         FixtureTransport::new([response(200, json!({ "model": { "sections": [{}] } }))]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
-    let error = workflow.publish("draft-1").await.unwrap_err();
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
 
     assert_eq!(error.code, "upstream.unrecognized_model");
     assert_ne!(error.code, "mutation.uncertain");
@@ -2422,8 +2547,8 @@ async fn publication_model_failures_before_dispatch_are_not_mutation_uncertainty
 #[tokio::test]
 async fn fresh_model_requires_ad_after_the_item_patch_without_claiming_a_new_mutation() {
     let mut responses = successful_publish_responses();
-    responses[4] = response(200, json!({ "model": { "sections": [{}] } }));
-    responses.truncate(6);
+    responses[5] = response(200, json!({ "model": { "sections": [{}] } }));
+    responses.truncate(7);
     responses.push(response(
         503,
         json!({ "message": "observation unavailable" }),
@@ -2431,7 +2556,7 @@ async fn fresh_model_requires_ad_after_the_item_patch_without_claiming_a_new_mut
     let transport = FixtureTransport::new(responses);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
-    let error = workflow.publish("draft-1").await.unwrap_err();
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
     let recovery = error.recovery.unwrap();
 
     assert_eq!(error.code, "upstream.unrecognized_model");
@@ -2455,14 +2580,14 @@ async fn recommerce_update_accepts_wrapped_and_flattened_success_shapes() {
     for wrapped in [false, true] {
         let mut responses = successful_publish_responses();
         if wrapped {
-            let flat = responses[5].body.clone();
-            responses[5].body = json!({ "ad": flat, "model": { "sections": [] } });
+            let flat = responses[6].body.clone();
+            responses[6].body = json!({ "ad": flat, "model": { "sections": [] } });
         }
         let published = DraftWorkflow::new(
             HttpAdInputApi::new(FixtureTransport::new(responses)),
             config(),
         )
-        .publish("draft-1")
+        .publish("draft-1", "one")
         .await
         .unwrap();
         assert_eq!(published.revision, "revision-7");
@@ -2472,8 +2597,8 @@ async fn recommerce_update_accepts_wrapped_and_flattened_success_shapes() {
 #[tokio::test]
 async fn package_choice_parse_uncertainty_reports_distinct_persistence_stages() {
     let mut responses = successful_publish_responses();
-    responses[9] = response(200, json!({ "is-completed": true }));
-    responses.truncate(10);
+    responses[10] = response(200, json!({ "is-completed": true }));
+    responses.truncate(11);
     responses.extend([
         response(503, json!({ "message": "draft observation unavailable" })),
         response(404, json!({ "message": "listing unavailable" })),
@@ -2481,7 +2606,7 @@ async fn package_choice_parse_uncertainty_reports_distinct_persistence_stages() 
     let transport = FixtureTransport::new(responses);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
-    let error = workflow.publish("draft-1").await.unwrap_err();
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
     let recovery = error.recovery.unwrap();
 
     assert_eq!(error.code, "mutation.uncertain");
@@ -2505,21 +2630,21 @@ async fn package_choice_parse_uncertainty_reports_distinct_persistence_stages() 
 async fn rejected_publication_mutations_preserve_stage_boundaries() {
     for (index, stage, item, update, delivery) in [
         (
-            3,
+            4,
             "patch_item_fields",
             RecoveryStatus::Rejected,
             RecoveryStatus::Unattempted,
             RecoveryStatus::Pending,
         ),
         (
-            5,
+            6,
             "update_recommerce",
             RecoveryStatus::Persisted,
             RecoveryStatus::Rejected,
             RecoveryStatus::Pending,
         ),
         (
-            6,
+            7,
             "apply_delivery",
             RecoveryStatus::Persisted,
             RecoveryStatus::Persisted,
@@ -2532,7 +2657,7 @@ async fn rejected_publication_mutations_preserve_stage_boundaries() {
             HttpAdInputApi::new(FixtureTransport::new(responses)),
             config(),
         )
-        .publish("draft-1")
+        .publish("draft-1", "one")
         .await
         .unwrap_err();
         let recovery = error.recovery.unwrap();
@@ -2554,7 +2679,7 @@ async fn publish_waits_for_processing_images_and_reuses_the_validation_engine() 
     let transport = FixtureTransport::new(responses);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
-    let published = workflow.publish("draft-1").await.unwrap();
+    let published = workflow.publish("draft-1", "one").await.unwrap();
 
     assert_eq!(published.listing_id, "draft-1");
     assert_eq!(transport.requests()[3].method, Method::Get);
@@ -2583,7 +2708,7 @@ async fn publish_validation_rejects_missing_fields_and_missing_delivery() {
         ])),
         config(),
     );
-    let error = workflow.publish("draft-1").await.unwrap_err();
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
     assert_eq!(error.code, "draft.validation_failed");
     assert_eq!(error.details.unwrap()["missing"][0]["field"], "title");
     let recovery = error.recovery.unwrap();
@@ -2620,7 +2745,7 @@ async fn publish_validation_rejects_missing_fields_and_missing_delivery() {
         ])),
         config(),
     );
-    let error = workflow.publish("draft-1").await.unwrap_err();
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
     assert_eq!(error.code, "draft.validation_failed");
     assert_eq!(error.details.unwrap()["missing"][0]["field"], "delivery");
     assert_eq!(
@@ -2669,7 +2794,7 @@ async fn truncated_composer_options_are_local_unverifiable_validation() {
         config(),
     );
 
-    let error = workflow.publish("draft-1").await.unwrap_err();
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
     let details = error.details.unwrap();
     let recovery = error.recovery.unwrap();
 
@@ -2720,7 +2845,7 @@ async fn publish_marks_transient_validation_evidence_reads_as_unverifiable() {
             config(),
         );
 
-        let error = workflow.publish("draft-1").await.unwrap_err();
+        let error = workflow.publish("draft-1", "one").await.unwrap_err();
         let details = error.details.unwrap();
         let recovery = error.recovery.unwrap();
 
@@ -2766,14 +2891,17 @@ async fn corrected_validation_state_can_publish_successfully() {
         config(),
     );
 
-    let error = invalid_workflow.publish("draft-1").await.unwrap_err();
+    let error = invalid_workflow
+        .publish("draft-1", "one")
+        .await
+        .unwrap_err();
     assert!(!error.recovery.unwrap().safe_to_retry);
 
     let corrected_workflow = DraftWorkflow::new(
         HttpAdInputApi::new(FixtureTransport::new(successful_publish_responses())),
         config(),
     );
-    let published = corrected_workflow.publish("draft-1").await.unwrap();
+    let published = corrected_workflow.publish("draft-1", "one").await.unwrap();
     assert_eq!(published.listing_id, "draft-1");
 }
 
@@ -2799,7 +2927,7 @@ async fn publish_reports_failed_image_and_preserves_its_identity() {
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
 
-    let error = workflow.publish("draft-1").await.unwrap_err();
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
 
     assert_eq!(error.code, "draft.validation_failed");
     assert_eq!(error.details.unwrap()["invalid"][0]["field"], "images");
@@ -2826,7 +2954,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "validate",
                 "wait_for_images",
             ][..],
-            false,
+            true,
         ),
         (
             4,
@@ -2836,7 +2964,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
-                "patch_item_fields",
+                "verify_revision",
             ][..],
             false,
         ),
@@ -2848,8 +2976,8 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
+                "verify_revision",
                 "patch_item_fields",
-                "fetch_fresh_model",
             ][..],
             false,
         ),
@@ -2861,9 +2989,9 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
+                "verify_revision",
                 "patch_item_fields",
                 "fetch_fresh_model",
-                "update_recommerce",
             ][..],
             false,
         ),
@@ -2875,10 +3003,10 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
+                "verify_revision",
                 "patch_item_fields",
                 "fetch_fresh_model",
                 "update_recommerce",
-                "apply_delivery",
             ][..],
             false,
         ),
@@ -2890,6 +3018,23 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
+                "verify_revision",
+                "patch_item_fields",
+                "fetch_fresh_model",
+                "update_recommerce",
+                "apply_delivery",
+            ][..],
+            false,
+        ),
+        (
+            9,
+            &[
+                "fetch_draft",
+                "fetch_delivery_options",
+                "fetch_category_taxonomy",
+                "validate",
+                "wait_for_images",
+                "verify_revision",
                 "patch_item_fields",
                 "fetch_fresh_model",
                 "update_recommerce",
@@ -2899,13 +3044,14 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             false,
         ),
         (
-            12,
+            13,
             &[
                 "fetch_draft",
                 "fetch_delivery_options",
                 "fetch_category_taxonomy",
                 "validate",
                 "wait_for_images",
+                "verify_revision",
                 "patch_item_fields",
                 "fetch_fresh_model",
                 "update_recommerce",
@@ -2928,7 +3074,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             config(),
         );
 
-        let error = workflow.publish("draft-1").await.unwrap_err();
+        let error = workflow.publish("draft-1", "one").await.unwrap_err();
         let recovery = error.recovery.unwrap();
         assert_eq!(
             recovery.completed_steps, expected_steps,
@@ -2939,7 +3085,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             recovery.safe_to_retry, safe_to_retry,
             "failure index {failure_index}"
         );
-        if failure_index == 12 {
+        if failure_index == 13 {
             assert_eq!(error.code, "publication.observation_uncertain");
             let details = error.details.unwrap();
             assert_eq!(
@@ -2962,8 +3108,8 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
 async fn uncertain_publication_observes_before_recommending_any_continuation() {
     for observation_available in [true, false] {
         let mut responses = successful_publish_responses();
-        responses.truncate(10);
-        responses[9] = response(503, json!({ "message": "publication unavailable" }));
+        responses.truncate(11);
+        responses[10] = response(503, json!({ "message": "publication unavailable" }));
         responses.push(if observation_available {
             response(
                 200,
@@ -2989,7 +3135,7 @@ async fn uncertain_publication_observes_before_recommending_any_continuation() {
             config(),
         );
 
-        let error = workflow.publish("draft-1").await.unwrap_err();
+        let error = workflow.publish("draft-1", "one").await.unwrap_err();
 
         let recovery = error.recovery.unwrap();
         assert_eq!(recovery.failed_stage.as_deref(), Some("package_choice"));
@@ -3018,13 +3164,13 @@ async fn uncertain_publication_observes_before_recommending_any_continuation() {
 #[tokio::test]
 async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
     let mut confirmation_failure = successful_publish_responses();
-    confirmation_failure[10] = response(503, json!({ "message": "confirmation unavailable" }));
-    confirmation_failure.remove(11);
+    confirmation_failure[11] = response(503, json!({ "message": "confirmation unavailable" }));
+    confirmation_failure.remove(12);
     let result = DraftWorkflow::new(
         HttpAdInputApi::new(FixtureTransport::new(confirmation_failure)),
         config(),
     )
-    .publish("draft-1")
+    .publish("draft-1", "one")
     .await
     .unwrap();
     assert_eq!(
@@ -3037,12 +3183,12 @@ async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
     );
 
     let mut tracking_failure = successful_publish_responses();
-    tracking_failure[11] = response(503, json!({ "message": "tracking unavailable" }));
+    tracking_failure[12] = response(503, json!({ "message": "tracking unavailable" }));
     let result = DraftWorkflow::new(
         HttpAdInputApi::new(FixtureTransport::new(tracking_failure)),
         config(),
     )
-    .publish("draft-1")
+    .publish("draft-1", "one")
     .await
     .unwrap();
     assert_eq!(
@@ -3155,7 +3301,7 @@ async fn publish_timeout_bounds_a_hung_poll_request() {
         },
     );
 
-    let error = tokio::time::timeout(Duration::from_secs(1), workflow.publish("draft-1"))
+    let error = tokio::time::timeout(Duration::from_secs(1), workflow.publish("draft-1", "one"))
         .await
         .expect("workflow must enforce its own deadline")
         .unwrap_err();
@@ -3185,7 +3331,7 @@ async fn publish_timeout_is_bounded_and_recoverable() {
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
 
-    let error = workflow.publish("draft-1").await.unwrap_err();
+    let error = workflow.publish("draft-1", "one").await.unwrap_err();
 
     assert_eq!(error.code, "draft.image_processing");
     let recovery = error.recovery.unwrap();
@@ -3202,7 +3348,7 @@ async fn publish_timeout_is_bounded_and_recoverable() {
     );
     assert_eq!(
         recovery.next_safe_actions,
-        ["flea draft show draft-1", "flea draft publish draft-1"]
+        ["flea draft show draft-1", "flea draft validate draft-1"]
     );
     assert_eq!(recovery.observation.status, ObservationStatus::Observed);
     assert_eq!(recovery.images[0].status, RecoveryStatus::Pending);
@@ -3340,7 +3486,7 @@ async fn publish_validates_the_same_source_observed_model_as_show() {
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
-    let error = workflow.publish("46000000").await.unwrap_err();
+    let error = workflow.publish("46000000", "one").await.unwrap_err();
 
     assert_eq!(error.code, "draft.validation_failed");
     let details = error.details.unwrap();

@@ -50,7 +50,11 @@ pub(super) fn normalize_draft_state(
         }
         normalized.values = normalize_draft_values(normalized.values)?;
         if normalized.revision.is_none() {
-            normalized.revision = normalized.values.get("revision").and_then(revision_value);
+            normalized.revision = normalized
+                .values
+                .get("revision")
+                .and_then(revision_value)
+                .or_else(|| revision_from_etag(&normalized.etag));
         }
         return Ok(normalized);
     }

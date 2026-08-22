@@ -18,6 +18,16 @@ Publication validation has four states with distinct retry behavior:
 
 Errors include `retry_guidance` when one or both classifications are true or a mutation outcome is uncertain. The guidance explains the distinction in human-readable output. When mutation state is uncertain, `next_actions` identifies an authoritative `draft show`, `listing show`, or listing command before any further mutation.
 
+## Draft revision conflicts
+
+`draft publish` requires `--if-revision` with the revision returned by `draft
+show` or `draft validate`. If the authoritative revision observed immediately
+before publication differs, the command returns `draft.revision_conflict`
+without making a mutation. The error reports `expected_revision` and
+`observed_revision` in `details`, sets `safe_to_retry: false` and
+`upstream_transient: false`, and provides read-only `draft show` and `draft
+validate` next actions.
+
 ## Classification rules
 
 Flea classifies request failures from the operation and the evidence available at the failure boundary:

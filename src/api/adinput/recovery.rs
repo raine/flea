@@ -444,6 +444,40 @@ impl WorkflowError {
         }
     }
 
+    pub(super) fn revision_conflict(
+        draft_id: &str,
+        completed_steps: &[String],
+        expected_revision: &str,
+        state: &DraftState,
+    ) -> Self {
+        let observed_revision = state.revision.clone().unwrap_or_default();
+        let next_safe_actions = vec![
+            format!("flea draft show {draft_id}"),
+            format!("flea draft validate {draft_id}"),
+        ];
+        let mut recovery = Recovery {
+            failed_stage: Some("verify_revision".to_owned()),
+            next_safe_actions: next_safe_actions.clone(),
+            ..Recovery::base(draft_id, completed_steps, None)
+        };
+        recovery.observe(state, ObservationStatus::ChangedByAnotherClient);
+        recovery.destructive_actions.clear();
+        Self {
+            code: "draft.revision_conflict".to_owned(),
+            message: format!(
+                "Draft revision conflict: expected {expected_revision}, observed {observed_revision}"
+            ),
+            source: None,
+            recovery: Some(recovery),
+            details: Some(json!({
+                "expected_revision": expected_revision,
+                "observed_revision": observed_revision,
+                "safe_to_retry": false,
+                "next_action": next_safe_actions[0],
+            })),
+        }
+    }
+
     pub(super) fn validation(completed_steps: &[String], report: PublicationValidation) -> Self {
         let deterministic = !report.missing.is_empty() || !report.invalid.is_empty();
         let upstream_transient = report

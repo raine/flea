@@ -40,14 +40,18 @@ and the live smoke harness must not publish listings.
    image state is `ready`, and the normalized values match the intended test
    listing.
 5. Run the authoritative read-only `flea draft validate DRAFT_ID` check on the
-   persisted draft. Confirm it reports `ready: true`. The command makes only
-   read requests. Resolve every reported missing, invalid, pending, or
-   unverifiable requirement before publication.
-6. Run `flea draft publish DRAFT_ID` once. Record the trace ID, listing ID,
-   publication status, mutation flag, completed steps, warnings, and returned
-   listing state. Publication performs an authoritative active-listing check
-   before its first mutation. An active ID returns `already_published` with
-   `mutations_performed: false` and its public URL.
+   persisted draft. Confirm it reports `ready: true` and retain its `revision`.
+   The command makes only read requests. Resolve every reported missing,
+   invalid, pending, or unverifiable requirement before publication.
+6. Run `flea draft publish DRAFT_ID --if-revision REVISION` once with the exact
+   validated revision. Record the trace ID, listing ID, publication status,
+   mutation flag, completed steps, warnings, and returned listing state.
+   Publication performs an authoritative active-listing check before applying
+   the revision precondition or making a mutation. An active ID returns
+   `already_published` with `mutations_performed: false` and its public URL. A
+   revision conflict requires another read-only inspection and validation. Do
+   not repeat the command after an ambiguous failure. Inspect the draft and
+   listing first.
 7. Run `flea listing show LISTING_ID`. Detail observation falls back to the
    published-listing collection by exact ID, so every active item from
    `listing list` remains observable. Verify the title, description, price,

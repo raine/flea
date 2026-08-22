@@ -23,7 +23,14 @@ fn every_command_leaf_parses() {
         vec!["flea", "draft", "image", "add", "draft-1", "one.jpg"],
         vec!["flea", "draft", "image", "remove", "draft-1", "image-1"],
         vec!["flea", "draft", "validate", "draft-1"],
-        vec!["flea", "draft", "publish", "draft-1"],
+        vec![
+            "flea",
+            "draft",
+            "publish",
+            "draft-1",
+            "--if-revision",
+            "one",
+        ],
         vec!["flea", "draft", "delete", "draft-1"],
         vec!["flea", "listing", "list"],
         vec!["flea", "listing", "show", "listing-1"],
@@ -43,6 +50,11 @@ fn every_command_leaf_parses() {
         Cli::try_parse_from(&arguments)
             .unwrap_or_else(|error| panic!("failed to parse {arguments:?}: {error}"));
     }
+}
+
+#[test]
+fn publish_requires_an_expected_revision() {
+    assert!(Cli::try_parse_from(["flea", "draft", "publish", "draft-1"]).is_err());
 }
 
 #[test]

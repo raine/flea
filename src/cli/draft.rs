@@ -141,11 +141,14 @@ pub enum DraftCommand {
     },
     #[command(
         about = "Publish a remote draft",
-        long_about = "Validate the latest remote draft, wait for image processing, and publish it with the free Basic package."
+        long_about = "Validate the latest remote draft and publish it with the free Basic package only when its authoritative revision matches the inspected revision."
     )]
     Publish {
         /// Tori draft identifier.
         draft_id: String,
+        /// Authoritative revision returned by draft show or draft validate.
+        #[arg(long, value_name = "VALUE")]
+        if_revision: String,
     },
     #[command(
         about = "Delete a remote draft",
@@ -561,10 +564,16 @@ pub async fn execute<A: AdInputApi>(
             serde_json::to_value(workflow.validate(&draft_id).await.map_err(workflow_error)?)
                 .map_err(|error| AppError::output(error.to_string()))
         }
-        DraftCommand::Publish { draft_id } => {
-            serde_json::to_value(workflow.publish(&draft_id).await.map_err(workflow_error)?)
-                .map_err(|error| AppError::output(error.to_string()))
-        }
+        DraftCommand::Publish {
+            draft_id,
+            if_revision,
+        } => serde_json::to_value(
+            workflow
+                .publish(&draft_id, &if_revision)
+                .await
+                .map_err(workflow_error)?,
+        )
+        .map_err(|error| AppError::output(error.to_string())),
         DraftCommand::Delete { draft_id } => {
             workflow.delete(&draft_id).await.map_err(workflow_error)?;
             Ok(json!({ "draft_id": draft_id, "deleted": true }))
@@ -587,7 +596,7 @@ fn workflow_error(error: WorkflowError) -> AppError {
         .is_some_and(|recovery| completed_steps_have_mutation(&recovery.completed_steps));
     let exit_class = match error.code.as_str() {
         "draft.conflict" if has_remote_mutation => ExitClass::Partial,
-        "draft.conflict" => ExitClass::Conflict,
+        "draft.conflict" | "draft.revision_conflict" => ExitClass::Conflict,
         "draft.validation_failed" if has_remote_mutation => ExitClass::Partial,
         "draft.validation_failed"
         | "draft.invalid_delivery"

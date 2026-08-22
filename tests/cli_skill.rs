@@ -30,6 +30,9 @@ fn skill_prints_the_project_skill_source() {
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), CANONICAL_SKILL);
+    assert!(CANONICAL_SKILL.contains("draft validate DRAFT_ID"));
+    assert!(CANONICAL_SKILL.contains("draft publish DRAFT_ID --if-revision"));
+    assert!(CANONICAL_SKILL.contains(".data.revision"));
     assert!(stderr(&output).is_empty());
 }
 

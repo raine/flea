@@ -408,6 +408,7 @@ fn draft_validate_is_compact_deterministic_and_read_only_in_json_and_toon() {
         value["data"],
         json!({
             "draft_id": "draft-1",
+            "revision": "one",
             "ready": true,
             "category_validation": {
                 "value": "furniture/chairs",
@@ -792,7 +793,16 @@ fn deterministic_publish_validation_has_local_remediation_guidance() {
         response(StatusCode::OK, json!({ "categories": [] })),
     ]);
     let result = run_with_runtime(
-        ["flea", "--format", "json", "draft", "publish", "draft-1"],
+        [
+            "flea",
+            "--format",
+            "json",
+            "draft",
+            "publish",
+            "draft-1",
+            "--if-revision",
+            "one",
+        ],
         &TestRuntime { client },
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
@@ -810,6 +820,86 @@ fn deterministic_publish_validation_has_local_remediation_guidance() {
     let guidance = value["error"]["retry_guidance"].as_str().unwrap();
     assert!(guidance.contains("Validation found `category`"));
     assert!(!guidance.contains("upstream failure"));
+}
+
+#[test]
+fn stale_publish_revision_has_structured_read_only_recovery() {
+    let values = json!({
+        "category": "furniture/chairs",
+        "title": "Chair",
+        "description": "Solid birch chair",
+        "trade_type": "sell",
+        "price": 45,
+        "postal_code": "00100"
+    });
+    let valid = json!({
+        "draft_id": "draft-1",
+        "etag": "observed",
+        "values": values,
+        "fields": [],
+        "options": [],
+        "required_fields": ["title", "delivery"],
+        "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
+    });
+    let client = MockClient::with_responses([
+        response(StatusCode::OK, json!({ "summaries": [], "total": 0 })),
+        response(StatusCode::OK, valid.clone()),
+        response(StatusCode::OK, delivery_page(true)),
+        response(
+            StatusCode::OK,
+            json!({
+                "categories": [{
+                    "id": "furniture/chairs",
+                    "label": "Chairs",
+                    "isSelectable": true
+                }]
+            }),
+        ),
+        response(StatusCode::OK, valid),
+    ]);
+
+    let result = run_with_runtime(
+        [
+            "flea",
+            "--format",
+            "json",
+            "draft",
+            "publish",
+            "draft-1",
+            "--if-revision",
+            "expected",
+        ],
+        &TestRuntime {
+            client: client.clone(),
+        },
+    );
+    let value: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 30);
+    assert_eq!(value["error"]["code"], "draft.revision_conflict");
+    assert_eq!(value["error"]["details"]["expected_revision"], "expected");
+    assert_eq!(value["error"]["details"]["observed_revision"], "observed");
+    assert_eq!(value["error"]["details"]["safe_to_retry"], false);
+    assert_eq!(value["error"]["safe_to_retry"], false);
+    assert_eq!(
+        value["error"]["details"]["next_action"],
+        "flea draft show draft-1"
+    );
+    assert_eq!(
+        value["next_actions"],
+        json!([
+            { "command": "flea draft show draft-1" },
+            { "command": "flea draft validate draft-1" }
+        ])
+    );
+    assert!(
+        client
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.method == reqwest::Method::GET)
+    );
 }
 
 #[test]
@@ -845,6 +935,7 @@ fn publish_flows_through_every_http_step() {
                 }]
             }),
         ),
+        response(StatusCode::OK, valid.clone()),
         response(StatusCode::OK, json!({ "id": "draft-1", "etag": "two" })),
         response(StatusCode::OK, valid.clone()),
         response(
@@ -883,34 +974,43 @@ fn publish_flows_through_every_http_step() {
         &TestRuntime {
             client: client.clone(),
         },
-        ["flea", "--format", "json", "draft", "publish", "draft-1"],
+        [
+            "flea",
+            "--format",
+            "json",
+            "draft",
+            "publish",
+            "draft-1",
+            "--if-revision",
+            "one",
+        ],
     );
 
     assert_eq!(value["data"]["listing_id"], "draft-1");
     let requests = client.requests.lock().unwrap();
-    assert_eq!(requests.len(), 14);
+    assert_eq!(requests.len(), 15);
     assert_eq!(requests[0].path_and_query, "/search?limit=50&offset=0");
     assert_eq!(requests[0].service, "AD-SUMMARIES");
-    assert_eq!(requests[4].method, reqwest::Method::PATCH);
-    assert_eq!(requests[4].path_and_query, "/items/draft-1");
-    assert_eq!(requests[4].service, "RC-ITEM-CREATION-FLOW-API");
+    assert_eq!(requests[5].method, reqwest::Method::PATCH);
+    assert_eq!(requests[5].path_and_query, "/items/draft-1");
+    assert_eq!(requests[5].service, "RC-ITEM-CREATION-FLOW-API");
     assert_eq!(
-        requests[6].path_and_query,
+        requests[7].path_and_query,
         "/adinput/ad/recommerce/draft-1/update"
     );
-    assert_eq!(requests[6].service, "APPS-ADINPUT");
-    assert_eq!(requests[7].path_and_query, "/ads/draft-1/delivery");
-    assert_eq!(requests[7].service, "TJT-API");
+    assert_eq!(requests[7].service, "APPS-ADINPUT");
+    assert_eq!(requests[8].path_and_query, "/ads/draft-1/delivery");
+    assert_eq!(requests[8].service, "TJT-API");
     assert_eq!(
-        requests[10].path_and_query,
+        requests[11].path_and_query,
         "/adinput/order/choices/draft-1"
     );
-    assert_eq!(requests[10].service, "APPS-ADINPUT");
+    assert_eq!(requests[11].service, "APPS-ADINPUT");
     assert_eq!(
-        requests[10].content_type.as_ref().unwrap(),
+        requests[11].content_type.as_ref().unwrap(),
         "application/x-www-form-urlencoded"
     );
-    let flea::api::client::RequestBody::Bytes(body) = &requests[10].body else {
+    let flea::api::client::RequestBody::Bytes(body) = &requests[11].body else {
         panic!("expected encoded package choice")
     };
     assert_eq!(body, b"choices=urn%3Aproduct%3Apackage-specification%3A10");

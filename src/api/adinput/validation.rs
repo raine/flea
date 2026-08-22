@@ -8,6 +8,7 @@ pub fn evaluate_publication(
 ) -> PublicationValidation {
     let mut report = PublicationValidation {
         draft_id: state.draft_id.clone(),
+        revision: state.revision.clone().unwrap_or_default(),
         ready: false,
         category_validation: None,
         missing: Vec::new(),

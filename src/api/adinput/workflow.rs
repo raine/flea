@@ -3,6 +3,20 @@ use super::{
     types::*, validation::*, *,
 };
 
+fn require_authoritative_revision(state: &DraftState) -> Result<&str, ApiError> {
+    state
+        .revision
+        .as_deref()
+        .filter(|revision| !revision.is_empty())
+        .ok_or_else(|| {
+            model_error(
+                "listing_composer",
+                "$.ad.revision",
+                "draft revision is unavailable",
+            )
+        })
+}
+
 pub struct DraftWorkflow<A> {
     api: A,
     config: WorkflowConfig,
@@ -153,7 +167,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                                 && image.status == RecoveryStatus::Pending
                         })
                     {
-                        actions.push(format!("flea draft publish {draft_id}"));
+                        actions.push(format!("flea draft validate {draft_id}"));
                     }
                 } else {
                     recovery.destructive_actions.clear();
@@ -1102,6 +1116,8 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
         let mut state = publication.draft;
+        require_authoritative_revision(&state)
+            .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
         let mut evidence_failures = Vec::new();
         let delivery_verifiable = match self.api.delivery_composer(draft_id).await {
             Ok(composer) => match attach_delivery_model(&mut state, &composer) {
@@ -1426,7 +1442,11 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         workflow
     }
 
-    pub async fn publish(&self, draft_id: &str) -> Result<PublishResult, WorkflowError> {
+    pub async fn publish(
+        &self,
+        draft_id: &str,
+        expected_revision: &str,
+    ) -> Result<PublishResult, WorkflowError> {
         let mut completed = Vec::new();
         let active = self
             .api
@@ -1455,6 +1475,8 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
         let composer_model = publication.composer_model;
         let mut state = publication.draft;
+        require_authoritative_revision(&state)
+            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
         let publication_images = observed_image_intent(&state);
         completed.push("fetch_draft".to_owned());
 
@@ -1549,6 +1571,23 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .first()
             .expect("ready publication has one delivery selection")
             .clone();
+
+        state = self
+            .api
+            .get_draft(draft_id)
+            .await
+            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
+        let observed_revision = require_authoritative_revision(&state)
+            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
+        if observed_revision != expected_revision {
+            return Err(WorkflowError::revision_conflict(
+                draft_id,
+                &completed,
+                expected_revision,
+                &state,
+            ));
+        }
+        completed.push("verify_revision".to_owned());
 
         state.values.remove("delivery");
         if let Err(error) = self
@@ -1898,7 +1937,7 @@ pub(super) fn image_processing_timeout(
             recovery.observe(state, ObservationStatus::Observed);
             recovery.next_safe_actions = vec![
                 format!("flea draft show {}", state.draft_id),
-                format!("flea draft publish {}", state.draft_id),
+                format!("flea draft validate {}", state.draft_id),
             ];
         } else {
             recovery.observed_etag =
