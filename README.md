@@ -1,27 +1,22 @@
 # flea
 
-`flea` is a Tori.fi CLI built exclusively for coding agents. It turns
-marketplace search, listing creation, and listing management into deterministic
-commands with compact structured output, explicit retry semantics, and
-machine-readable recovery actions.
+`flea` lets coding agents search Tori.fi and create, publish, and manage
+listings from the command line.
 
 ## Why flea?
 
-Marketplace workflows contain opaque identifiers, dynamic category fields,
-partial mutations, and operations that are unsafe to retry blindly. Flea gives
-agents a bounded command interface with:
+Marketplace websites are awkward for agents to use reliably. Flea provides
+focused commands and structured results for the complete listing workflow:
 
-- Compact TOON output by default, with JSON available through `--format json`
-- Stable success and failure envelopes
-- Machine-readable `next_actions`
-- Separate `upstream_transient` and `safe_to_retry` classifications
-- Authoritative post-mutation inspection
-- Revision-guarded publication
-- Local image processing that removes source metadata before upload
-- A bundled skill that teaches agents how to operate the CLI safely
+- Search and inspect public listings without signing in
+- Discover valid categories, locations, and listing options
+- Prepare and validate drafts before publishing
+- Process photos locally and remove embedded metadata
+- Recover safely when a network request fails partway through an operation
+- Install a bundled skill that teaches agents how to use Flea
 
-The authoritative usage guidance is `flea <command> --help`, the structured
-command output, and the bundled skill.
+The bundled skill and `flea <command> --help` provide the current usage
+guidance.
 
 ## Installation
 
