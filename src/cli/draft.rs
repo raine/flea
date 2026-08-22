@@ -200,6 +200,9 @@ pub fn collect_input_with_reader(
         None => Map::new(),
     };
     let mut image_paths = take_json_images(&mut values)?;
+    if let Some(price) = values.get("price") {
+        validate_price_value(price, "input field `price` must be a non-negative number")?;
+    }
 
     insert_flag(&mut values, "category", args.category.map(Value::String))?;
     insert_flag(&mut values, "title", args.title.map(Value::String))?;
@@ -423,13 +426,19 @@ fn insert_flag(
 pub fn parse_price(input: &str) -> Result<Value, AppError> {
     let value: Value = serde_json::from_str(input)
         .map_err(|_| input_error("--price must be a non-negative number"))?;
-    if value
-        .as_f64()
-        .is_none_or(|price| !price.is_finite() || price < 0.0)
-    {
-        return Err(input_error("--price must be a non-negative number"));
-    }
+    validate_price_value(&value, "--price must be a non-negative number")?;
     Ok(value)
+}
+
+fn validate_price_value(value: &Value, message: &'static str) -> Result<(), AppError> {
+    if !value.is_number()
+        || value
+            .as_f64()
+            .is_none_or(|price| !price.is_finite() || price < 0.0)
+    {
+        return Err(input_error(message));
+    }
+    Ok(())
 }
 
 fn duplicate_field(field: &str) -> AppError {
@@ -550,6 +559,14 @@ pub async fn execute<A: AdInputApi>(
 }
 
 fn workflow_error(error: WorkflowError) -> AppError {
+    let mutation_was_attempted = error.source.as_ref().is_some_and(|source| {
+        source
+            .details
+            .as_deref()
+            .and_then(|details| details.get("stage"))
+            .and_then(Value::as_str)
+            == Some("apply_price")
+    });
     let has_remote_mutation = error.recovery.as_ref().is_some_and(|recovery| {
         recovery.completed_steps.iter().any(|step| {
             step == "create_draft"
@@ -566,9 +583,12 @@ fn workflow_error(error: WorkflowError) -> AppError {
     });
     let exit_class = match error.code.as_str() {
         "draft.conflict" => ExitClass::Conflict,
-        "draft.validation_failed" | "draft.invalid_image" => ExitClass::Validation,
+        "draft.validation_failed"
+        | "draft.invalid_image"
+        | "draft.invalid_price"
+        | "draft.price_trade_type_conflict" => ExitClass::Validation,
         "draft.image_processing" | "mutation.uncertain" => ExitClass::Partial,
-        _ if has_remote_mutation => ExitClass::Partial,
+        _ if has_remote_mutation || mutation_was_attempted => ExitClass::Partial,
         _ => ExitClass::Upstream,
     };
     let retryable = error
@@ -701,6 +721,55 @@ mod tests {
                     .unwrap_err();
             assert_eq!(error.code, "cli.invalid_input");
             assert_eq!(error.exit_class, ExitClass::Usage);
+        }
+    }
+
+    #[test]
+    fn prices_accept_integer_and_decimal_numbers() {
+        assert_eq!(parse_price("5").unwrap(), json!(5));
+        assert_eq!(parse_price("5.25").unwrap(), json!(5.25));
+
+        for document in [r#"{"price":5}"#, r#"{"price":5.25}"#] {
+            let collected =
+                collect_input_with_reader(empty_args(), &mut Cursor::new(document.as_bytes()))
+                    .unwrap();
+            assert!(collected.values["price"].is_number());
+        }
+    }
+
+    #[test]
+    fn malformed_and_negative_prices_are_rejected_before_dispatch() {
+        for price in ["-1", "NaN", "Infinity", "1e400", "\"5\"", "{}", "[]"] {
+            let error = parse_price(price).unwrap_err();
+            assert_eq!(error.code, "cli.invalid_input");
+            assert_eq!(error.exit_class, ExitClass::Usage);
+        }
+
+        for document in [
+            r#"{"price":-1}"#,
+            r#"{"price":"5"}"#,
+            r#"{"price":{"price_amount":5}}"#,
+            r#"{"price":null}"#,
+        ] {
+            let error =
+                collect_input_with_reader(empty_args(), &mut Cursor::new(document.as_bytes()))
+                    .unwrap_err();
+            assert_eq!(error.code, "cli.invalid_input");
+            assert_eq!(error.exit_class, ExitClass::Usage);
+        }
+    }
+
+    #[test]
+    fn trade_type_flags_preserve_semantic_input_values() {
+        for (trade_type, expected) in [
+            (TradeType::Sell, "sell"),
+            (TradeType::GiveAway, "give_away"),
+            (TradeType::Wanted, "wanted"),
+        ] {
+            let mut args = empty_args();
+            args.trade_type = Some(trade_type);
+            let collected = collect_input_with_reader(args, &mut Cursor::new(b"{}")).unwrap();
+            assert_eq!(collected.values["trade_type"], expected);
         }
     }
 

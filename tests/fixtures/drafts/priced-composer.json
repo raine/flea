@@ -1,0 +1,40 @@
+{
+  "ad": {
+    "id": 46031010,
+    "ad-type": "recommerce",
+    "etag": "W/\"1178961230\"",
+    "values": {
+      "category": "258",
+      "trade_type": "1",
+      "price": [
+        {
+          "price_amount": "5"
+        }
+      ]
+    },
+    "meta-data": {},
+    "locked-fields": []
+  },
+  "model": {
+    "sections": [
+      {
+        "content": [
+          {
+            "id": "price",
+            "type": "complex",
+            "dependencies": ["trade_type"],
+            "children": [
+              {
+                "id": "price_amount",
+                "sub-type": "number",
+                "exclusive-dependencies": {
+                  "trade_type": ["1", "SELL"]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

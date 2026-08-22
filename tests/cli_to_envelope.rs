@@ -361,6 +361,118 @@ fn draft_create_flows_through_the_http_adapter() {
 }
 
 #[test]
+fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
+    let client = MockClient::with_responses([
+        response(
+            StatusCode::OK,
+            json!({
+                "ad": {
+                    "id": 46031010,
+                    "etag": "one",
+                    "values": { "trade_type": "1" }
+                }
+            }),
+        ),
+        response(
+            StatusCode::OK,
+            json!({
+                "id": 46031010,
+                "etag": "two",
+                "data": { "price": { "price_amount": 5 } },
+                "violations": []
+            }),
+        ),
+        response(
+            StatusCode::OK,
+            json!({
+                "ad": {
+                    "id": 46031010,
+                    "etag": "three",
+                    "values": {
+                        "trade_type": "1",
+                        "price": [{ "price_amount": "5" }]
+                    }
+                }
+            }),
+        ),
+    ]);
+    let value = invoke(
+        &TestRuntime {
+            client: client.clone(),
+        },
+        [
+            "flea", "--format", "json", "draft", "update", "46031010", "--price", "5",
+        ],
+    );
+
+    assert_eq!(value["data"]["values"]["price"], 5);
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].method, reqwest::Method::PATCH);
+    assert_eq!(requests[1].path_and_query, "/items/46031010");
+    assert_eq!(requests[1].service, "RC-ITEM-CREATION-FLOW-API");
+    assert_eq!(requests[1].host, flea::api::client::ApiHost::Gateway);
+    assert_eq!(requests[1].if_match.as_ref().unwrap(), "one");
+    assert_eq!(
+        requests[1].content_type.as_ref().unwrap(),
+        "application/json"
+    );
+    let flea::api::client::RequestBody::Bytes(body) = &requests[1].body else {
+        panic!("expected JSON request body")
+    };
+    assert_eq!(
+        serde_json::from_slice::<Value>(body).unwrap(),
+        json!({ "data": { "price": { "price_amount": 5 } } })
+    );
+}
+
+#[test]
+fn html_price_failure_is_a_non_retryable_partial_envelope() {
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "text/html; charset=utf-8".parse().unwrap());
+    let client = MockClient::with_responses([
+        response(
+            StatusCode::OK,
+            json!({
+                "ad": {
+                    "id": 46031010,
+                    "etag": "one",
+                    "values": { "trade_type": "1" }
+                }
+            }),
+        ),
+        HttpResponse {
+            status: StatusCode::BAD_GATEWAY,
+            headers,
+            body: b"<html>bad gateway</html>".to_vec(),
+        },
+    ]);
+
+    let result = run_with_runtime(
+        [
+            "flea", "--format", "json", "draft", "update", "46031010", "--price", "5",
+        ],
+        &TestRuntime {
+            client: client.clone(),
+        },
+    );
+    let value: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 50);
+    assert_eq!(value["error"]["code"], "upstream.request_failed");
+    assert_eq!(value["error"]["retryable"], false);
+    assert_eq!(value["error"]["details"]["stage"], "apply_price");
+    assert_eq!(value["error"]["details"]["status"], 502);
+    assert_eq!(value["error"]["details"]["content_type"], "text/html");
+    assert_eq!(value["partial"]["completed_steps"], json!(["fetch_draft"]));
+    assert_eq!(
+        value["next_actions"][0]["command"],
+        "flea draft show 46031010"
+    );
+    assert_eq!(client.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
 fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
     let client = MockClient::with_responses([
         response(StatusCode::CREATED, draft_state("one")),

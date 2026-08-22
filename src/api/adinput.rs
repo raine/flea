@@ -297,7 +297,7 @@ fn service_for_path(path: &str) -> &'static str {
         compatibility::SERVICE_BILLING_TRACKING
     } else if path.starts_with("/listings/") {
         compatibility::SERVICE_AD_SUMMARIES
-    } else if path.ends_with("/item") {
+    } else if path.ends_with("/item") || path.starts_with("/items/") {
         compatibility::SERVICE_ITEM_CREATION
     } else {
         compatibility::SERVICE_ADINPUT
@@ -439,6 +439,12 @@ pub trait AdInputApi: Send + Sync {
         etag: &str,
         values: &Map<String, Value>,
     ) -> Result<DraftState, ApiError>;
+    async fn update_sale_price(
+        &self,
+        draft_id: &str,
+        etag: &str,
+        price: &Value,
+    ) -> Result<String, ApiError>;
     async fn submit_adinput(
         &self,
         draft_id: &str,
@@ -614,13 +620,41 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         values: &Map<String, Value>,
     ) -> Result<DraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
+        let values = composer_values(values)?;
         let mut request = HttpRequest::mutation(
             Method::Put,
             format!("/adinput/ad/recommerce/{draft_id}/update"),
-            RequestBody::Json(Value::Object(values.clone())),
+            RequestBody::Json(Value::Object(values)),
         );
         request.if_match = Some(etag.to_owned());
         self.draft_request(request).await
+    }
+
+    async fn update_sale_price(
+        &self,
+        draft_id: &str,
+        etag: &str,
+        price: &Value,
+    ) -> Result<String, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
+        validate_price(price)?;
+        let mut request = HttpRequest::mutation(
+            Method::Patch,
+            format!("/items/{draft_id}"),
+            RequestBody::Json(json!({
+                "data": {
+                    "price": {
+                        "price_amount": price
+                    }
+                }
+            })),
+        );
+        request.if_match = Some(etag.to_owned());
+        let response = self
+            .json(request)
+            .await
+            .map_err(|error| error_at_stage(error, "apply_price"))?;
+        normalize_item_update(response, draft_id)
     }
 
     async fn submit_adinput(
@@ -707,7 +741,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         images: &[UploadedImage],
     ) -> Result<DraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
-        let mut values = values.clone();
+        let mut values = composer_values(values)?;
         let mut image = Vec::with_capacity(images.len());
         let mut multi_image = Vec::with_capacity(images.len());
         for uploaded in images {
@@ -855,6 +889,120 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 }
 
+fn validate_price(price: &Value) -> Result<(), ApiError> {
+    if !price.is_number()
+        || price
+            .as_f64()
+            .is_none_or(|amount| !amount.is_finite() || amount < 0.0)
+    {
+        return Err(ApiError::new(
+            "draft.invalid_price",
+            "Price must be a non-negative number",
+        ));
+    }
+    Ok(())
+}
+
+fn composer_trade_type(value: &str) -> &str {
+    match value {
+        "sell" | "SELL" => "1",
+        "give_away" | "GIVE_AWAY" => "2",
+        "wanted" | "WANTED" => "3",
+        value => value,
+    }
+}
+
+fn composer_values(values: &Map<String, Value>) -> Result<Map<String, Value>, ApiError> {
+    let mut encoded = values.clone();
+    if let Some(trade_type) = encoded.get_mut("trade_type")
+        && let Some(value) = trade_type.as_str()
+    {
+        *trade_type = Value::String(composer_trade_type(value).to_owned());
+    }
+
+    let Some(price) = encoded.remove("price") else {
+        return Ok(encoded);
+    };
+    validate_price(&price)?;
+    let price_text = price.to_string();
+    match encoded.get("trade_type").and_then(Value::as_str) {
+        Some("1") => {
+            encoded.insert("price".to_owned(), json!([{ "price_amount": price_text }]));
+        }
+        Some("2") => {}
+        Some("3") => {
+            encoded.insert("price".to_owned(), json!([{ "price_max": price_text }]));
+        }
+        _ => {
+            return Err(ApiError::new(
+                "draft.price_trade_type_conflict",
+                "Price requires a recognized sale or wanted trade type",
+            ));
+        }
+    }
+    Ok(encoded)
+}
+
+fn error_at_stage(mut error: ApiError, stage: &str) -> ApiError {
+    let mut details = error
+        .details
+        .take()
+        .map(|details| *details)
+        .unwrap_or_else(|| json!({}));
+    if let Some(details) = details.as_object_mut() {
+        details.insert("stage".to_owned(), Value::String(stage.to_owned()));
+    }
+    error.details = Some(Box::new(details));
+    error
+}
+
+fn uncertain_item_update(response: &HttpResponse, reason: &str) -> ApiError {
+    let mut error = ApiError::new(
+        "mutation.uncertain",
+        "The price mutation may have succeeded, but its resulting revision is unknown",
+    );
+    error.status = Some(response.status);
+    error.details = Some(Box::new(json!({
+        "stage": "apply_price",
+        "status": response.status,
+        "content_type": response.content_type,
+        "reason": reason,
+    })));
+    error
+}
+
+fn normalize_item_update(response: HttpResponse, draft_id: &str) -> Result<String, ApiError> {
+    if response.body_is_unparseable {
+        return Err(uncertain_item_update(
+            &response,
+            "successful response was not valid JSON",
+        ));
+    }
+    let response_id = response.body.get("id").and_then(|value| match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    });
+    if response_id.as_deref() != Some(draft_id) {
+        return Err(uncertain_item_update(
+            &response,
+            "successful response identified a different item",
+        ));
+    }
+    response
+        .body
+        .get("etag")
+        .and_then(Value::as_str)
+        .filter(|etag| !etag.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            uncertain_item_update(
+                &response,
+                "successful response did not contain an authoritative ETag",
+            )
+        })
+}
+
 fn safe_content_type(value: &str) -> String {
     value
         .split(';')
@@ -936,11 +1084,50 @@ fn valid_image_location(location: &str) -> Option<String> {
     .then(|| location.to_owned())
 }
 
+fn normalize_draft_values(mut values: Map<String, Value>) -> Result<Map<String, Value>, ApiError> {
+    let Some(price) = values.remove("price") else {
+        return Ok(values);
+    };
+    let normalized = if price.is_number() {
+        price
+    } else {
+        let entries = price.as_array().ok_or_else(invalid_source_price)?;
+        let [entry] = entries.as_slice() else {
+            return Err(invalid_source_price());
+        };
+        let object = entry.as_object().ok_or_else(invalid_source_price)?;
+        if object.len() != 1 {
+            return Err(invalid_source_price());
+        }
+        let amount = object
+            .get("price_amount")
+            .or_else(|| object.get("price_max"))
+            .and_then(Value::as_str)
+            .ok_or_else(invalid_source_price)?;
+        serde_json::from_str::<Value>(amount).map_err(|_| invalid_source_price())?
+    };
+    if validate_price(&normalized).is_err() {
+        return Err(invalid_source_price());
+    }
+    values.insert("price".to_owned(), normalized);
+    Ok(values)
+}
+
+fn invalid_source_price() -> ApiError {
+    let mut error = ApiError::new(
+        "upstream.unexpected_response",
+        "Tori returned an unsupported price representation",
+    );
+    error.details = Some(Box::new(json!({ "stage": "normalize_price" })));
+    error
+}
+
 fn normalize_draft_state(body: Value, response_etag: Option<&str>) -> Result<DraftState, ApiError> {
     if let Ok(mut legacy) = serde_json::from_value::<DraftState>(body.clone()) {
         if let Some(etag) = response_etag {
             legacy.etag = etag.to_owned();
         }
+        legacy.values = normalize_draft_values(legacy.values)?;
         return Ok(legacy);
     }
     let draft_id = draft_id_from_body(&body).ok_or_else(|| {
@@ -950,11 +1137,12 @@ fn normalize_draft_state(body: Value, response_etag: Option<&str>) -> Result<Dra
         )
     })?;
     let ad = body.get("ad").unwrap_or(&body);
-    let values = ad
-        .get("values")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
+    let values = normalize_draft_values(
+        ad.get("values")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default(),
+    )?;
     let etag = response_etag
         .or_else(|| ad.get("etag").and_then(Value::as_str))
         .unwrap_or_default()
@@ -1058,6 +1246,16 @@ pub struct WorkflowError {
 }
 
 impl WorkflowError {
+    fn input(error: ApiError) -> Self {
+        Self {
+            code: error.code.clone(),
+            message: error.message.clone(),
+            source: Some(error),
+            recovery: None,
+            details: None,
+        }
+    }
+
     fn before_creation(error: ApiError) -> Self {
         let recovery = error.details.as_deref().and_then(|details| {
             let draft_id = details.get("draft_id")?.as_str()?.to_owned();
@@ -1113,6 +1311,29 @@ impl WorkflowError {
             recovery.listing_id = Some(listing_id.to_owned());
         }
         self
+    }
+
+    fn price_observation(
+        draft_id: &str,
+        completed_steps: &[String],
+        requested: &Value,
+        fresh_state: DraftState,
+    ) -> Self {
+        let observed = fresh_state.values.get("price").cloned();
+        let mut error = ApiError::new(
+            "mutation.uncertain",
+            "The authoritative draft price does not match the requested price",
+        );
+        error.details = Some(Box::new(json!({
+            "stage": "observe_price",
+            "requested_price": requested,
+            "observed_price": observed,
+        })));
+        let mut workflow = Self::for_draft(draft_id, completed_steps, error, false);
+        if let Some(recovery) = &mut workflow.recovery {
+            recovery.fresh_state = Some(fresh_state);
+        }
+        workflow
     }
 
     fn validation(draft_id: &str, completed_steps: &[String], missing: Vec<String>) -> Self {
@@ -1194,7 +1415,59 @@ impl<A> DraftWorkflow<A> {
     }
 }
 
+fn requested_sale_price(values: &Map<String, Value>) -> Result<Option<Value>, ApiError> {
+    let Some(price) = values.get("price") else {
+        return Ok(None);
+    };
+    validate_price(price)?;
+    let trade_type = values
+        .get("trade_type")
+        .and_then(Value::as_str)
+        .map(composer_trade_type);
+    if trade_type != Some("1") {
+        return Err(ApiError::new(
+            "draft.price_trade_type_conflict",
+            "Sale price requires the sale trade type",
+        ));
+    }
+    Ok(Some(price.clone()))
+}
+
+fn prices_equal(left: &Value, right: &Value) -> bool {
+    match (left.as_f64(), right.as_f64()) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
 impl<A: AdInputApi> DraftWorkflow<A> {
+    async fn observe_price(
+        &self,
+        draft_id: &str,
+        requested: &Value,
+        completed: &[String],
+    ) -> Result<DraftState, WorkflowError> {
+        let fresh = self.api.get_draft(draft_id).await.map_err(|error| {
+            WorkflowError::for_draft(
+                draft_id,
+                completed,
+                error_at_stage(error, "observe_price"),
+                true,
+            )
+        })?;
+        if fresh
+            .values
+            .get("price")
+            .is_some_and(|observed| prices_equal(observed, requested))
+        {
+            Ok(fresh)
+        } else {
+            Err(WorkflowError::price_observation(
+                draft_id, completed, requested, fresh,
+            ))
+        }
+    }
+
     pub async fn create(
         &self,
         values: Map<String, Value>,
@@ -1215,6 +1488,8 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         mut values: Map<String, Value>,
         images: Vec<PreparedImage>,
     ) -> Result<CreateResult, WorkflowError> {
+        let price = requested_sale_price(&values).map_err(WorkflowError::input)?;
+        values.remove("price");
         let mut draft = self
             .api
             .create_draft()
@@ -1246,6 +1521,19 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 })?;
             completed.push("apply_fields".to_owned());
         }
+        if let Some(price) = price {
+            self.api
+                .update_sale_price(&draft.draft_id, &draft.etag, &price)
+                .await
+                .map_err(|error| {
+                    WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
+                })?;
+            completed.push("apply_price".to_owned());
+            draft = self
+                .observe_price(&draft.draft_id, &price, &completed)
+                .await?;
+            completed.push("observe_price".to_owned());
+        }
         if !images.is_empty() {
             draft = self
                 .add_prepared_images(&draft, images, &mut completed)
@@ -1261,11 +1549,13 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         &self,
         listing_id: &str,
     ) -> Result<CreateResult, WorkflowError> {
-        let seed = self
+        let mut seed = self
             .api
             .source_listing(listing_id)
             .await
             .map_err(WorkflowError::before_creation)?;
+        let price = requested_sale_price(&seed.values).map_err(WorkflowError::input)?;
+        seed.values.remove("price");
         let mut draft = self
             .api
             .create_draft()
@@ -1283,6 +1573,21 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     .with_listing_id(listing_id)
             })?;
         completed.push("copy_fields".to_owned());
+        if let Some(price) = price {
+            self.api
+                .update_sale_price(&draft.draft_id, &draft.etag, &price)
+                .await
+                .map_err(|error| {
+                    WorkflowError::for_draft(&draft.draft_id, &completed, error, false)
+                        .with_listing_id(listing_id)
+                })?;
+            completed.push("apply_price".to_owned());
+            draft = self
+                .observe_price(&draft.draft_id, &price, &completed)
+                .await
+                .map_err(|error| error.with_listing_id(listing_id))?;
+            completed.push("observe_price".to_owned());
+        }
 
         let mut ordered = Vec::new();
         for source in seed.images {
@@ -1347,34 +1652,79 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         draft_id: &str,
         patch: &Map<String, Value>,
     ) -> Result<DraftState, WorkflowError> {
+        if let Some(price) = patch.get("price") {
+            validate_price(price).map_err(WorkflowError::input)?;
+        }
         let current = self
             .api
             .get_draft(draft_id)
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
-        let completed = vec!["fetch_draft".to_owned()];
+        let mut completed = vec!["fetch_draft".to_owned()];
         let mut values = current.values.clone();
         values.extend(patch.clone());
-        match self.api.update_item(draft_id, &current.etag, &values).await {
-            Ok(state) => Ok(state),
-            Err(error) if error.status == Some(412) => {
-                let fresh = self.api.get_draft(draft_id).await.map_err(|fresh_error| {
-                    WorkflowError::for_draft(draft_id, &completed, fresh_error, true)
-                })?;
-                let mut conflict = ApiError::new(
-                    "draft.conflict",
-                    "The draft changed while the update was being applied",
-                );
-                conflict.status = Some(412);
-                let mut workflow = WorkflowError::for_draft(draft_id, &completed, conflict, false);
-                if let Some(recovery) = &mut workflow.recovery {
-                    recovery.fresh_state = Some(fresh);
-                    recovery.next_safe_actions = vec![format!("flea draft show {draft_id}")];
-                }
-                Err(workflow)
+        let price = if patch.contains_key("price") {
+            requested_sale_price(&values)
+                .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?
+        } else {
+            None
+        };
+        let mut field_patch = patch.clone();
+        field_patch.remove("price");
+        let mut state = current;
+
+        if !field_patch.is_empty() {
+            if price.is_some() {
+                values.remove("price");
             }
-            Err(error) => Err(WorkflowError::for_draft(draft_id, &completed, error, false)),
+            state = match self.api.update_item(draft_id, &state.etag, &values).await {
+                Ok(state) => state,
+                Err(error) if error.status == Some(412) => {
+                    return Err(self.update_conflict(draft_id, &completed).await);
+                }
+                Err(error) => {
+                    return Err(WorkflowError::for_draft(draft_id, &completed, error, false));
+                }
+            };
+            completed.push("apply_fields".to_owned());
         }
+
+        if let Some(price) = price {
+            match self
+                .api
+                .update_sale_price(draft_id, &state.etag, &price)
+                .await
+            {
+                Ok(_) => {}
+                Err(error) if error.status == Some(412) => {
+                    return Err(self.update_conflict(draft_id, &completed).await);
+                }
+                Err(error) => {
+                    return Err(WorkflowError::for_draft(draft_id, &completed, error, false));
+                }
+            }
+            completed.push("apply_price".to_owned());
+            state = self.observe_price(draft_id, &price, &completed).await?;
+        }
+        Ok(state)
+    }
+
+    async fn update_conflict(&self, draft_id: &str, completed: &[String]) -> WorkflowError {
+        let fresh = match self.api.get_draft(draft_id).await {
+            Ok(fresh) => fresh,
+            Err(error) => return WorkflowError::for_draft(draft_id, completed, error, true),
+        };
+        let mut conflict = ApiError::new(
+            "draft.conflict",
+            "The draft changed while the update was being applied",
+        );
+        conflict.status = Some(412);
+        let mut workflow = WorkflowError::for_draft(draft_id, completed, conflict, false);
+        if let Some(recovery) = &mut workflow.recovery {
+            recovery.fresh_state = Some(fresh);
+            recovery.next_safe_actions = vec![format!("flea draft show {draft_id}")];
+        }
+        workflow
     }
 
     pub async fn delete(&self, draft_id: &str) -> Result<(), WorkflowError> {
