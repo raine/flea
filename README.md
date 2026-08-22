@@ -80,8 +80,8 @@ The canonical skill lives at
 copies.
 
 Once installed, ask the coding agent to perform the marketplace task in natural
-language. The skill directs it to discover machine values, inspect remote state,
-and request authorization before immediate or destructive mutations.
+language. The skill directs it to discover machine values and inspect remote
+state.
 
 ## Capabilities
 
@@ -178,9 +178,7 @@ A failed draft creation can still return a persisted draft ID. Continue against
 that draft instead of repeating creation and risking a duplicate.
 
 Publication requires the exact revision returned by `draft show` or
-`draft validate`. `draft publish`, `draft delete`, `listing dispose`, and
-`listing delete` act immediately without interactive confirmation. The bundled
-skill requires explicit user authorization for these operations.
+`draft validate`.
 
 ## Image privacy
 

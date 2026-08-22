@@ -21,8 +21,6 @@ JSON. Run `flea <command> --help` for current syntax, filters, and examples.
 - A field cannot appear in both flags and `--input` JSON.
 - Optional category fields use the bounded `attributes` object in input JSON.
   Every key and value must match the selected draft's composer model.
-- Publish, dispose, and delete act immediately without confirmation. Run them
-  only when the user explicitly requests them.
 
 ## Find listings
 
