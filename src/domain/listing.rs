@@ -85,7 +85,10 @@ pub struct ListingSummary {
     pub price: Option<String>,
     pub state: ListingState,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub image_url: Option<String>,
+    pub public_url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -77,6 +77,7 @@ pub trait AdInputApi: Send + Sync {
     ) -> Result<Publication, ApiError>;
     async fn confirmation(&self, publication: &Publication) -> Result<Confirmation, ApiError>;
     async fn track_confirmation(&self, confirmation: &Confirmation) -> Result<(), ApiError>;
+    async fn active_listing(&self, listing_id: &str) -> Result<Option<Value>, ApiError>;
     async fn observed_listing(&self, listing_id: &str) -> Result<Value, ApiError>;
 }
 
@@ -139,6 +140,68 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
             }
             error
         })
+    }
+
+    async fn find_listing_summary(&self, listing_id: &str) -> Result<Option<Value>, ApiError> {
+        const PAGE_SIZE: usize = 50;
+        const PAGE_LIMIT: usize = 10_000;
+        let mut offset = 0;
+        let mut expected_total = None;
+        for _ in 0..PAGE_LIMIT {
+            let response = self
+                .json(HttpRequest::read(format!(
+                    "/search?limit={PAGE_SIZE}&offset={offset}"
+                )))
+                .await?;
+            if response.body_is_unparseable {
+                return Err(listing_observation_model_error(
+                    response.status,
+                    "collection_unparseable",
+                ));
+            }
+            let summaries = response
+                .body
+                .get("summaries")
+                .or_else(|| response.body.get("listings"))
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    listing_observation_model_error(response.status, "collection_unrecognized")
+                })?;
+            let total = response
+                .body
+                .get("total")
+                .and_then(Value::as_u64)
+                .and_then(|value| usize::try_from(value).ok())
+                .ok_or_else(|| {
+                    listing_observation_model_error(response.status, "collection_total_invalid")
+                })?;
+            let stable_total = *expected_total.get_or_insert(total);
+            if total != stable_total {
+                return Err(listing_observation_model_error(
+                    response.status,
+                    "collection_total_changed",
+                ));
+            }
+            for summary in summaries {
+                if listing_value_id_matches(summary.get("id"), listing_id) {
+                    return Ok(Some(normalize_observed_summary(summary, listing_id)));
+                }
+            }
+            offset += summaries.len();
+            if offset >= total {
+                return Ok(None);
+            }
+            if summaries.is_empty() {
+                return Err(listing_observation_model_error(
+                    response.status,
+                    "collection_pagination_incomplete",
+                ));
+            }
+        }
+        Err(listing_observation_model_error(
+            200,
+            "collection_pagination_bounded",
+        ))
     }
 
     async fn observe_created_draft(
@@ -671,12 +734,137 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         .map(|_| ())
     }
 
+    async fn active_listing(&self, listing_id: &str) -> Result<Option<Value>, ApiError> {
+        validate_resource_id(listing_id, "listing")?;
+        Ok(self
+            .find_listing_summary(listing_id)
+            .await?
+            .filter(listing_is_active))
+    }
+
     async fn observed_listing(&self, listing_id: &str) -> Result<Value, ApiError> {
         validate_resource_id(listing_id, "listing")?;
-        self.json(HttpRequest::read(format!("/{listing_id}")))
-            .await
-            .map(|response| response.body)
+        let detail = self.json(HttpRequest::read(format!("/{listing_id}"))).await;
+        if let Ok(response) = &detail
+            && !response.body_is_unparseable
+            && observed_detail_matches(&response.body, listing_id)
+        {
+            let mut body = response.body.clone();
+            if let Some(object) = body.as_object_mut() {
+                object.insert(
+                    "public_url".to_owned(),
+                    Value::String(public_listing_url(listing_id)),
+                );
+                object.insert(
+                    "observation_source".to_owned(),
+                    Value::String("detail".to_owned()),
+                );
+            }
+            return Ok(body);
+        }
+        if let Some(summary) = self.find_listing_summary(listing_id).await? {
+            return Ok(summary);
+        }
+        let (detail_status, upstream_transient) = match detail {
+            Ok(response) => (
+                if response.body_is_unparseable {
+                    "unparseable"
+                } else {
+                    "unrecognized_model"
+                },
+                false,
+            ),
+            Err(error) => (
+                if error.status == Some(404) {
+                    "not_found"
+                } else {
+                    "unavailable"
+                },
+                error.upstream_transient,
+            ),
+        };
+        let mut error = ApiError::new(
+            "listing.observation_pending",
+            "published listing is not visible through an authoritative observation path yet",
+        );
+        error.upstream_transient = upstream_transient;
+        error.safe_to_retry = true;
+        error.details = Some(Box::new(json!({
+            "listing_id": listing_id,
+            "detail_status": detail_status,
+            "collection_status": "not_found",
+        })));
+        Err(error)
     }
+}
+
+fn listing_value_id_matches(value: Option<&Value>, listing_id: &str) -> bool {
+    match value {
+        Some(Value::String(value)) => value == listing_id,
+        Some(Value::Number(value)) => value.to_string() == listing_id,
+        _ => false,
+    }
+}
+
+fn observed_detail_matches(value: &Value, listing_id: &str) -> bool {
+    listing_value_id_matches(
+        value.get("id").or_else(|| value.get("listing_id")),
+        listing_id,
+    )
+}
+
+fn listing_is_active(value: &Value) -> bool {
+    let state = value.get("state");
+    let candidates = [
+        state.and_then(Value::as_str),
+        state
+            .and_then(|state| state.get("type"))
+            .and_then(Value::as_str),
+        state
+            .and_then(|state| state.get("display"))
+            .and_then(Value::as_str),
+        state
+            .and_then(|state| state.get("label"))
+            .and_then(Value::as_str),
+    ];
+    candidates.into_iter().flatten().any(|state| {
+        matches!(
+            state.trim().to_ascii_lowercase().as_str(),
+            "active" | "published"
+        )
+    })
+}
+
+fn normalize_observed_summary(summary: &Value, listing_id: &str) -> Value {
+    let data = summary.get("data").unwrap_or(&Value::Null);
+    json!({
+        "listing_id": listing_id,
+        "title": data.get("title"),
+        "price": data.get("subtitle"),
+        "state": summary.get("state"),
+        "location": data.get("location").or_else(|| data.get("area")).or_else(|| data.get("place")),
+        "image_url": data.get("image"),
+        "public_url": public_listing_url(listing_id),
+        "observation_source": "collection",
+    })
+}
+
+fn public_listing_url(listing_id: &str) -> String {
+    format!("https://www.tori.fi/recommerce/forsale/item/{listing_id}")
+}
+
+fn listing_observation_model_error(status: u16, model: &str) -> ApiError {
+    let mut error = ApiError::new(
+        "upstream.unrecognized_model",
+        "Tori returned an unrecognized listing collection model",
+    );
+    error.status = Some(status);
+    error.safe_to_retry = true;
+    error.details = Some(Box::new(json!({
+        "status": status,
+        "response_model": model,
+    })));
+    error
 }
 
 pub(super) fn validate_price(price: &Value) -> Result<(), ApiError> {

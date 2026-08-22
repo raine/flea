@@ -1371,8 +1371,83 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn publication_observation_error(
+        &self,
+        draft_id: &str,
+        completed: &[String],
+        state: &DraftState,
+        publication: &Publication,
+        publication_images: &[RecoveryImageIntent],
+        attempts: usize,
+        elapsed: Duration,
+        error: ApiError,
+    ) -> WorkflowError {
+        let observation_error_code = error.code.clone();
+        let upstream_transient = error.upstream_transient;
+        let observation_details = error.details.as_deref().cloned();
+        let mut workflow = WorkflowError::for_draft(draft_id, completed, error, true);
+        workflow.code = "publication.observation_uncertain".to_owned();
+        workflow.message =
+            "Tori persisted the publication, but listing observation remains unavailable"
+                .to_owned();
+        if let Some(source) = &mut workflow.source {
+            source.code = "publication.observation_uncertain".to_owned();
+            source.message = workflow.message.clone();
+            source.safe_to_retry = false;
+            source.upstream_transient = upstream_transient;
+        }
+        if let Some(recovery) = &mut workflow.recovery {
+            recovery.listing_id = Some(publication.listing_id.clone());
+            recovery.failed_stage = Some("fetch_observed_listing".to_owned());
+            recovery.observe(state, ObservationStatus::Observed);
+            recovery.observation.status = ObservationStatus::Unavailable;
+            recovery.observation.error_code = Some(observation_error_code);
+            recovery.delivery = Some(RecoveryStatus::Persisted);
+            recovery.publication = Some(RecoveryStatus::Persisted);
+            recovery.safe_to_retry = false;
+            recovery.upstream_transient = upstream_transient;
+            recovery.destructive_actions.clear();
+            set_recovery_images(recovery, publication_images, false);
+            recovery.next_safe_actions =
+                vec![format!("flea listing show {}", publication.listing_id)];
+        }
+        workflow.details = Some(json!({
+            "listing_id": publication.listing_id,
+            "revision": publication.revision,
+            "publication": "persisted",
+            "observation_status": "unavailable",
+            "observation_attempts": attempts,
+            "observation_elapsed_ms": elapsed.as_millis(),
+            "observation_timeout_ms": self.config.listing_observation_timeout.as_millis(),
+            "poll_interval_ms": self.config.listing_poll_interval.as_millis(),
+            "last_observation": observation_details,
+        }));
+        workflow
+    }
+
     pub async fn publish(&self, draft_id: &str) -> Result<PublishResult, WorkflowError> {
         let mut completed = Vec::new();
+        let active = self
+            .api
+            .active_listing(draft_id)
+            .await
+            .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
+        if let Some(observed_listing) = active {
+            completed.push("check_active_listing".to_owned());
+            return Ok(PublishResult {
+                draft_id: draft_id.to_owned(),
+                listing_id: draft_id.to_owned(),
+                revision: String::new(),
+                state: "active".to_owned(),
+                publication: "already_published".to_owned(),
+                mutations_performed: false,
+                public_url: format!("https://www.tori.fi/recommerce/forsale/item/{draft_id}"),
+                completed_steps: completed,
+                warnings: vec!["listing is already active; no mutation was performed".to_owned()],
+                observed_listing,
+            });
+        }
         let publication = self
             .api
             .publication_draft(draft_id)
@@ -1657,38 +1732,72 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             Err(error) => warnings.push(format!("confirmation fetch failed: {}", error.message)),
         }
 
-        let observed_listing = match self.api.observed_listing(&publication.listing_id).await {
-            Ok(listing) => listing,
-            Err(error) => {
-                let observation_error_code = error.code.clone();
-                let mut workflow = WorkflowError::for_draft(draft_id, &completed, error, true);
-                if let Some(recovery) = &mut workflow.recovery {
-                    recovery.listing_id = Some(publication.listing_id.clone());
-                    recovery.failed_stage = Some("fetch_observed_listing".to_owned());
-                    recovery.observe(&state, ObservationStatus::Observed);
-                    recovery.observation.status = ObservationStatus::Unavailable;
-                    recovery.observation.error_code = Some(observation_error_code);
-                    recovery.delivery = Some(RecoveryStatus::Persisted);
-                    recovery.publication = Some(RecoveryStatus::Persisted);
-                    recovery.destructive_actions.clear();
-                    set_recovery_images(recovery, &publication_images, false);
-                    recovery.next_safe_actions =
-                        vec![format!("flea listing show {}", publication.listing_id)];
+        let observation_started = tokio::time::Instant::now();
+        let mut observation_attempts = 0;
+        let observed_listing = loop {
+            observation_attempts += 1;
+            match self.api.observed_listing(&publication.listing_id).await {
+                Ok(listing) => break listing,
+                Err(mut error)
+                    if observation_attempts <= self.config.listing_poll_limit
+                        && observation_started.elapsed()
+                            < self.config.listing_observation_timeout =>
+                {
+                    let remaining = self
+                        .config
+                        .listing_observation_timeout
+                        .saturating_sub(observation_started.elapsed());
+                    tokio::time::sleep(self.config.listing_poll_interval.min(remaining)).await;
+                    if remaining.is_zero() {
+                        error.code = "publication.observation_uncertain".to_owned();
+                        return Err(self.publication_observation_error(
+                            draft_id,
+                            &completed,
+                            &state,
+                            &publication,
+                            &publication_images,
+                            observation_attempts,
+                            observation_started.elapsed(),
+                            error,
+                        ));
+                    }
                 }
-                workflow.details = Some(json!({
-                    "listing_id": publication.listing_id,
-                    "revision": publication.revision,
-                }));
-                return Err(workflow);
+                Err(mut error) => {
+                    error.code = "publication.observation_uncertain".to_owned();
+                    error.message = "Tori persisted the publication, but listing observation remains unavailable".to_owned();
+                    error.safe_to_retry = false;
+                    return Err(self.publication_observation_error(
+                        draft_id,
+                        &completed,
+                        &state,
+                        &publication,
+                        &publication_images,
+                        observation_attempts,
+                        observation_started.elapsed(),
+                        error,
+                    ));
+                }
             }
         };
         completed.push("fetch_observed_listing".to_owned());
 
+        let public_url = format!(
+            "https://www.tori.fi/recommerce/forsale/item/{}",
+            publication.listing_id
+        );
+        let state = if observed_listing_is_active(&observed_listing) {
+            "active".to_owned()
+        } else {
+            publication.state
+        };
         Ok(PublishResult {
             draft_id: draft_id.to_owned(),
             listing_id: publication.listing_id,
             revision: publication.revision,
-            state: publication.state,
+            state,
+            publication: "persisted".to_owned(),
+            mutations_performed: true,
+            public_url,
             completed_steps: completed,
             warnings,
             observed_listing,
@@ -1745,6 +1854,27 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         }
         unreachable!("bounded image loop always returns")
     }
+}
+
+fn observed_listing_is_active(listing: &Value) -> bool {
+    let state = listing.get("state");
+    [
+        state.and_then(Value::as_str),
+        state
+            .and_then(|state| state.get("type"))
+            .and_then(Value::as_str),
+        state
+            .and_then(|state| state.get("display"))
+            .and_then(Value::as_str),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|state| {
+        matches!(
+            state.trim().to_ascii_lowercase().as_str(),
+            "active" | "published"
+        )
+    })
 }
 
 pub(super) fn image_processing_timeout(

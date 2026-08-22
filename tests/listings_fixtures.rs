@@ -25,6 +25,7 @@ struct MockListingsApi {
     categories: Result<Vec<UpstreamCategory>, ListingsApiError>,
     pages: Mutex<VecDeque<UpstreamListingPage>>,
     listings: Mutex<VecDeque<UpstreamListing>>,
+    listing_errors: Mutex<VecDeque<ListingsApiError>>,
     updates: Mutex<VecDeque<Result<UpstreamListing, ListingsApiError>>>,
     page_calls: Mutex<Vec<(usize, usize)>>,
     update_calls: Mutex<Vec<UpdateCall>>,
@@ -41,6 +42,7 @@ impl MockListingsApi {
                 fixture("page-2.json"),
             ])),
             listings: Mutex::new(VecDeque::from([fixture("detail.json")])),
+            listing_errors: Mutex::new(VecDeque::new()),
             updates: Mutex::new(VecDeque::new()),
             page_calls: Mutex::new(Vec::new()),
             update_calls: Mutex::new(Vec::new()),
@@ -69,6 +71,9 @@ impl ListingsApi for MockListingsApi {
     }
 
     fn listing(&self, _listing_id: &str) -> Result<UpstreamListing, ListingsApiError> {
+        if let Some(error) = self.listing_errors.lock().unwrap().pop_front() {
+            return Err(error);
+        }
         self.listings
             .lock()
             .unwrap()
@@ -437,6 +442,152 @@ fn show_normalizes_complete_fields_statistics_and_actions() {
     assert_eq!(detail.statistics.favorites, Some(17));
     assert_eq!(detail.actions[1].name, ListingActionName::Delete);
     assert_eq!(detail.actions[1].method, "DELETE");
+}
+
+#[test]
+fn show_merges_normalized_summary_values_into_partial_detail_models() {
+    let mut api = MockListingsApi::fixtures();
+    api.listings = Mutex::new(VecDeque::from([serde_json::from_value(json!({
+        "id": "46031010",
+        "state": { "type": "ACTIVE" },
+        "fields": { "description": "Lock cable" },
+        "data": {
+            "title": "Bicycle lock cable",
+            "subtitle": "Tori myydään 5 €",
+            "image": "https://img.example/lock.jpg"
+        }
+    }))
+    .unwrap()]));
+
+    let detail = Listings::new(&api).show("46031010").unwrap();
+
+    assert_eq!(detail.fields["title"], "Bicycle lock cable");
+    assert_eq!(detail.fields["price"], "Tori myydään 5 €");
+    assert_eq!(detail.fields["image"], "https://img.example/lock.jpg");
+    assert_eq!(
+        detail.fields["public_url"],
+        "https://www.tori.fi/recommerce/forsale/item/46031010"
+    );
+}
+
+#[test]
+fn show_reconciles_detail_not_found_with_the_matching_active_collection_item() {
+    let mut api = MockListingsApi::fixtures();
+    api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::NotFound]));
+    api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
+        "summaries": [{
+            "id": "46031010",
+            "state": { "type": "ACTIVE" },
+            "data": {
+                "title": "Bicycle lock cable",
+                "subtitle": "5 €",
+                "location": "Helsinki",
+                "image": "https://img.example/lock.jpg"
+            }
+        }],
+        "total": 1
+    }))
+    .unwrap()]));
+
+    let detail = Listings::new(&api).show("46031010").unwrap();
+
+    assert_eq!(detail.listing_id, "46031010");
+    assert_eq!(detail.state, ListingState::Active);
+    assert_eq!(detail.fields["title"], "Bicycle lock cable");
+    assert_eq!(detail.fields["price"], "5 €");
+    assert_eq!(detail.fields["location"], "Helsinki");
+    assert_eq!(detail.fields["image"], "https://img.example/lock.jpg");
+    assert_eq!(
+        detail.fields["public_url"],
+        "https://www.tori.fi/recommerce/forsale/item/46031010"
+    );
+}
+
+#[test]
+fn show_preserves_definitive_not_found_after_detail_and_collection_agree() {
+    let mut api = MockListingsApi::fixtures();
+    api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::NotFound]));
+    api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
+        "summaries": [],
+        "total": 0
+    }))
+    .unwrap()]));
+
+    let error = Listings::new(&api).show("46031010").unwrap_err();
+
+    assert_eq!(error.code, "listing.not_found");
+    assert!(!error.upstream_transient);
+    assert!(!error.safe_to_retry);
+}
+
+#[test]
+fn show_reports_observation_delay_when_collection_cannot_reconcile_not_found() {
+    let mut api = MockListingsApi::fixtures();
+    api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::NotFound]));
+    api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
+        "summaries": [],
+        "total": 1
+    }))
+    .unwrap()]));
+
+    let error = Listings::new(&api).show("46031010").unwrap_err();
+
+    assert_eq!(error.code, "listing.observation_delayed");
+    assert!(error.safe_to_retry);
+    assert_eq!(
+        error.details.as_ref().unwrap()["detail_status"],
+        "not_found"
+    );
+    assert_eq!(error.details.as_ref().unwrap()["observation_attempts"], 2);
+    assert_eq!(error.next_actions[0].command, "flea listing show 46031010");
+}
+
+#[test]
+fn show_uses_collection_when_detail_model_is_unexpected() {
+    let mut api = MockListingsApi::fixtures();
+    api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::UnexpectedResponse(
+        "fixture model".to_owned(),
+    )]));
+    api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
+        "summaries": [{
+            "id": 46031010,
+            "state": { "display": "published" },
+            "data": { "title": "Bicycle lock cable" }
+        }],
+        "total": 1
+    }))
+    .unwrap()]));
+
+    let detail = Listings::new(&api).show("46031010").unwrap();
+
+    assert_eq!(detail.listing_id, "46031010");
+    assert_eq!(detail.state, ListingState::Active);
+}
+
+#[test]
+fn show_preserves_safe_model_diagnostics_when_no_fallback_matches() {
+    let mut api = MockListingsApi::fixtures();
+    api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::UnexpectedResponse(
+        "private fixture body".to_owned(),
+    )]));
+    api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
+        "summaries": [],
+        "total": 0
+    }))
+    .unwrap()]));
+
+    let error = Listings::new(&api).show("46031010").unwrap_err();
+
+    assert_eq!(error.code, "upstream.unexpected_response");
+    assert_eq!(
+        error.details.as_ref().unwrap()["response_model"],
+        "unrecognized"
+    );
+    assert_eq!(
+        error.details.as_ref().unwrap()["response_status_class"],
+        "success"
+    );
+    assert!(!format!("{error:?}").contains("private fixture body"));
 }
 
 #[test]

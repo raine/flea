@@ -786,6 +786,7 @@ fn image_add_flows_through_upload_and_ordering() {
 #[test]
 fn deterministic_publish_validation_has_local_remediation_guidance() {
     let client = MockClient::with_responses([
+        response(StatusCode::OK, json!({ "summaries": [], "total": 0 })),
         response(StatusCode::OK, draft_state("one")),
         response(StatusCode::OK, delivery_page(false)),
         response(StatusCode::OK, json!({ "categories": [] })),
@@ -831,6 +832,7 @@ fn publish_flows_through_every_http_step() {
         "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
     });
     let client = MockClient::with_responses([
+        response(StatusCode::OK, json!({ "summaries": [], "total": 0 })),
         response(StatusCode::OK, valid.clone()),
         response(StatusCode::OK, delivery_page(true)),
         response(
@@ -872,7 +874,10 @@ fn publish_flows_through_every_http_step() {
         ),
         response(StatusCode::OK, json!({ "title": "Published" })),
         response(StatusCode::OK, json!({ "transactionId": 11 })),
-        response(StatusCode::OK, json!({ "state": "pending" })),
+        response(
+            StatusCode::OK,
+            json!({ "listing_id": "draft-1", "state": "pending" }),
+        ),
     ]);
     let value = invoke(
         &TestRuntime {
@@ -883,24 +888,29 @@ fn publish_flows_through_every_http_step() {
 
     assert_eq!(value["data"]["listing_id"], "draft-1");
     let requests = client.requests.lock().unwrap();
-    assert_eq!(requests.len(), 13);
-    assert_eq!(requests[3].method, reqwest::Method::PATCH);
-    assert_eq!(requests[3].path_and_query, "/items/draft-1");
-    assert_eq!(requests[3].service, "RC-ITEM-CREATION-FLOW-API");
+    assert_eq!(requests.len(), 14);
+    assert_eq!(requests[0].path_and_query, "/search?limit=50&offset=0");
+    assert_eq!(requests[0].service, "AD-SUMMARIES");
+    assert_eq!(requests[4].method, reqwest::Method::PATCH);
+    assert_eq!(requests[4].path_and_query, "/items/draft-1");
+    assert_eq!(requests[4].service, "RC-ITEM-CREATION-FLOW-API");
     assert_eq!(
-        requests[5].path_and_query,
+        requests[6].path_and_query,
         "/adinput/ad/recommerce/draft-1/update"
     );
-    assert_eq!(requests[5].service, "APPS-ADINPUT");
-    assert_eq!(requests[6].path_and_query, "/ads/draft-1/delivery");
-    assert_eq!(requests[6].service, "TJT-API");
-    assert_eq!(requests[9].path_and_query, "/adinput/order/choices/draft-1");
-    assert_eq!(requests[9].service, "APPS-ADINPUT");
+    assert_eq!(requests[6].service, "APPS-ADINPUT");
+    assert_eq!(requests[7].path_and_query, "/ads/draft-1/delivery");
+    assert_eq!(requests[7].service, "TJT-API");
     assert_eq!(
-        requests[9].content_type.as_ref().unwrap(),
+        requests[10].path_and_query,
+        "/adinput/order/choices/draft-1"
+    );
+    assert_eq!(requests[10].service, "APPS-ADINPUT");
+    assert_eq!(
+        requests[10].content_type.as_ref().unwrap(),
         "application/x-www-form-urlencoded"
     );
-    let flea::api::client::RequestBody::Bytes(body) = &requests[9].body else {
+    let flea::api::client::RequestBody::Bytes(body) = &requests[10].body else {
         panic!("expected encoded package choice")
     };
     assert_eq!(body, b"choices=urn%3Aproduct%3Apackage-specification%3A10");

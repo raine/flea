@@ -18,6 +18,7 @@ use serde_json::{Map, Value, json};
 #[derive(Clone)]
 struct FixtureTransport {
     responses: Arc<Mutex<VecDeque<Result<HttpResponse, flea::api::adinput::ApiError>>>>,
+    search_responses: Arc<Mutex<VecDeque<HttpResponse>>>,
     requests: Arc<Mutex<Vec<HttpRequest>>>,
 }
 
@@ -25,8 +26,14 @@ impl FixtureTransport {
     fn new(responses: impl IntoIterator<Item = HttpResponse>) -> Self {
         Self {
             responses: Arc::new(Mutex::new(responses.into_iter().map(Ok).collect())),
+            search_responses: Arc::new(Mutex::new(VecDeque::new())),
             requests: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    fn with_search_responses(self, responses: impl IntoIterator<Item = HttpResponse>) -> Self {
+        *self.search_responses.lock().unwrap() = responses.into_iter().collect();
+        self
     }
 
     fn requests(&self) -> Vec<HttpRequest> {
@@ -39,7 +46,16 @@ impl HttpTransport for FixtureTransport {
         &self,
         request: HttpRequest,
     ) -> Result<HttpResponse, flea::api::adinput::ApiError> {
+        let is_search = request.path.starts_with("/search?");
         self.requests.lock().unwrap().push(request);
+        if is_search {
+            return Ok(self
+                .search_responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| response(200, json!({ "summaries": [], "total": 0 }))));
+        }
         self.responses
             .lock()
             .unwrap()
@@ -123,8 +139,11 @@ struct HangingPollTransport {
 impl HttpTransport for HangingPollTransport {
     async fn execute(
         &self,
-        _request: HttpRequest,
+        request: HttpRequest,
     ) -> Result<HttpResponse, flea::api::adinput::ApiError> {
+        if request.path.starts_with("/search?") {
+            return Ok(response(200, json!({ "summaries": [], "total": 0 })));
+        }
         if let Some(response) = self.responses.lock().unwrap().pop_front() {
             return Ok(response);
         }
@@ -137,6 +156,9 @@ fn config() -> WorkflowConfig {
         image_processing_timeout: Duration::from_secs(1),
         image_poll_interval: Duration::ZERO,
         image_poll_limit: 2,
+        listing_observation_timeout: Duration::from_secs(1),
+        listing_poll_interval: Duration::ZERO,
+        listing_poll_limit: 0,
     }
 }
 
@@ -270,6 +292,25 @@ fn successful_publish_responses() -> Vec<HttpResponse> {
         response(200, json!({ "transactionId": 4 })),
         response(200, json!({ "listing_id": "draft-1", "state": "pending" })),
     ]
+}
+
+fn listing_collection(listing_id: &str, state: &str) -> HttpResponse {
+    response(
+        200,
+        json!({
+            "summaries": [{
+                "id": listing_id,
+                "state": { "type": state },
+                "data": {
+                    "title": "Published chair",
+                    "subtitle": "45 €",
+                    "location": "Helsinki",
+                    "image": "https://img.example/chair.jpg"
+                }
+            }],
+            "total": 1
+        }),
+    )
 }
 
 fn observed_draft(id: &str, etag: &str, values: Value) -> Value {
@@ -2212,7 +2253,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
     assert!(published.warnings.is_empty());
 
     let requests = transport.requests();
-    assert_eq!(requests.len(), 13);
+    assert_eq!(requests.len(), 14);
     let observed_sequence = requests
         .iter()
         .map(|request| (request.method.clone(), request.path.as_str()))
@@ -2220,6 +2261,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
     assert_eq!(
         observed_sequence,
         [
+            (Method::Get, "/search?limit=50&offset=0"),
             (Method::Get, "/adinput/ad/withModel/draft-1"),
             (Method::Get, "/ui/addelivery?adId=draft-1&editMode=false"),
             (Method::Get, "/categories/taxonomy"),
@@ -2242,7 +2284,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
         ]
     );
     assert_eq!(
-        requests[6].body,
+        requests[7].body,
         RequestBody::Json(json!({
             "meetup": true,
             "shipping": false,
@@ -2251,9 +2293,9 @@ async fn publish_runs_the_complete_bounded_sequence() {
             "buyNow": false
         }))
     );
-    assert_eq!(requests[3].if_match.as_deref(), Some("one"));
+    assert_eq!(requests[4].if_match.as_deref(), Some("one"));
     assert_eq!(
-        requests[3].body,
+        requests[4].body,
         RequestBody::Json(json!({
             "data": {
                 "title": "Chair",
@@ -2262,8 +2304,8 @@ async fn publish_runs_the_complete_bounded_sequence() {
             }
         }))
     );
-    assert_eq!(requests[5].if_match.as_deref(), Some("two"));
-    let RequestBody::Json(recommerce_values) = &requests[5].body else {
+    assert_eq!(requests[6].if_match.as_deref(), Some("two"));
+    let RequestBody::Json(recommerce_values) = &requests[6].body else {
         panic!("expected recommerce update")
     };
     assert_eq!(
@@ -2271,7 +2313,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
         json!([{ "price_amount": "45" }])
     );
     assert_eq!(
-        requests[9].body,
+        requests[10].body,
         RequestBody::Form(vec![(
             "choices".to_owned(),
             "urn:product:package-specification:10".to_owned()
@@ -2286,6 +2328,78 @@ async fn publish_runs_the_complete_bounded_sequence() {
 }
 
 #[tokio::test]
+async fn publish_polls_detail_then_uses_the_active_collection_fallback() {
+    let mut responses = successful_publish_responses();
+    responses[12] = response(404, json!({ "message": "detail pending" }));
+    responses.push(response(404, json!({ "message": "detail pending" })));
+    let transport = FixtureTransport::new(responses).with_search_responses([
+        response(200, json!({ "summaries": [], "total": 0 })),
+        response(200, json!({ "summaries": [], "total": 0 })),
+        listing_collection("draft-1", "ACTIVE"),
+    ]);
+    let mut workflow_config = config();
+    workflow_config.listing_poll_limit = 1;
+    let result = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), workflow_config)
+        .publish("draft-1")
+        .await
+        .unwrap();
+
+    assert_eq!(result.publication, "persisted");
+    assert!(result.mutations_performed);
+    assert_eq!(result.observed_listing["observation_source"], "collection");
+    assert_eq!(
+        result.public_url,
+        "https://www.tori.fi/recommerce/forsale/item/draft-1"
+    );
+    assert_eq!(
+        transport
+            .requests()
+            .iter()
+            .filter(|request| request.path == "/draft-1")
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn publish_uses_collection_when_detail_response_model_is_unexpected() {
+    let mut responses = successful_publish_responses();
+    responses[12] = response(200, json!({ "unexpected": true }));
+    let transport = FixtureTransport::new(responses).with_search_responses([
+        response(200, json!({ "summaries": [], "total": 0 })),
+        listing_collection("draft-1", "ACTIVE"),
+    ]);
+    let result = DraftWorkflow::new(HttpAdInputApi::new(transport), config())
+        .publish("draft-1")
+        .await
+        .unwrap();
+
+    assert_eq!(result.publication, "persisted");
+    assert_eq!(result.observed_listing["observation_source"], "collection");
+}
+
+#[tokio::test]
+async fn publish_returns_idempotent_success_for_an_already_active_listing() {
+    let transport =
+        FixtureTransport::new([]).with_search_responses([listing_collection("46031010", "ACTIVE")]);
+    let result = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config())
+        .publish("46031010")
+        .await
+        .unwrap();
+
+    assert_eq!(result.publication, "already_published");
+    assert!(!result.mutations_performed);
+    assert_eq!(result.state, "active");
+    assert_eq!(result.completed_steps, ["check_active_listing"]);
+    assert_eq!(
+        result.public_url,
+        "https://www.tori.fi/recommerce/forsale/item/46031010"
+    );
+    assert_eq!(transport.requests().len(), 1);
+    assert_eq!(transport.requests()[0].method, Method::Get);
+}
+
+#[tokio::test]
 async fn publication_model_failures_before_dispatch_are_not_mutation_uncertainty() {
     let transport =
         FixtureTransport::new([response(200, json!({ "model": { "sections": [{}] } }))]);
@@ -2296,8 +2410,13 @@ async fn publication_model_failures_before_dispatch_are_not_mutation_uncertainty
     assert_eq!(error.code, "upstream.unrecognized_model");
     assert_ne!(error.code, "mutation.uncertain");
     assert_eq!(error.source.unwrap().details.unwrap()["path"], "$");
-    assert_eq!(transport.requests().len(), 1);
-    assert_eq!(transport.requests()[0].method, Method::Get);
+    assert_eq!(transport.requests().len(), 2);
+    assert!(
+        transport
+            .requests()
+            .iter()
+            .all(|request| request.method == Method::Get)
+    );
 }
 
 #[tokio::test]
@@ -2821,11 +2940,17 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             "failure index {failure_index}"
         );
         if failure_index == 12 {
+            assert_eq!(error.code, "publication.observation_uncertain");
+            let details = error.details.unwrap();
             assert_eq!(
-                error.details.unwrap()["listing_id"],
-                "draft-1",
+                details["listing_id"], "draft-1",
                 "published listing identity must survive observation failure"
             );
+            assert_eq!(details["publication"], "persisted");
+            assert_eq!(details["observation_status"], "unavailable");
+            assert_eq!(details["observation_attempts"], 1);
+            assert!(details["observation_elapsed_ms"].is_number());
+            assert_eq!(recovery.publication, Some(RecoveryStatus::Persisted));
             assert_eq!(recovery.next_safe_actions, ["flea listing show draft-1"]);
         } else {
             assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
@@ -3024,6 +3149,9 @@ async fn publish_timeout_bounds_a_hung_poll_request() {
             image_processing_timeout: Duration::from_millis(20),
             image_poll_interval: Duration::ZERO,
             image_poll_limit: usize::MAX,
+            listing_observation_timeout: Duration::from_secs(1),
+            listing_poll_interval: Duration::ZERO,
+            listing_poll_limit: 0,
         },
     );
 
@@ -3218,7 +3346,7 @@ async fn publish_validates_the_same_source_observed_model_as_show() {
     let details = error.details.unwrap();
     assert_eq!(details["missing"][0]["field"], "delivery");
     assert_eq!(details["missing"][1]["field"], "images");
-    assert_eq!(transport.requests().len(), 3);
+    assert_eq!(transport.requests().len(), 4);
     assert!(
         transport
             .requests()

@@ -44,11 +44,18 @@ and the live smoke harness must not publish listings.
    read requests. Resolve every reported missing, invalid, pending, or
    unverifiable requirement before publication.
 6. Run `flea draft publish DRAFT_ID` once. Record the trace ID, listing ID,
-   completed steps, warnings, and returned listing state. Do not repeat the
-   command after an ambiguous failure. Inspect the draft and listing first.
-7. Run `flea listing show LISTING_ID` until Tori reports the expected observed
-   state. Verify the title, description, price, category, delivery, image order,
-   and available actions in both CLI output and the Tori website.
+   publication status, mutation flag, completed steps, warnings, and returned
+   listing state. Publication performs an authoritative active-listing check
+   before its first mutation. An active ID returns `already_published` with
+   `mutations_performed: false` and its public URL.
+7. Run `flea listing show LISTING_ID`. Detail observation falls back to the
+   published-listing collection by exact ID, so every active item from
+   `listing list` remains observable. Verify the title, description, price,
+   category, delivery, location, image order, public URL, and available actions
+   in both CLI output and the Tori website. A persisted publication whose
+   bounded observation remains unavailable returns
+   `publication.observation_uncertain`, timing and attempt details, and this
+   read-only command as its next action.
 8. Exercise one safe field change with `flea listing update`, then verify the
    preserved fields and replacement value with `flea listing show`.
 9. Remove the test listing with `flea listing delete LISTING_ID` and verify that

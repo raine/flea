@@ -5,6 +5,9 @@ pub struct WorkflowConfig {
     pub image_processing_timeout: Duration,
     pub image_poll_interval: Duration,
     pub image_poll_limit: usize,
+    pub listing_observation_timeout: Duration,
+    pub listing_poll_interval: Duration,
+    pub listing_poll_limit: usize,
 }
 
 impl Default for WorkflowConfig {
@@ -13,6 +16,9 @@ impl Default for WorkflowConfig {
             image_processing_timeout: Duration::from_secs(120),
             image_poll_interval: Duration::from_secs(2),
             image_poll_limit: 60,
+            listing_observation_timeout: Duration::from_secs(15),
+            listing_poll_interval: Duration::from_secs(1),
+            listing_poll_limit: 15,
         }
     }
 }
@@ -717,6 +723,9 @@ pub struct PublishResult {
     pub listing_id: String,
     pub revision: String,
     pub state: String,
+    pub publication: String,
+    pub mutations_performed: bool,
+    pub public_url: String,
     pub completed_steps: Vec<String>,
     #[serde(default)]
     pub warnings: Vec<String>,

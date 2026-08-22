@@ -337,6 +337,10 @@ pub struct UpstreamSummaryData {
     pub subtitle: String,
     #[serde(default)]
     pub image: String,
+    #[serde(default, alias = "area", alias = "place")]
+    pub location: String,
+    #[serde(default, alias = "url", alias = "publicUrl")]
+    pub public_url: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -573,16 +577,90 @@ impl<'a> Listings<'a> {
 
     pub fn show(&self, listing_id: &str) -> Result<ListingDetail, AppError> {
         validate_id(listing_id)?;
-        self.api
-            .listing(listing_id)
-            .map_err(|error| {
-                listing_error(
-                    error,
-                    Some(listing_id),
-                    RetryContext::read(OperationMethod::Get),
-                )
-            })
-            .and_then(|listing| normalize_listing_detail_for_id(listing, listing_id))
+        match self.api.listing(listing_id) {
+            Ok(listing) => match normalize_listing_detail_for_id(listing, listing_id) {
+                Ok(detail) => Ok(detail),
+                Err(detail_error) => match self.find_summary(listing_id) {
+                    Ok(Some(summary)) => Ok(summary_detail(summary)),
+                    Ok(None) | Err(_) => Err(detail_error),
+                },
+            },
+            Err(detail_error) => {
+                let summary = self.find_summary(listing_id);
+                match summary {
+                    Ok(Some(summary)) => Ok(summary_detail(summary)),
+                    Ok(None) => Err(listing_error(
+                        detail_error,
+                        Some(listing_id),
+                        RetryContext::read(OperationMethod::Get),
+                    )),
+                    Err(collection_error) => {
+                        let classification = listing_error(
+                            collection_error,
+                            Some(listing_id),
+                            RetryContext::read(OperationMethod::Get),
+                        );
+                        let mut error = AppError::upstream(
+                            "listing.observation_delayed",
+                            "listing identity could not be reconciled between detail and collection observations",
+                        )
+                        .retry_classification(crate::retry::RetryClassification {
+                            upstream_transient: classification.upstream_transient,
+                            safe_to_retry: true,
+                        });
+                        error.details = Some(Box::new(json!({
+                            "listing_id": listing_id,
+                            "detail_status": detail_observation_status(&detail_error),
+                            "collection_status": "unavailable",
+                            "observation_attempts": 2,
+                        })));
+                        error
+                            .next_actions
+                            .push(crate::domain::envelope::NextAction {
+                                command: format!("flea listing show {listing_id}"),
+                            });
+                        Err(error)
+                    }
+                }
+            }
+        }
+    }
+
+    fn find_summary(&self, listing_id: &str) -> Result<Option<ListingSummary>, ListingsApiError> {
+        let mut offset = 0;
+        let mut expected_total = None;
+        for _ in 0..MAX_LISTING_PAGES {
+            let page = self.api.listing_page(offset, LISTING_PAGE_SIZE)?;
+            let total = *expected_total.get_or_insert(page.total);
+            if page.total != total {
+                return Err(ListingsApiError::UnexpectedResponse(
+                    "listing total changed during identity reconciliation".to_owned(),
+                ));
+            }
+            let page_len = page.summaries.len();
+            for summary in page.summaries {
+                let id = summary_id(&summary.id)?;
+                if id == listing_id {
+                    return normalize_summary(summary).map(Some).map_err(|_| {
+                        ListingsApiError::UnexpectedResponse(
+                            "matching listing summary was malformed".to_owned(),
+                        )
+                    });
+                }
+            }
+            offset += page_len;
+            if offset >= total {
+                return Ok(None);
+            }
+            if page_len == 0 {
+                return Err(ListingsApiError::UnexpectedResponse(
+                    "listing pagination ended before the reported total".to_owned(),
+                ));
+            }
+        }
+        Err(ListingsApiError::UnexpectedResponse(
+            "listing identity reconciliation exceeded its safety bound".to_owned(),
+        ))
     }
 
     pub fn snapshot(&self, listing_id: &str) -> Result<ListingSnapshot, AppError> {
@@ -965,11 +1043,14 @@ fn flatten_categories(roots: &[UpstreamCategory]) -> Result<Vec<Category>, Strin
 }
 
 fn normalize_summary(raw: UpstreamListingSummary) -> Result<ListingSummary, AppError> {
+    let listing_id = value_id(&raw.id)?;
     Ok(ListingSummary {
-        listing_id: value_id(&raw.id)?,
+        public_url: public_listing_url(&listing_id, &raw.data.public_url),
+        listing_id,
         title: raw.data.title,
         price: nonempty(raw.data.subtitle),
         state: normalize_state(&raw.state),
+        location: nonempty(raw.data.location),
         image_url: nonempty(raw.data.image),
         created_at: raw.created,
         updated_at: raw.updated,
@@ -988,20 +1069,7 @@ fn normalize_listing_detail_for_id(
     if listing_id != expected_id {
         return Err(unexpected("listing detail returned a different ID"));
     }
-    if raw.fields.is_empty() {
-        if !raw.data.title.is_empty() {
-            raw.fields
-                .insert("title".to_owned(), Value::String(raw.data.title));
-        }
-        if !raw.data.subtitle.is_empty() {
-            raw.fields
-                .insert("subtitle".to_owned(), Value::String(raw.data.subtitle));
-        }
-        if !raw.data.image.is_empty() {
-            raw.fields
-                .insert("image".to_owned(), Value::String(raw.data.image));
-        }
-    }
+    merge_summary_fields(&mut raw.fields, &raw.data, &listing_id);
     Ok(ListingDetail {
         listing_id,
         state: normalize_state(&raw.state),
@@ -1009,6 +1077,77 @@ fn normalize_listing_detail_for_id(
         statistics: normalize_statistics(&raw.external_data),
         actions: raw.actions.into_iter().map(normalize_action).collect(),
     })
+}
+
+fn summary_detail(summary: ListingSummary) -> ListingDetail {
+    let mut fields = BTreeMap::new();
+    fields.insert("title".to_owned(), Value::String(summary.title));
+    if let Some(price) = summary.price {
+        fields.insert("price".to_owned(), Value::String(price));
+    }
+    if let Some(location) = summary.location {
+        fields.insert("location".to_owned(), Value::String(location));
+    }
+    if let Some(image) = summary.image_url {
+        fields.insert("image".to_owned(), Value::String(image));
+    }
+    fields.insert("public_url".to_owned(), Value::String(summary.public_url));
+    ListingDetail {
+        listing_id: summary.listing_id,
+        state: summary.state,
+        fields,
+        statistics: summary.statistics,
+        actions: summary.actions,
+    }
+}
+
+fn merge_summary_fields(
+    fields: &mut BTreeMap<String, Value>,
+    data: &UpstreamSummaryData,
+    listing_id: &str,
+) {
+    for (key, value) in [
+        ("title", data.title.as_str()),
+        ("price", data.subtitle.as_str()),
+        ("location", data.location.as_str()),
+        ("image", data.image.as_str()),
+    ] {
+        if !value.is_empty() {
+            fields
+                .entry(key.to_owned())
+                .or_insert_with(|| Value::String(value.to_owned()));
+        }
+    }
+    fields
+        .entry("public_url".to_owned())
+        .or_insert_with(|| Value::String(public_listing_url(listing_id, &data.public_url)));
+}
+
+fn public_listing_url(listing_id: &str, upstream: &str) -> String {
+    if upstream.starts_with("https://www.tori.fi/") {
+        upstream.to_owned()
+    } else {
+        format!("https://www.tori.fi/recommerce/forsale/item/{listing_id}")
+    }
+}
+
+fn detail_observation_status(error: &ListingsApiError) -> &'static str {
+    match error {
+        ListingsApiError::NotFound => "not_found",
+        ListingsApiError::UnexpectedResponse(_) => "unrecognized_model",
+        ListingsApiError::Transport | ListingsApiError::Upstream(_) => "unavailable",
+        _ => "rejected",
+    }
+}
+
+fn summary_id(value: &Value) -> Result<String, ListingsApiError> {
+    match value {
+        Value::String(value) if !value.is_empty() => Ok(value.clone()),
+        Value::Number(value) => Ok(value.to_string()),
+        _ => Err(ListingsApiError::UnexpectedResponse(
+            "listing summary has an invalid ID".to_owned(),
+        )),
+    }
 }
 
 fn normalize_listing_for_id(
@@ -1327,6 +1466,7 @@ fn listing_mutation_error(error: ListingsApiError, listing_id: &str, operation: 
 }
 
 fn upstream_error(error: ListingsApiError, context: RetryContext) -> AppError {
+    let unrecognized_model = matches!(error, ListingsApiError::UnexpectedResponse(_));
     let (code, message, failure) = match error {
         ListingsApiError::Transport => (
             "upstream.request_failed",
@@ -1349,8 +1489,15 @@ fn upstream_error(error: ListingsApiError, context: RetryContext) -> AppError {
             FailureKind::Local,
         ),
     };
-    AppError::new(code, message, ExitClass::Upstream)
-        .retry_classification(classify(failure, context))
+    let mut error = AppError::new(code, message, ExitClass::Upstream)
+        .retry_classification(classify(failure, context));
+    if unrecognized_model {
+        error.details = Some(Box::new(json!({
+            "response_model": "unrecognized",
+            "response_status_class": "success",
+        })));
+    }
+    error
 }
 
 fn unexpected(message: &str) -> AppError {

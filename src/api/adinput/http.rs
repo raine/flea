@@ -372,7 +372,8 @@ fn service_for_path(path: &str) -> &'static str {
         compatibility::SERVICE_ORDER_PAYMENT
     } else if path.starts_with("/tracking/") {
         compatibility::SERVICE_BILLING_TRACKING
-    } else if path.starts_with("/my/listings/")
+    } else if path.starts_with("/search?")
+        || path.starts_with("/my/listings/")
         || path.starts_with("/listings/")
         || path.strip_prefix('/').is_some_and(|id| {
             !id.is_empty()
