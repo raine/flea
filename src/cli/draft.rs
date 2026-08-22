@@ -70,7 +70,7 @@ pub struct ListingInputArgs {
     /// Seller postal code.
     #[arg(long)]
     pub postal_code: Option<String>,
-    /// Delivery machine value. Repeat for multiple values.
+    /// Delivery machine value returned by draft inspection.
     #[arg(long, value_name = "VALUE")]
     pub delivery: Vec<String>,
     /// Image file path. Repeat to preserve image order.
@@ -574,6 +574,7 @@ fn workflow_error(error: WorkflowError) -> AppError {
                 || matches!(
                     step.as_str(),
                     "attach_images"
+                        | "update_item_fields"
                         | "patch_item_fields"
                         | "submit_adinput"
                         | "apply_delivery"
@@ -584,6 +585,8 @@ fn workflow_error(error: WorkflowError) -> AppError {
     let exit_class = match error.code.as_str() {
         "draft.conflict" => ExitClass::Conflict,
         "draft.validation_failed"
+        | "draft.invalid_delivery"
+        | "draft.delivery_options_unavailable"
         | "draft.invalid_image"
         | "draft.invalid_price"
         | "draft.price_trade_type_conflict" => ExitClass::Validation,

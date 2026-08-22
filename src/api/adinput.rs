@@ -82,13 +82,26 @@ impl fmt::Debug for RequestBody {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct HttpRequest {
     pub method: Method,
     pub path: String,
     pub if_match: Option<String>,
     pub retry: RetryPolicy,
     pub body: RequestBody,
+}
+
+impl fmt::Debug for HttpRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HttpRequest")
+            .field("method", &self.method)
+            .field("request_target", &"[REDACTED]")
+            .field("has_if_match", &self.if_match.is_some())
+            .field("retry", &self.retry)
+            .field("body", &self.body)
+            .finish()
+    }
 }
 
 impl HttpRequest {
@@ -289,7 +302,7 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
 fn service_for_path(path: &str) -> &'static str {
     if path.ends_with("/upload") || path.ends_with("/update") {
         ""
-    } else if path.contains("/delivery") {
+    } else if path.starts_with("/ui/addelivery") || path.contains("/delivery") {
         compatibility::SERVICE_DELIVERY
     } else if path.contains("/products") || path.contains("/publish") {
         compatibility::SERVICE_ORDER_PAYMENT
@@ -345,6 +358,43 @@ pub struct FieldOption {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DeliveryOption {
+    pub value: String,
+    pub label: String,
+    pub mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_size: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DraftDelivery {
+    pub source: String,
+    pub available: bool,
+    #[serde(default)]
+    pub options: Vec<DeliveryOption>,
+    #[serde(default)]
+    pub selected: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct DeliveryComposer {
+    pub state: DraftDelivery,
+    source: Value,
+}
+
+impl fmt::Debug for DeliveryComposer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeliveryComposer")
+            .field("state", &self.state)
+            .field("source", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DraftState {
     pub draft_id: String,
     #[serde(default)]
@@ -363,6 +413,8 @@ pub struct DraftState {
     pub cleared_fields: Vec<String>,
     #[serde(default)]
     pub predictions: Vec<CategoryPrediction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DraftDelivery>,
 }
 
 impl DraftState {
@@ -472,11 +524,12 @@ pub trait AdInputApi: Send + Sync {
         draft_id: &str,
     ) -> Result<Vec<CategoryPrediction>, ApiError>;
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError>;
+    async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError>;
     async fn apply_delivery(
         &self,
         draft_id: &str,
-        revision: &str,
-        delivery: &Value,
+        composer: &DeliveryComposer,
+        delivery: &str,
     ) -> Result<(), ApiError>;
     async fn product_context(
         &self,
@@ -664,10 +717,14 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         state: &DraftState,
     ) -> Result<DraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
+        let mut body = serde_json::to_value(state).expect("draft state serializes");
+        if let Some(body) = body.as_object_mut() {
+            body.remove("delivery");
+        }
         let mut request = HttpRequest::mutation(
             Method::Put,
             format!("/drafts/{draft_id}/adinput"),
-            RequestBody::Json(serde_json::to_value(state).expect("draft state serializes")),
+            RequestBody::Json(body),
         );
         request.if_match = Some(etag.to_owned());
         self.draft_request(request).await
@@ -807,17 +864,151 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             .map_err(|error| ApiError::new("upstream.unexpected_response", error.to_string()))
     }
 
+    async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
+        let draft_id_query: String =
+            url::form_urlencoded::byte_serialize(draft_id.as_bytes()).collect();
+        let response = self
+            .json(HttpRequest::read(format!(
+                "/ui/addelivery?adId={draft_id_query}&editMode=false"
+            )))
+            .await?;
+        Ok(normalize_delivery_composer(response.body))
+    }
+
     async fn apply_delivery(
         &self,
         draft_id: &str,
-        revision: &str,
-        delivery: &Value,
+        composer: &DeliveryComposer,
+        delivery: &str,
     ) -> Result<(), ApiError> {
         validate_resource_id(draft_id, "draft")?;
+        let body = if delivery == "pickup" {
+            json!({
+                "meetup": true,
+                "shipping": false,
+                "sellerPaysShipping": false,
+                "client": "ANDROID",
+                "buyNow": false
+            })
+        } else {
+            let package_size = composer
+                .state
+                .options
+                .iter()
+                .find(|option| option.value == delivery && option.mode == "shipping")
+                .and_then(|option| option.package_size.as_deref())
+                .ok_or_else(|| invalid_delivery_api(&composer.state, delivery))?;
+            let address = composer
+                .source
+                .pointer("/sections/shipping/address")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    shipping_unavailable(&composer.state, "seller address is missing")
+                })?;
+            let required_string = |key: &str| {
+                address
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        shipping_unavailable(
+                            &composer.state,
+                            &format!("seller address field `{key}` is missing"),
+                        )
+                    })
+            };
+            let postal_code = required_string("postalCode")?;
+            let city = required_string("city")?;
+            let name = required_string("name")?;
+            let phone_number = address
+                .get("phoneNumber")
+                .or_else(|| address.get("mobilePhone"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    shipping_unavailable(&composer.state, "seller phone number is missing")
+                })?;
+            let street_name = address
+                .get("streetName")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let street_no = address
+                .get("streetNo")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            query.append_pair("streetName", street_name);
+            query.append_pair("streetNo", street_no);
+            query.append_pair("postalCode", &postal_code);
+            query.append_pair("city", &city);
+            query.append_pair("adId", draft_id);
+            query.append_pair("size", package_size);
+            query.append_pair("name", &name);
+            let response = self
+                .json(HttpRequest::read(format!(
+                    "/ui/addelivery/shipping?{}",
+                    query.finish()
+                )))
+                .await?;
+            let products = shipping_products(&response.body);
+            if products.is_empty() {
+                return Err(shipping_unavailable(
+                    &composer.state,
+                    "no shipping providers support the selected package size",
+                ));
+            }
+            let context = composer.source.get("context").and_then(Value::as_object);
+            let seller_pays_shipping = context
+                .and_then(|context| context.get("sellerPaysShipping"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let buy_now = context
+                .and_then(|context| {
+                    context
+                        .get("buyNow")
+                        .and_then(Value::as_bool)
+                        .filter(|selected| *selected)
+                        .or_else(|| context.get("defaultBuyNow").and_then(Value::as_bool))
+                })
+                .unwrap_or(false);
+            let save_address = composer
+                .source
+                .pointer("/sections/shipping/checkBoxes/saveAddress/checked")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let shipping_info = json!({
+                "size": package_size,
+                "streetName": street_name,
+                "streetNo": street_no,
+                "houseType": address.get("houseType").cloned().unwrap_or(Value::Null),
+                "floorType": address.get("floorType").cloned().unwrap_or(Value::Null),
+                "floorNo": address.get("floorNo").cloned().unwrap_or(Value::Null),
+                "flatNo": address.get("flatNo").cloned().unwrap_or(Value::Null),
+                "deliveryPointId": address.get("deliveryPointId").cloned().unwrap_or(Value::Null),
+                "postalCode": postal_code,
+                "city": city,
+                "products": products,
+                "saveAddress": save_address,
+                "address": address.get("address").cloned().unwrap_or(Value::Null),
+                "name": name,
+                "phoneNumber": phone_number
+            });
+            json!({
+                "meetup": false,
+                "shipping": true,
+                "sellerPaysShipping": seller_pays_shipping,
+                "shippingInfo": shipping_info,
+                "client": "ANDROID",
+                "buyNow": buy_now
+            })
+        };
         self.json(HttpRequest::mutation(
-            Method::Put,
-            format!("/drafts/{draft_id}/delivery"),
-            RequestBody::Json(json!({ "revision": revision, "delivery": delivery })),
+            Method::Post,
+            format!("/ads/{draft_id}/delivery"),
+            RequestBody::Json(body),
         ))
         .await
         .map(|_| ())
@@ -1001,6 +1192,138 @@ fn normalize_item_update(response: HttpResponse, draft_id: &str) -> Result<Strin
                 "successful response did not contain an authoritative ETag",
             )
         })
+}
+
+fn normalize_delivery_composer(source: Value) -> DeliveryComposer {
+    let mut options = Vec::new();
+    if let Some(meetup) = source.pointer("/sections/deliveryOptions/meetup") {
+        options.push(DeliveryOption {
+            value: "pickup".to_owned(),
+            label: meetup
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Pickup or direct arrangement")
+                .to_owned(),
+            mode: "pickup".to_owned(),
+            package_size: None,
+        });
+    }
+    if source
+        .pointer("/sections/deliveryOptions/shipping")
+        .is_some()
+    {
+        let mut shipping = source
+            .pointer("/sections/shipping/packageSizes")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, size)| {
+                let package_size = size.get("size")?.as_str()?.trim();
+                if package_size.is_empty() {
+                    return None;
+                }
+                let normalized = package_size.to_ascii_lowercase();
+                Some(DeliveryOption {
+                    value: format!("shipping:{normalized}"),
+                    label: size
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or(package_size)
+                        .to_owned(),
+                    mode: "shipping".to_owned(),
+                    package_size: Some(package_size.to_owned()),
+                })
+            })
+            .collect::<Vec<_>>();
+        shipping.sort_by_key(|option| match option.package_size.as_deref() {
+            Some("SMALL") => 0,
+            Some("MEDIUM") => 1,
+            Some("LARGE") => 2,
+            _ => 3,
+        });
+        options.extend(shipping);
+    }
+    let context = source.get("context").and_then(Value::as_object);
+    let selected = if context
+        .and_then(|context| context.get("shipping"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        context
+            .and_then(|context| context.get("packageSize"))
+            .and_then(Value::as_str)
+            .map(|size| vec![format!("shipping:{}", size.to_ascii_lowercase())])
+            .unwrap_or_default()
+    } else if context
+        .and_then(|context| context.get("meetup"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        vec!["pickup".to_owned()]
+    } else {
+        Vec::new()
+    };
+    let available = !options.is_empty();
+    DeliveryComposer {
+        state: DraftDelivery {
+            source: "remote_delivery_composer".to_owned(),
+            available,
+            options,
+            selected,
+            unavailable_reason: (!available)
+                .then(|| "Tori returned no delivery options for this draft".to_owned()),
+        },
+        source,
+    }
+}
+
+fn shipping_products(body: &Value) -> Vec<String> {
+    let mut products = body
+        .pointer("/sections/shipping/providers/options")
+        .or_else(|| body.pointer("/sections/providers/options"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|option| option.get("product").and_then(Value::as_str))
+        .filter(|product| !product.trim().is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    products.sort();
+    products.dedup();
+    products
+}
+
+fn allowed_delivery_values(state: &DraftDelivery) -> Vec<String> {
+    state
+        .options
+        .iter()
+        .map(|option| option.value.clone())
+        .collect()
+}
+
+fn invalid_delivery_api(state: &DraftDelivery, requested: &str) -> ApiError {
+    let mut error = ApiError::new(
+        "draft.invalid_delivery",
+        "The requested delivery value is unavailable for this draft",
+    );
+    error.details = Some(Box::new(json!({
+        "requested_values": [requested],
+        "allowed_values": allowed_delivery_values(state),
+    })));
+    error
+}
+
+fn shipping_unavailable(state: &DraftDelivery, reason: &str) -> ApiError {
+    let mut error = ApiError::new(
+        "draft.delivery_options_unavailable",
+        "Shipping cannot be configured from the current delivery composer",
+    );
+    error.details = Some(Box::new(json!({
+        "reason": reason,
+        "allowed_values": allowed_delivery_values(state),
+        "recovery_guidance": "Open the draft delivery composer in Tori and complete the seller address"
+    })));
+    error
 }
 
 fn safe_content_type(value: &str) -> String {
@@ -1189,6 +1512,7 @@ fn normalize_draft_state(body: Value, response_etag: Option<&str>) -> Result<Dra
         images,
         cleared_fields: Vec::new(),
         predictions: Vec::new(),
+        delivery: None,
     })
 }
 
@@ -1352,6 +1676,55 @@ impl WorkflowError {
             details: Some(json!({ "missing_fields": missing })),
         }
     }
+
+    fn delivery_validation(
+        draft_id: &str,
+        completed_steps: &[String],
+        delivery: &DraftDelivery,
+        requested: Vec<String>,
+    ) -> Self {
+        let allowed = allowed_delivery_values(delivery);
+        let next_safe_actions = allowed
+            .first()
+            .map(|value| format!("flea draft update {draft_id} --delivery {value}"))
+            .into_iter()
+            .chain(std::iter::once(format!("flea draft show {draft_id}")))
+            .collect();
+        let missing = requested.is_empty();
+        Self {
+            code: if missing {
+                "draft.validation_failed".to_owned()
+            } else {
+                "draft.invalid_delivery".to_owned()
+            },
+            message: if missing {
+                "An explicit delivery selection is required".to_owned()
+            } else {
+                "The requested delivery value is unavailable for this draft".to_owned()
+            },
+            source: None,
+            recovery: Some(Recovery {
+                draft_id: draft_id.to_owned(),
+                listing_id: None,
+                completed_steps: completed_steps.to_vec(),
+                retryable: false,
+                next_safe_actions,
+                fresh_state: None,
+            }),
+            details: Some(json!({
+                "missing_fields": if missing { vec!["delivery"] } else { Vec::<&str>::new() },
+                "requested_values": requested,
+                "allowed_values": allowed,
+                "options_available": delivery.available,
+                "unavailable_reason": delivery.unavailable_reason,
+                "recovery_guidance": if delivery.available {
+                    "Select one of the allowed machine values"
+                } else {
+                    "Open the draft delivery composer in Tori and make delivery options available"
+                },
+            })),
+        }
+    }
 }
 
 impl fmt::Debug for WorkflowError {
@@ -1389,6 +1762,18 @@ impl std::error::Error for WorkflowError {}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CreateResult {
     pub draft: DraftState,
+    pub completed_steps: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct UpdateResult {
+    pub draft: DraftState,
+    pub requested_fields: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_delivery: Vec<String>,
+    pub persisted_fields: Vec<String>,
+    pub ignored_fields: Vec<String>,
+    pub etag_changed: bool,
     pub completed_steps: Vec<String>,
 }
 
@@ -1468,6 +1853,70 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         }
     }
 
+    async fn delivery_composer(
+        &self,
+        draft_id: &str,
+        completed: &[String],
+    ) -> Result<DeliveryComposer, WorkflowError> {
+        self.api
+            .delivery_composer(draft_id)
+            .await
+            .map_err(|error| WorkflowError::for_draft(draft_id, completed, error, true))
+    }
+
+    async fn apply_delivery_selection(
+        &self,
+        mut state: DraftState,
+        requested: &Value,
+        completed: &mut Vec<String>,
+    ) -> Result<DraftState, WorkflowError> {
+        let draft_id = state.draft_id.clone();
+        let composer = self.delivery_composer(&draft_id, completed).await?;
+        completed.push("fetch_delivery_options".to_owned());
+        let requested_values = delivery_values(requested).unwrap_or_default();
+        let selected = requested_values
+            .first()
+            .filter(|_| requested_values.len() == 1)
+            .filter(|requested| {
+                composer
+                    .state
+                    .options
+                    .iter()
+                    .any(|option| option.value.as_str() == requested.as_str())
+            })
+            .cloned()
+            .ok_or_else(|| {
+                WorkflowError::delivery_validation(
+                    &draft_id,
+                    completed,
+                    &composer.state,
+                    requested_values.clone(),
+                )
+            })?;
+        self.api
+            .apply_delivery(&draft_id, &composer, &selected)
+            .await
+            .map_err(|error| WorkflowError::for_draft(&draft_id, completed, error, false))?;
+        completed.push("apply_delivery".to_owned());
+        let observed = self.delivery_composer(&draft_id, completed).await?;
+        if observed.state.selected != [selected.clone()] {
+            let mut error = ApiError::new(
+                "mutation.uncertain",
+                "Tori accepted the delivery mutation without returning the requested state",
+            );
+            error.details = Some(Box::new(json!({
+                "requested_values": [selected],
+                "observed_values": observed.state.selected.clone(),
+                "allowed_values": allowed_delivery_values(&observed.state),
+                "recovery_guidance": format!("Inspect the draft with `flea draft show {draft_id}`; do not repeat publication")
+            })));
+            return Err(WorkflowError::for_draft(&draft_id, completed, error, false));
+        }
+        completed.push("observe_delivery".to_owned());
+        state.delivery = Some(observed.state);
+        Ok(state)
+    }
+
     pub async fn create(
         &self,
         values: Map<String, Value>,
@@ -1490,6 +1939,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
     ) -> Result<CreateResult, WorkflowError> {
         let price = requested_sale_price(&values).map_err(WorkflowError::input)?;
         values.remove("price");
+        let delivery = values.remove("delivery");
         let mut draft = self
             .api
             .create_draft()
@@ -1539,6 +1989,11 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 .add_prepared_images(&draft, images, &mut completed)
                 .await?;
         }
+        if let Some(delivery) = delivery {
+            draft = self
+                .apply_delivery_selection(draft, &delivery, &mut completed)
+                .await?;
+        }
         Ok(CreateResult {
             draft,
             completed_steps: completed,
@@ -1562,8 +2017,10 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .await
             .map_err(WorkflowError::before_creation)?;
         let mut completed = vec!["load_source_listing".to_owned(), "create_draft".to_owned()];
+        let mut seed_values = seed.values;
+        let delivery = seed_values.remove("delivery");
         let mut copied_values = draft.values.clone();
-        copied_values.extend(seed.values);
+        copied_values.extend(seed_values);
         draft = self
             .api
             .update_item(&draft.draft_id, &draft.etag, &copied_values)
@@ -1623,6 +2080,12 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 })?;
             completed.push("attach_images".to_owned());
         }
+        if let Some(delivery) = delivery {
+            draft = self
+                .apply_delivery_selection(draft, &delivery, &mut completed)
+                .await
+                .map_err(|error| error.with_listing_id(listing_id))?;
+        }
         Ok(CreateResult {
             draft,
             completed_steps: completed,
@@ -1635,15 +2098,16 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .get_draft(draft_id)
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
+        let mut completed = vec!["fetch_draft".to_owned()];
         if state.category_is_unset() && !state.images.is_empty() {
             state.predictions = self
                 .api
                 .category_predictions(draft_id)
                 .await
-                .map_err(|error| {
-                    WorkflowError::for_draft(draft_id, &["fetch_draft".to_owned()], error, true)
-                })?;
+                .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
+            completed.push("fetch_category_predictions".to_owned());
         }
+        state.delivery = Some(self.delivery_composer(draft_id, &completed).await?.state);
         Ok(state)
     }
 
@@ -1651,7 +2115,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         &self,
         draft_id: &str,
         patch: &Map<String, Value>,
-    ) -> Result<DraftState, WorkflowError> {
+    ) -> Result<UpdateResult, WorkflowError> {
         if let Some(price) = patch.get("price") {
             validate_price(price).map_err(WorkflowError::input)?;
         }
@@ -1663,17 +2127,25 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         let mut completed = vec!["fetch_draft".to_owned()];
         let mut values = current.values.clone();
         values.extend(patch.clone());
+        values.remove("delivery");
         let price = if patch.contains_key("price") {
             requested_sale_price(&values)
                 .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?
         } else {
             None
         };
-        let mut field_patch = patch.clone();
-        field_patch.remove("price");
-        let mut state = current;
+        let mut item_patch = patch.clone();
+        let delivery = item_patch.remove("delivery");
+        item_patch.remove("price");
+        let requested_delivery = delivery
+            .as_ref()
+            .and_then(delivery_values)
+            .unwrap_or_default();
+        let mut state = current.clone();
+        let mut persisted_fields = Vec::new();
+        let mut ignored_fields = Vec::new();
 
-        if !field_patch.is_empty() {
+        if !item_patch.is_empty() {
             if price.is_some() {
                 values.remove("price");
             }
@@ -1686,7 +2158,14 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     return Err(WorkflowError::for_draft(draft_id, &completed, error, false));
                 }
             };
-            completed.push("apply_fields".to_owned());
+            completed.push("update_item_fields".to_owned());
+            for (field, requested) in &item_patch {
+                if state.values.get(field) == Some(requested) {
+                    persisted_fields.push(field.clone());
+                } else {
+                    ignored_fields.push(field.clone());
+                }
+            }
         }
 
         if let Some(price) = price {
@@ -1705,8 +2184,30 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             }
             completed.push("apply_price".to_owned());
             state = self.observe_price(draft_id, &price, &completed).await?;
+            completed.push("observe_price".to_owned());
+            persisted_fields.push("price".to_owned());
         }
-        Ok(state)
+
+        if let Some(delivery) = delivery {
+            state = self
+                .apply_delivery_selection(state, &delivery, &mut completed)
+                .await?;
+            persisted_fields.push("delivery".to_owned());
+        }
+        let etag_changed = state.etag != current.etag;
+        let mut requested_fields = patch.keys().cloned().collect::<Vec<_>>();
+        requested_fields.sort();
+        persisted_fields.sort();
+        ignored_fields.sort();
+        Ok(UpdateResult {
+            draft: state,
+            requested_fields,
+            requested_delivery,
+            persisted_fields,
+            ignored_fields,
+            etag_changed,
+            completed_steps: completed,
+        })
     }
 
     async fn update_conflict(&self, draft_id: &str, completed: &[String]) -> WorkflowError {
@@ -1858,26 +2359,40 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, true))?;
         completed.push("fetch_draft".to_owned());
+        let composer = self.delivery_composer(draft_id, &completed).await?;
+        state.delivery = Some(composer.state.clone());
+        completed.push("fetch_delivery_options".to_owned());
 
         let missing = missing_required_fields(&state);
         if !missing.is_empty() {
             return Err(WorkflowError::validation(draft_id, &completed, missing));
         }
-        let delivery = state.values.get("delivery").cloned().ok_or_else(|| {
-            WorkflowError::validation(draft_id, &completed, vec!["delivery".to_owned()])
-        })?;
-        if !delivery_is_explicit(&delivery) {
-            return Err(WorkflowError::validation(
-                draft_id,
-                &completed,
-                vec!["delivery".to_owned()],
-            ));
-        }
+        let requested_delivery = composer.state.selected.clone();
+        let delivery = requested_delivery
+            .first()
+            .filter(|_| requested_delivery.len() == 1)
+            .filter(|requested| {
+                composer
+                    .state
+                    .options
+                    .iter()
+                    .any(|option| option.value.as_str() == requested.as_str())
+            })
+            .cloned()
+            .ok_or_else(|| {
+                WorkflowError::delivery_validation(
+                    draft_id,
+                    &completed,
+                    &composer.state,
+                    requested_delivery,
+                )
+            })?;
         completed.push("validate".to_owned());
 
         state = self.wait_for_images(state, &completed).await?;
         completed.push("wait_for_images".to_owned());
 
+        state.values.remove("delivery");
         self.api
             .update_item(draft_id, &state.etag, &state.values)
             .await
@@ -1912,10 +2427,25 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             })?
             .to_owned();
         self.api
-            .apply_delivery(draft_id, &revision, &delivery)
+            .apply_delivery(draft_id, &composer, &delivery)
             .await
             .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?;
         completed.push("apply_delivery".to_owned());
+        let observed_delivery = self.delivery_composer(draft_id, &completed).await?;
+        if observed_delivery.state.selected != [delivery.clone()] {
+            let mut error = ApiError::new(
+                "mutation.uncertain",
+                "Tori accepted the delivery mutation without returning the requested state",
+            );
+            error.details = Some(Box::new(json!({
+                "requested_values": [delivery],
+                "observed_values": observed_delivery.state.selected.clone(),
+                "allowed_values": allowed_delivery_values(&observed_delivery.state),
+                "recovery_guidance": format!("Inspect the draft with `flea draft show {draft_id}`; do not repeat publication")
+            })));
+            return Err(WorkflowError::for_draft(draft_id, &completed, error, false));
+        }
+        completed.push("observe_delivery".to_owned());
 
         let context = self
             .api
@@ -2345,6 +2875,7 @@ fn missing_required_fields(state: &DraftState) -> Vec<String> {
     state
         .required_fields
         .iter()
+        .filter(|key| key.as_str() != "delivery")
         .filter(|key| {
             state
                 .values
@@ -2355,14 +2886,19 @@ fn missing_required_fields(state: &DraftState) -> Vec<String> {
         .collect()
 }
 
-fn delivery_is_explicit(delivery: &Value) -> bool {
+fn delivery_values(delivery: &Value) -> Option<Vec<String>> {
     match delivery {
-        Value::String(value) => !value.trim().is_empty(),
-        Value::Array(values) => !values.is_empty() && values.iter().all(delivery_is_explicit),
-        Value::Object(values) => {
-            !values.is_empty() && values.values().all(|value| !value.is_null())
-        }
-        _ => false,
+        Value::String(value) if !value.trim().is_empty() => Some(vec![value.clone()]),
+        Value::Array(values) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(str::to_owned)
+            })
+            .collect(),
+        _ => None,
     }
 }
 

@@ -99,7 +99,7 @@ fn draft(etag: &str, extra: Value) -> Value {
 }
 
 struct HangingPollTransport {
-    first: Mutex<Option<HttpResponse>>,
+    responses: Mutex<VecDeque<HttpResponse>>,
 }
 
 impl HttpTransport for HangingPollTransport {
@@ -107,7 +107,7 @@ impl HttpTransport for HangingPollTransport {
         &self,
         _request: HttpRequest,
     ) -> Result<HttpResponse, flea::api::adinput::ApiError> {
-        if let Some(response) = self.first.lock().unwrap().take() {
+        if let Some(response) = self.responses.lock().unwrap().pop_front() {
             return Ok(response);
         }
         std::future::pending().await
@@ -122,14 +122,71 @@ fn config() -> WorkflowConfig {
     }
 }
 
+fn delivery_page(selected: Option<&str>) -> Value {
+    let shipping = selected.is_some_and(|value| value.starts_with("shipping:"));
+    let meetup = selected == Some("pickup");
+    let package_size = selected
+        .and_then(|value| value.strip_prefix("shipping:"))
+        .map(str::to_ascii_uppercase);
+    json!({
+        "context": {
+            "adId": "draft-1",
+            "shipping": shipping,
+            "meetup": meetup,
+            "packageSize": package_size,
+            "shippingProducts": [],
+            "sellerPaysShipping": false,
+            "buyNow": false,
+            "defaultBuyNow": true
+        },
+        "sections": {
+            "deliveryOptions": {
+                "shipping": { "title": "Tori delivery" },
+                "meetup": { "title": "Pickup or direct arrangement" }
+            },
+            "shipping": {
+                "address": {
+                    "name": "Fixture Seller",
+                    "address": "Fixture address 1",
+                    "streetName": "Fixture address",
+                    "streetNo": "1",
+                    "postalCode": "00100",
+                    "city": "Helsinki",
+                    "phoneNumber": "0400000000"
+                },
+                "packageSizes": {
+                    "small": { "title": "Small package", "size": "SMALL" },
+                    "medium": { "title": "Medium package", "size": "MEDIUM" },
+                    "large": { "title": "Large package", "size": "LARGE" }
+                },
+                "checkBoxes": { "saveAddress": { "checked": true } }
+            }
+        }
+    })
+}
+
+fn shipping_page(products: &[&str]) -> Value {
+    json!({
+        "sections": {
+            "shipping": {
+                "providers": {
+                    "options": products
+                        .iter()
+                        .map(|product| json!({ "product": product }))
+                        .collect::<Vec<_>>()
+                }
+            }
+        }
+    })
+}
+
 fn successful_publish_responses() -> Vec<HttpResponse> {
     let valid = draft(
         "one",
         json!({
             "values": {
                 "category": "furniture/chairs",
-                "title": "Chair",
-                "delivery": ["pickup"]
+                "title": "Chair"
             },
             "required_fields": ["category", "title", "delivery"],
             "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
@@ -137,6 +194,7 @@ fn successful_publish_responses() -> Vec<HttpResponse> {
     );
     vec![
         response(200, valid.clone()),
+        response(200, delivery_page(Some("pickup"))),
         response(
             200,
             draft(
@@ -159,13 +217,13 @@ fn successful_publish_responses() -> Vec<HttpResponse> {
                     "values": {
                         "category": "furniture/chairs",
                         "title": "Chair",
-                        "delivery": ["pickup"],
                         "revision": "revision-7"
                     }
                 }),
             ),
         ),
         response(204, Value::Null),
+        response(200, delivery_page(Some("pickup"))),
         response(
             200,
             json!({ "revision": "revision-7", "context": { "currency": "EUR" } }),
@@ -379,8 +437,8 @@ async fn sale_price_uses_the_item_partial_update_and_authoritative_observation()
         .await
         .unwrap();
 
-    assert_eq!(state.values["price"], json!(5));
-    assert_eq!(state.values["trade_type"], "1");
+    assert_eq!(state.draft.values["price"], json!(5));
+    assert_eq!(state.draft.values["trade_type"], "1");
     let requests = transport.requests();
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[0].method, Method::Get);
@@ -425,7 +483,7 @@ async fn decimal_sale_price_preserves_the_requested_amount() {
         .await
         .unwrap();
 
-    assert_eq!(state.values["price"], json!(5.25));
+    assert_eq!(state.draft.values["price"], json!(5.25));
     assert_eq!(
         transport.requests()[1].body,
         RequestBody::Json(json!({
@@ -576,8 +634,8 @@ async fn switching_to_give_away_omits_the_sale_price() {
         .await
         .unwrap();
 
-    assert_eq!(state.values["trade_type"], "2");
-    assert!(state.values.get("price").is_none());
+    assert_eq!(state.draft.values["trade_type"], "2");
+    assert!(state.draft.values.get("price").is_none());
     let requests = transport.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].method, Method::Put);
@@ -624,7 +682,7 @@ async fn composer_updates_reencode_an_observed_sale_price_without_currency_guess
         .await
         .unwrap();
 
-    assert_eq!(state.values["price"], json!(5.25));
+    assert_eq!(state.draft.values["price"], json!(5.25));
     let RequestBody::Json(values) = &transport.requests()[1].body else {
         panic!("expected composer update")
     };
@@ -724,6 +782,162 @@ async fn price_success_requires_an_authoritative_matching_observation() {
 }
 
 #[tokio::test]
+async fn delivery_update_uses_authoritative_state_when_item_update_is_ignored() {
+    let transport = FixtureTransport::new([
+        response(200, draft("same", json!({ "values": { "title": "Old" } }))),
+        response(200, draft("same", json!({ "values": { "title": "Old" } }))),
+        response(200, delivery_page(None)),
+        response(204, Value::Null),
+        response(200, delivery_page(Some("pickup"))),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let result = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([
+                ("title".to_owned(), json!("New")),
+                ("delivery".to_owned(), json!(["pickup"])),
+            ]),
+        )
+        .await
+        .unwrap();
+
+    assert!(!result.etag_changed);
+    assert_eq!(result.requested_delivery, ["pickup"]);
+    assert_eq!(result.persisted_fields, ["delivery"]);
+    assert_eq!(result.ignored_fields, ["title"]);
+    assert_eq!(
+        result.draft.delivery.unwrap().selected,
+        ["pickup".to_owned()]
+    );
+    let requests = transport.requests();
+    let RequestBody::Json(item) = &requests[1].body else {
+        panic!("expected item update")
+    };
+    assert!(item.get("delivery").is_none());
+    assert_eq!(requests[3].method, Method::Post);
+    assert_eq!(requests[3].path, "/ads/draft-1/delivery");
+}
+
+#[tokio::test]
+async fn shipping_update_discovers_package_options_and_provider_products() {
+    let transport = FixtureTransport::new([
+        response(200, draft("one", json!({}))),
+        response(200, delivery_page(None)),
+        response(200, shipping_page(&["POSTIPAKETTI", "MATKAHUOLTO_SHOP"])),
+        response(204, Value::Null),
+        response(200, delivery_page(Some("shipping:small"))),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
+
+    let result = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([("delivery".to_owned(), json!(["shipping:small"]))]),
+        )
+        .await
+        .unwrap();
+
+    let delivery = result.draft.delivery.unwrap();
+    assert_eq!(
+        delivery
+            .options
+            .iter()
+            .map(|option| option.value.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "pickup",
+            "shipping:small",
+            "shipping:medium",
+            "shipping:large"
+        ]
+    );
+    assert_eq!(delivery.selected, ["shipping:small"]);
+    let requests = transport.requests();
+    assert!(requests[2].path.starts_with("/ui/addelivery/shipping?"));
+    let RequestBody::Json(body) = &requests[3].body else {
+        panic!("expected delivery body")
+    };
+    assert_eq!(body["shipping"], true);
+    assert_eq!(body["meetup"], false);
+    assert_eq!(body["shippingInfo"]["size"], "SMALL");
+    assert_eq!(
+        body["shippingInfo"]["products"],
+        json!(["MATKAHUOLTO_SHOP", "POSTIPAKETTI"])
+    );
+}
+
+#[tokio::test]
+async fn invalid_and_missing_delivery_options_fail_before_mutation() {
+    let invalid_transport = FixtureTransport::new([
+        response(200, draft("one", json!({}))),
+        response(200, delivery_page(None)),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(invalid_transport.clone()), config());
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([("delivery".to_owned(), json!(["shipping:oversize"]))]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "draft.invalid_delivery");
+    assert_eq!(
+        error.details.unwrap()["allowed_values"],
+        json!([
+            "pickup",
+            "shipping:small",
+            "shipping:medium",
+            "shipping:large"
+        ])
+    );
+    assert_eq!(invalid_transport.requests().len(), 2);
+
+    let missing_transport = FixtureTransport::new([
+        response(200, draft("one", json!({}))),
+        response(200, json!({ "context": {}, "sections": {} })),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(missing_transport.clone()), config());
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([("delivery".to_owned(), json!(["pickup"]))]),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "draft.invalid_delivery");
+    assert_eq!(error.details.unwrap()["allowed_values"], json!([]));
+    assert_eq!(missing_transport.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn dedicated_delivery_failure_reports_safe_recovery() {
+    let transport = FixtureTransport::new([
+        response(200, draft("one", json!({}))),
+        response(200, delivery_page(None)),
+        response(503, json!({ "message": "delivery unavailable" })),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let error = workflow
+        .update(
+            "draft-1",
+            &Map::from_iter([("delivery".to_owned(), json!(["pickup"]))]),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code, "upstream.request_failed");
+    let recovery = error.recovery.unwrap();
+    assert_eq!(
+        recovery.completed_steps,
+        ["fetch_draft", "fetch_delivery_options"]
+    );
+    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+}
+
+#[tokio::test]
 async fn discovered_numeric_category_is_sent_as_the_composer_machine_value() {
     let transport = FixtureTransport::new([
         response(201, draft("one", json!({}))),
@@ -812,14 +1026,16 @@ async fn show_fetches_predictions_only_for_uncategorized_draft_with_images() {
             200,
             json!([{ "category": "furniture/chairs", "confidence": 0.92 }]),
         ),
+        response(200, delivery_page(None)),
     ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
     let state = workflow.show("draft-1").await.unwrap();
 
     assert_eq!(state.predictions[0].category, "furniture/chairs");
+    assert_eq!(state.delivery.unwrap().options[0].value, "pickup");
     let requests = transport.requests();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 3);
     assert!(requests.iter().all(|request| request.method == Method::Get));
     assert!(
         requests
@@ -958,62 +1174,7 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
 
 #[tokio::test]
 async fn publish_runs_the_complete_bounded_sequence() {
-    let valid = draft(
-        "one",
-        json!({
-            "values": {
-                "category": "furniture/chairs",
-                "title": "Chair",
-                "delivery": ["pickup"]
-            },
-            "required_fields": ["category", "title", "delivery"],
-            "images": [{ "image_id": "image-1", "position": 0, "state": "ready" }]
-        }),
-    );
-    let submitted = draft(
-        "three",
-        json!({
-            "values": {
-                "category": "furniture/chairs",
-                "title": "Chair",
-                "delivery": ["pickup"],
-                "revision": "revision-7"
-            }
-        }),
-    );
-    let transport = FixtureTransport::new([
-        response(200, valid.clone()),
-        response(
-            200,
-            draft(
-                "two",
-                json!({ "values": valid["values"].clone(), "images": valid["images"].clone() }),
-            ),
-        ),
-        response(
-            200,
-            draft(
-                "two",
-                json!({ "values": valid["values"].clone(), "images": valid["images"].clone() }),
-            ),
-        ),
-        response(200, submitted),
-        response(204, Value::Null),
-        response(
-            200,
-            json!({ "revision": "revision-7", "context": { "currency": "EUR" } }),
-        ),
-        response(
-            201,
-            json!({ "listing_id": "listing-9", "revision": "revision-7", "state": "pending" }),
-        ),
-        response(200, json!({ "order_id": "order-4", "details": {} })),
-        response(204, Value::Null),
-        response(
-            200,
-            json!({ "listing_id": "listing-9", "state": "pending" }),
-        ),
-    ]);
+    let transport = FixtureTransport::new(successful_publish_responses());
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
     let published = workflow.publish("draft-1").await.unwrap();
@@ -1024,12 +1185,14 @@ async fn publish_runs_the_complete_bounded_sequence() {
         published.completed_steps,
         [
             "fetch_draft",
+            "fetch_delivery_options",
             "validate",
             "wait_for_images",
             "patch_item_fields",
             "fetch_fresh_etag",
             "submit_adinput",
             "apply_delivery",
+            "observe_delivery",
             "fetch_product_context",
             "publish_basic",
             "fetch_confirmation",
@@ -1040,7 +1203,7 @@ async fn publish_runs_the_complete_bounded_sequence() {
     assert!(published.warnings.is_empty());
 
     let requests = transport.requests();
-    assert_eq!(requests.len(), 10);
+    assert_eq!(requests.len(), 12);
     let observed_sequence = requests
         .iter()
         .map(|request| (request.method.clone(), request.path.as_str()))
@@ -1049,10 +1212,12 @@ async fn publish_runs_the_complete_bounded_sequence() {
         observed_sequence,
         [
             (Method::Get, "/adinput/ad/withModel/draft-1"),
+            (Method::Get, "/ui/addelivery?adId=draft-1&editMode=false"),
             (Method::Put, "/adinput/ad/recommerce/draft-1/update"),
             (Method::Get, "/adinput/ad/withModel/draft-1"),
             (Method::Put, "/drafts/draft-1/adinput"),
-            (Method::Put, "/drafts/draft-1/delivery"),
+            (Method::Post, "/ads/draft-1/delivery"),
+            (Method::Get, "/ui/addelivery?adId=draft-1&editMode=false"),
             (Method::Get, "/drafts/draft-1/products?revision=revision-7"),
             (Method::Post, "/drafts/draft-1/publish"),
             (Method::Get, "/listings/listing-9/confirmation"),
@@ -1061,14 +1226,21 @@ async fn publish_runs_the_complete_bounded_sequence() {
         ]
     );
     assert_eq!(
-        requests[4].body,
+        requests[5].body,
         RequestBody::Json(json!({
-            "revision": "revision-7",
-            "delivery": ["pickup"]
+            "meetup": true,
+            "shipping": false,
+            "sellerPaysShipping": false,
+            "client": "ANDROID",
+            "buyNow": false
         }))
     );
+    let RequestBody::Json(item_values) = &requests[2].body else {
+        panic!("expected item update")
+    };
+    assert!(item_values.get("delivery").is_none());
     assert_eq!(
-        requests[6].body,
+        requests[8].body,
         RequestBody::Json(json!({
             "package": "basic",
             "revision": "revision-7",
@@ -1084,37 +1256,52 @@ async fn publish_runs_the_complete_bounded_sequence() {
 }
 
 #[tokio::test]
-async fn publish_validation_rejects_missing_fields_and_implicit_delivery() {
-    for (values, required, expected_missing) in [
-        (
-            json!({ "delivery": ["pickup"] }),
-            json!(["title", "delivery"]),
-            json!(["title"]),
-        ),
-        (
-            json!({ "title": "Chair", "delivery": [] }),
-            json!(["title"]),
-            json!(["delivery"]),
-        ),
-    ] {
-        let state = draft(
-            "one",
-            json!({
-                "values": values,
-                "required_fields": required,
-                "images": []
-            }),
-        );
-        let workflow = DraftWorkflow::new(
-            HttpAdInputApi::new(FixtureTransport::new([response(200, state)])),
-            config(),
-        );
+async fn publish_validation_rejects_missing_fields_and_missing_delivery() {
+    let missing_title = draft(
+        "one",
+        json!({
+            "values": {},
+            "required_fields": ["title", "delivery"],
+            "images": []
+        }),
+    );
+    let workflow = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, missing_title),
+            response(200, delivery_page(Some("pickup"))),
+        ])),
+        config(),
+    );
+    let error = workflow.publish("draft-1").await.unwrap_err();
+    assert_eq!(error.code, "draft.validation_failed");
+    assert_eq!(error.details.unwrap()["missing_fields"], json!(["title"]));
+    assert_eq!(
+        error.recovery.unwrap().completed_steps,
+        ["fetch_draft", "fetch_delivery_options"]
+    );
 
-        let error = workflow.publish("draft-1").await.unwrap_err();
-        assert_eq!(error.code, "draft.validation_failed");
-        assert_eq!(error.details.unwrap()["missing_fields"], expected_missing);
-        assert_eq!(error.recovery.unwrap().completed_steps, ["fetch_draft"]);
-    }
+    let no_delivery = draft(
+        "one",
+        json!({
+            "values": { "title": "Chair" },
+            "required_fields": ["title", "delivery"],
+            "images": []
+        }),
+    );
+    let workflow = DraftWorkflow::new(
+        HttpAdInputApi::new(FixtureTransport::new([
+            response(200, no_delivery),
+            response(200, delivery_page(None)),
+        ])),
+        config(),
+    );
+    let error = workflow.publish("draft-1").await.unwrap_err();
+    assert_eq!(error.code, "draft.validation_failed");
+    assert_eq!(error.details.unwrap()["allowed_values"][0], "pickup");
+    assert_eq!(
+        error.recovery.unwrap().next_safe_actions[0],
+        "flea draft update draft-1 --delivery pickup"
+    );
 }
 
 #[tokio::test]
@@ -1132,7 +1319,10 @@ async fn publish_reports_failed_image_and_preserves_its_identity() {
             }]
         }),
     );
-    let transport = FixtureTransport::new([response(200, failed)]);
+    let transport = FixtureTransport::new([
+        response(200, failed),
+        response(200, delivery_page(Some("pickup"))),
+    ]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
 
     let error = workflow.publish("draft-1").await.unwrap_err();
@@ -1144,7 +1334,7 @@ async fn publish_reports_failed_image_and_preserves_its_identity() {
     );
     assert_eq!(
         error.recovery.unwrap().completed_steps,
-        ["fetch_draft", "validate"]
+        ["fetch_draft", "fetch_delivery_options", "validate"]
     );
 }
 
@@ -1152,15 +1342,22 @@ async fn publish_reports_failed_image_and_preserves_its_identity() {
 async fn publish_failures_report_each_completed_workflow_boundary() {
     let cases = [
         (0, &[][..], true),
-        (
-            1,
-            &["fetch_draft", "validate", "wait_for_images"][..],
-            false,
-        ),
+        (1, &["fetch_draft"][..], true),
         (
             2,
             &[
                 "fetch_draft",
+                "fetch_delivery_options",
+                "validate",
+                "wait_for_images",
+            ][..],
+            false,
+        ),
+        (
+            3,
+            &[
+                "fetch_draft",
+                "fetch_delivery_options",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
@@ -1168,25 +1365,14 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             true,
         ),
         (
-            3,
-            &[
-                "fetch_draft",
-                "validate",
-                "wait_for_images",
-                "patch_item_fields",
-                "fetch_fresh_etag",
-            ][..],
-            false,
-        ),
-        (
             4,
             &[
                 "fetch_draft",
+                "fetch_delivery_options",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
                 "fetch_fresh_etag",
-                "submit_adinput",
             ][..],
             false,
         ),
@@ -1194,6 +1380,20 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             5,
             &[
                 "fetch_draft",
+                "fetch_delivery_options",
+                "validate",
+                "wait_for_images",
+                "patch_item_fields",
+                "fetch_fresh_etag",
+                "submit_adinput",
+            ][..],
+            false,
+        ),
+        (
+            6,
+            &[
+                "fetch_draft",
+                "fetch_delivery_options",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
@@ -1204,29 +1404,48 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             true,
         ),
         (
-            6,
+            7,
             &[
                 "fetch_draft",
+                "fetch_delivery_options",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
                 "fetch_fresh_etag",
                 "submit_adinput",
                 "apply_delivery",
+                "observe_delivery",
+            ][..],
+            true,
+        ),
+        (
+            8,
+            &[
+                "fetch_draft",
+                "fetch_delivery_options",
+                "validate",
+                "wait_for_images",
+                "patch_item_fields",
+                "fetch_fresh_etag",
+                "submit_adinput",
+                "apply_delivery",
+                "observe_delivery",
                 "fetch_product_context",
             ][..],
             false,
         ),
         (
-            9,
+            11,
             &[
                 "fetch_draft",
+                "fetch_delivery_options",
                 "validate",
                 "wait_for_images",
                 "patch_item_fields",
                 "fetch_fresh_etag",
                 "submit_adinput",
                 "apply_delivery",
+                "observe_delivery",
                 "fetch_product_context",
                 "publish_basic",
                 "fetch_confirmation",
@@ -1254,7 +1473,7 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
             recovery.retryable, retryable,
             "failure index {failure_index}"
         );
-        if failure_index == 9 {
+        if failure_index == 11 {
             assert_eq!(
                 error.details.unwrap()["listing_id"],
                 "listing-9",
@@ -1270,8 +1489,8 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
 #[tokio::test]
 async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
     let mut confirmation_failure = successful_publish_responses();
-    confirmation_failure[7] = response(503, json!({ "message": "confirmation unavailable" }));
-    confirmation_failure.remove(8);
+    confirmation_failure[9] = response(503, json!({ "message": "confirmation unavailable" }));
+    confirmation_failure.remove(10);
     let result = DraftWorkflow::new(
         HttpAdInputApi::new(FixtureTransport::new(confirmation_failure)),
         config(),
@@ -1289,7 +1508,7 @@ async fn confirmation_follow_ups_are_best_effort_and_observation_still_runs() {
     );
 
     let mut tracking_failure = successful_publish_responses();
-    tracking_failure[8] = response(503, json!({ "message": "tracking unavailable" }));
+    tracking_failure[10] = response(503, json!({ "message": "tracking unavailable" }));
     let result = DraftWorkflow::new(
         HttpAdInputApi::new(FixtureTransport::new(tracking_failure)),
         config(),
@@ -1339,7 +1558,7 @@ async fn percent_encodes_upstream_revisions_in_signed_query_targets() {
 }
 
 #[test]
-fn image_request_debug_never_contains_raw_bytes_or_secret_json_values() {
+fn request_debug_redacts_targets_raw_bytes_and_secret_json_values() {
     let image = HttpRequest {
         method: Method::Post,
         path: "/images".to_owned(),
@@ -1360,9 +1579,17 @@ fn image_request_debug_never_contains_raw_bytes_or_secret_json_values() {
         retry: RetryPolicy::Never,
         body: RequestBody::Json(json!({ "access_token": "token-secret" })),
     };
+    let delivery = HttpRequest {
+        method: Method::Get,
+        path: "/ui/addelivery/shipping?name=Private+Seller".to_owned(),
+        if_match: None,
+        retry: RetryPolicy::BoundedRead,
+        body: RequestBody::Empty,
+    };
 
     assert!(!format!("{image:?}").contains("raw-image-secret"));
     assert!(!format!("{json:?}").contains("token-secret"));
+    assert!(!format!("{delivery:?}").contains("Private"));
 }
 
 #[tokio::test]
@@ -1377,7 +1604,10 @@ async fn publish_timeout_bounds_a_hung_poll_request() {
     );
     let workflow = DraftWorkflow::new(
         HttpAdInputApi::new(HangingPollTransport {
-            first: Mutex::new(Some(response(200, processing))),
+            responses: Mutex::new(VecDeque::from([
+                response(200, processing),
+                response(200, delivery_page(Some("pickup"))),
+            ])),
         }),
         WorkflowConfig {
             image_processing_timeout: Duration::from_millis(20),
@@ -1407,6 +1637,7 @@ async fn publish_timeout_is_bounded_and_recoverable() {
     );
     let transport = FixtureTransport::new([
         response(200, processing.clone()),
+        response(200, delivery_page(Some("pickup"))),
         response(200, processing.clone()),
         response(200, processing),
     ]);
@@ -1417,6 +1648,9 @@ async fn publish_timeout_is_bounded_and_recoverable() {
     assert_eq!(error.code, "draft.image_processing");
     let recovery = error.recovery.unwrap();
     assert!(recovery.retryable);
-    assert_eq!(recovery.completed_steps, ["fetch_draft", "validate"]);
+    assert_eq!(
+        recovery.completed_steps,
+        ["fetch_draft", "fetch_delivery_options", "validate"]
+    );
     assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
 }

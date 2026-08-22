@@ -442,9 +442,9 @@ fn normalize_delivery(delivery: &mut Value) -> Result<(), String> {
 fn semantic_machine_value(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b':')
+        })
 }
 
 fn contains_unsafe_metadata(value: &Value) -> bool {
@@ -696,6 +696,21 @@ mod tests {
                 .to_string()
                 .contains(temporary.path().to_str().unwrap())
         );
+    }
+
+    #[test]
+    fn discovered_shipping_package_is_a_valid_delivery_machine_value() {
+        let input = CollectedInput {
+            values: serde_json::from_value(json!({
+                "delivery": ["shipping:small"]
+            }))
+            .unwrap(),
+            image_paths: Vec::new(),
+        };
+
+        let normalized = normalize(input, false).unwrap();
+
+        assert_eq!(normalized.values["delivery"], json!(["shipping:small"]));
     }
 
     #[test]

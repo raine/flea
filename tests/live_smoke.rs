@@ -52,6 +52,20 @@ fn authenticated_draft_lifecycle_never_publishes() {
 
     let shown = invoke(&["draft", "show", &draft_id]);
     assert_eq!(shown["ok"], true, "draft show failed: {shown}");
+    assert!(
+        shown["data"]["delivery"]["options"]
+            .as_array()
+            .is_some_and(|options| options.iter().any(|option| option["value"] == "pickup")),
+        "draft show did not expose pickup: {shown}"
+    );
+
+    let delivery = invoke(&["draft", "update", &draft_id, "--delivery", "pickup"]);
+    assert_eq!(delivery["ok"], true, "delivery update failed: {delivery}");
+    assert_eq!(
+        delivery["data"]["draft"]["delivery"]["selected"],
+        json!(["pickup"]),
+        "delivery update was not observed remotely: {delivery}"
+    );
 
     let updated = invoke(&[
         "draft",

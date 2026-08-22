@@ -405,7 +405,7 @@ fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
         ],
     );
 
-    assert_eq!(value["data"]["values"]["price"], 5);
+    assert_eq!(value["data"]["draft"]["values"]["price"], 5);
     let requests = client.requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[1].method, reqwest::Method::PATCH);
@@ -574,21 +574,23 @@ fn publish_flows_through_every_http_step() {
     let valid = json!({
         "draft_id": "draft-1",
         "etag": "one",
-        "values": { "title": "Chair", "delivery": ["pickup"] },
+        "values": { "title": "Chair" },
         "required_fields": ["title", "delivery"],
         "images": []
     });
     let submitted = json!({
         "draft_id": "draft-1",
         "etag": "three",
-        "values": { "title": "Chair", "delivery": ["pickup"], "revision": "revision-1" }
+        "values": { "title": "Chair", "revision": "revision-1" }
     });
     let client = MockClient::with_responses([
         response(StatusCode::OK, valid.clone()),
+        response(StatusCode::OK, delivery_page(true)),
         response(StatusCode::OK, valid.clone()),
         response(StatusCode::OK, valid),
         response(StatusCode::OK, submitted),
         response(StatusCode::NO_CONTENT, Value::Null),
+        response(StatusCode::OK, delivery_page(true)),
         response(
             StatusCode::OK,
             json!({ "revision": "revision-1", "context": {} }),
@@ -609,7 +611,10 @@ fn publish_flows_through_every_http_step() {
     );
 
     assert_eq!(value["data"]["listing_id"], "listing-1");
-    assert_eq!(client.requests.lock().unwrap().len(), 10);
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests.len(), 12);
+    assert_eq!(requests[5].path_and_query, "/ads/draft-1/delivery");
+    assert_eq!(requests[5].service, "TJT-API");
 }
 
 #[test]
@@ -914,6 +919,27 @@ fn response(status: StatusCode, body: Value) -> HttpResponse {
         headers: HeaderMap::new(),
         body: serde_json::to_vec(&body).unwrap(),
     }
+}
+
+fn delivery_page(selected: bool) -> Value {
+    json!({
+        "context": {
+            "shipping": false,
+            "meetup": selected,
+            "shippingProducts": []
+        },
+        "sections": {
+            "deliveryOptions": {
+                "shipping": { "title": "Tori delivery" },
+                "meetup": { "title": "Pickup" }
+            },
+            "shipping": {
+                "packageSizes": {
+                    "small": { "title": "Small", "size": "SMALL" }
+                }
+            }
+        }
+    })
 }
 
 fn draft_state(etag: &str) -> Value {
