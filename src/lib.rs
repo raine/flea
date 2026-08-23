@@ -8,6 +8,7 @@ pub mod marketplace;
 pub(crate) mod oauth;
 pub mod output;
 pub mod retry;
+pub(crate) mod sensitive;
 pub mod storage;
 
 use std::{

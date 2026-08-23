@@ -4,17 +4,19 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::sensitive::Sensitive;
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct SecretString(String);
+pub struct SecretString(Sensitive<String>);
 
 impl SecretString {
     pub(crate) fn new(value: String) -> Self {
-        Self(value)
+        Self(Sensitive::new(value))
     }
 
     pub(crate) fn expose(&self) -> &str {
-        &self.0
+        self.0.expose()
     }
 
     #[doc(hidden)]
