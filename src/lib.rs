@@ -36,13 +36,6 @@ pub struct RunResult {
     pub presentation: Presentation,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PlainPresentation {
-    Structured,
-    AuthLogin,
-    Skill,
-}
-
 pub fn run<I, T>(args: I) -> RunResult
 where
     I: IntoIterator<Item = T>,
@@ -60,16 +53,9 @@ where
     let session = match DiagnosticsSession::initialize() {
         Ok(session) => session,
         Err(error) => {
-            return finish(
-                cli.format,
-                Err(error.into_app_error()),
-                None,
-                PlainPresentation::Structured,
-                context,
-            );
+            return finish(cli.format, Err(error.into_app_error()), None, context);
         }
     };
-    let plain_presentation = plain_presentation(cli.format, &cli.command);
     let dependencies = cli::runtime::ApplicationDependencies::production();
     session.run(&command, || {
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -77,7 +63,6 @@ where
                 cli.format,
                 execute_command(cli.command, &dependencies),
                 Some(session.context()),
-                plain_presentation,
                 context,
             )
         }))
@@ -86,7 +71,6 @@ where
                 cli.format,
                 Err(AppError::unexpected("command failed unexpectedly")),
                 Some(session.context()),
-                PlainPresentation::Structured,
                 context,
             )
         });
@@ -109,14 +93,12 @@ where
         Ok(cli) => cli,
         Err(error) => return clap_presentation(error),
     };
-    let plain_presentation = plain_presentation(cli.format, &cli.command);
     let context = cli.command.context();
     catch_unwind(AssertUnwindSafe(|| {
         finish(
             cli.format,
             execute_command(cli.command, dependencies),
             None,
-            plain_presentation,
             context,
         )
     }))
@@ -125,7 +107,6 @@ where
             cli.format,
             Err(AppError::unexpected("command failed unexpectedly")),
             None,
-            PlainPresentation::Structured,
             context,
         )
     })
@@ -155,57 +136,24 @@ fn clap_presentation(error: clap::Error) -> RunResult {
     }
 }
 
-fn plain_presentation(format: output::OutputFormat, command: &cli::Command) -> PlainPresentation {
-    match command {
-        cli::Command::Skill(_) => PlainPresentation::Skill,
-        cli::Command::Tori(cli::ToriArgs {
-            command:
-                cli::ToriCommand::Auth(cli::auth::ToriAuthArgs {
-                    command: cli::auth::ToriAuthCommand::Login,
-                }),
-        }) if format == output::OutputFormat::Toon => PlainPresentation::AuthLogin,
-        cli::Command::Vinted(cli::VintedArgs {
-            command:
-                cli::VintedCommand::Auth(cli::auth::VintedAuthArgs {
-                    command: cli::auth::VintedAuthCommand::Login,
-                }),
-            ..
-        }) if format == output::OutputFormat::Toon => PlainPresentation::AuthLogin,
-        _ => PlainPresentation::Structured,
-    }
-}
-
 fn finish(
     format: output::OutputFormat,
     result: Result<cli::outcome::CommandOutcome, AppError>,
     diagnostics: Option<&DiagnosticsContext>,
-    plain_presentation: PlainPresentation,
     context: Option<marketplace::MarketplaceContext>,
 ) -> RunResult {
     let (envelope, exit_code) = match result {
         Ok(outcome) => {
-            let plain_document = match plain_presentation {
-                PlainPresentation::Structured => None,
-                PlainPresentation::AuthLogin => {
-                    Some(output::render_auth_login(&outcome.data, context))
-                }
-                PlainPresentation::Skill => Some(output::render_skill(&outcome.data)),
-            };
-            if let Some(document) = plain_document {
-                return match document {
-                    Ok(document) => RunResult {
+            match output::render_plain(&outcome.presentation, format) {
+                Ok(Some(document)) => {
+                    return RunResult {
                         document,
                         exit_code: ExitClass::Success.code(),
                         presentation: Presentation::PlainStdout,
-                    },
-                    Err(error) => finish(
-                        format,
-                        Err(error),
-                        diagnostics,
-                        PlainPresentation::Structured,
-                        context,
-                    ),
-                };
+                    };
+                }
+                Ok(None) => {}
+                Err(error) => return finish(format, Err(error), diagnostics, context),
             }
             let mut envelope = Envelope::success(outcome.data);
             envelope.context = context;

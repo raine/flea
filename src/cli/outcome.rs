@@ -109,8 +109,25 @@ pub enum CommandData {
 }
 
 #[derive(Debug)]
+pub enum PlainOutput {
+    AuthenticationLogin {
+        marketplace: MarketplaceId,
+        authenticated: bool,
+    },
+    Document(String),
+}
+
+#[derive(Debug, Default)]
+pub enum CommandPresentation {
+    #[default]
+    Structured,
+    Plain(PlainOutput),
+}
+
+#[derive(Debug)]
 pub struct CommandOutcome {
     pub data: CommandData,
+    pub presentation: CommandPresentation,
     pub next_actions: Vec<NextAction>,
     pub observation: Option<Observation>,
     pub warnings: Vec<Warning>,
@@ -120,10 +137,28 @@ impl CommandOutcome {
     pub fn new(data: CommandData) -> Self {
         Self {
             data,
+            presentation: CommandPresentation::Structured,
             next_actions: Vec::new(),
             observation: None,
             warnings: Vec::new(),
         }
+    }
+
+    pub fn with_plain_authentication(
+        mut self,
+        marketplace: MarketplaceId,
+        authenticated: bool,
+    ) -> Self {
+        self.presentation = CommandPresentation::Plain(PlainOutput::AuthenticationLogin {
+            marketplace,
+            authenticated,
+        });
+        self
+    }
+
+    pub fn with_plain_document(mut self, document: String) -> Self {
+        self.presentation = CommandPresentation::Plain(PlainOutput::Document(document));
+        self
     }
 
     pub fn with_next_actions(mut self, next_actions: Vec<NextAction>) -> Self {

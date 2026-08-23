@@ -1,24 +1,33 @@
 use flea::{
     Presentation,
     cli::{
+        auth::ToriAuthCommand,
         outcome::{CommandData, CommandOutcome},
         runtime::ApplicationDependencies,
     },
+    marketplace::MarketplaceId,
 };
 use serde_json::{Value, json};
 
 fn dependencies() -> ApplicationDependencies {
     ApplicationDependencies::production()
-        .with_tori_auth_handler(|_| async {
-            Ok(CommandOutcome::new(CommandData::Raw(
+        .with_tori_auth_handler(|args| async move {
+            let outcome = CommandOutcome::new(CommandData::Raw(
                 json!({ "authenticated": true, "user_id": "42" }),
-            )))
+            ));
+            Ok(match args.command {
+                ToriAuthCommand::Login => {
+                    outcome.with_plain_authentication(MarketplaceId::Tori, true)
+                }
+                _ => outcome,
+            })
         })
         .with_vinted_auth_handler(|_, _| async {
             Ok(CommandOutcome::new(CommandData::Raw(json!({
                 "authenticated": true,
                 "user_id": "84"
-            }))))
+            })))
+            .with_plain_authentication(MarketplaceId::Vinted, true))
         })
 }
 

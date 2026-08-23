@@ -8,6 +8,7 @@ use flea::{
         envelope::{NextAction, Warning},
         observation::Observation,
     },
+    marketplace::MarketplaceId,
     run_with_dependencies,
 };
 use serde_json::{Value, json};
@@ -59,9 +60,10 @@ fn warning_dependencies() -> ApplicationDependencies {
 
 fn invalid_auth_dependencies() -> ApplicationDependencies {
     ApplicationDependencies::production().with_tori_auth_handler(|_| async {
-        Ok(CommandOutcome::new(CommandData::Raw(
-            json!({ "authenticated": false }),
-        )))
+        Ok(
+            CommandOutcome::new(CommandData::Raw(json!({ "authenticated": false })))
+                .with_plain_authentication(MarketplaceId::Tori, false),
+        )
     })
 }
 

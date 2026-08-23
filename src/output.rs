@@ -1,11 +1,10 @@
+use crate::{
+    cli::outcome::{CommandPresentation, PlainOutput},
+    error::AppError,
+    marketplace::MarketplaceId,
+};
 use clap::ValueEnum;
 use serde::Serialize;
-use serde_json::Value;
-
-use crate::{
-    error::AppError,
-    marketplace::{MarketplaceContext, MarketplaceId},
-};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 #[value(rename_all = "lower")]
@@ -26,35 +25,28 @@ pub fn render<T: Serialize>(value: &T, format: OutputFormat) -> Result<String, A
     }
 }
 
-pub fn render_auth_login(
-    data: &impl Serialize,
-    context: Option<MarketplaceContext>,
-) -> Result<String, AppError> {
-    let data = serde_json::to_value(data).map_err(|error| {
-        AppError::output("failed to serialize authentication login output").with_source(error)
-    })?;
-    if data.get("authenticated").and_then(Value::as_bool) != Some(true) {
-        return Err(AppError::output(
-            "authentication login output has an invalid status",
-        ));
-    }
-    let name = match context.map(|context| context.marketplace) {
-        Some(MarketplaceId::Tori) => "Tori",
-        Some(MarketplaceId::Vinted) => "Vinted",
-        None => {
-            return Err(AppError::output(
-                "authentication login output is missing marketplace context",
-            ));
+pub fn render_plain(
+    presentation: &CommandPresentation,
+    format: OutputFormat,
+) -> Result<Option<String>, AppError> {
+    match presentation {
+        CommandPresentation::Structured => Ok(None),
+        CommandPresentation::Plain(PlainOutput::AuthenticationLogin {
+            marketplace,
+            authenticated,
+        }) if format == OutputFormat::Toon => {
+            if !authenticated {
+                return Err(AppError::output(
+                    "authentication login output has an invalid status",
+                ));
+            }
+            let name = match marketplace {
+                MarketplaceId::Tori => "Tori",
+                MarketplaceId::Vinted => "Vinted",
+            };
+            Ok(Some(format!("Signed in to {name}.\n")))
         }
-    };
-    Ok(format!("Signed in to {name}.\n"))
-}
-
-pub fn render_skill(data: &impl Serialize) -> Result<String, AppError> {
-    let data = serde_json::to_value(data)
-        .map_err(|error| AppError::output("failed to serialize skill output").with_source(error))?;
-    data.get("document")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| AppError::output("skill output has an invalid document"))
+        CommandPresentation::Plain(PlainOutput::AuthenticationLogin { .. }) => Ok(None),
+        CommandPresentation::Plain(PlainOutput::Document(document)) => Ok(Some(document.clone())),
+    }
 }

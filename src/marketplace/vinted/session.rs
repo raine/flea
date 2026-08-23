@@ -5,7 +5,7 @@ use crate::{
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::{
-        CapabilityMaturity, MarketplaceContext, PortalId,
+        CapabilityMaturity, MarketplaceContext, MarketplaceId, PortalId,
         vinted::auth::{VintedAuthentication, VintedCredentialRecord},
     },
     storage::{StatePaths, credentials::TypedCredentialStore},
@@ -30,10 +30,11 @@ pub(crate) async fn execute_auth(
     let paths = StatePaths::discover(MarketplaceContext::VINTED_FI)
         .map_err(|error| storage_error(error, "discover"))?;
     match operation {
-        AuthOperation::Login => execute_login(paths)
-            .await
-            .map(CommandData::VintedAuthLogin)
-            .map(CommandOutcome::new),
+        AuthOperation::Login => execute_login(paths).await.map(|login| {
+            let authenticated = login.authenticated;
+            CommandOutcome::new(CommandData::VintedAuthLogin(login))
+                .with_plain_authentication(MarketplaceId::Vinted, authenticated)
+        }),
         AuthOperation::Status => execute_status(paths).await,
         AuthOperation::Logout => execute_logout(paths)
             .map(CommandData::VintedAuthLogout)

@@ -131,9 +131,10 @@ pub async fn dispatch(
         ))),
         Command::Tori(args) => execute_tori(args.command, dependencies).await,
         Command::Vinted(args) => execute_vinted(args.portal, args.command, dependencies).await,
-        Command::Skill(args) => super::skill::dispatch(args)
-            .map(CommandData::Skill)
-            .map(CommandOutcome::new),
+        Command::Skill(args) => super::skill::dispatch(args).map(|output| {
+            let document = output.document.clone();
+            CommandOutcome::new(CommandData::Skill(output)).with_plain_document(document)
+        }),
         Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
     }
 }
@@ -375,7 +376,8 @@ async fn execute_interactive_login(paths: StatePaths) -> Result<CommandOutcome, 
     match result {
         Ok(value) => {
             cleared?;
-            Ok(CommandOutcome::new(CommandData::ToriAuthComplete(value)))
+            Ok(CommandOutcome::new(CommandData::ToriAuthComplete(value))
+                .with_plain_authentication(MarketplaceId::Tori, true))
         }
         Err(error) => Err(error),
     }
