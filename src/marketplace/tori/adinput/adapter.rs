@@ -23,6 +23,7 @@ use crate::domain::observation::ObservationState;
 use crate::domain::observation::SourceStateEvidence;
 use crate::domain::observation::StatusEvidence;
 use crate::marketplace::tori::client::compatibility;
+use crate::marketplace::tori::listings::observation::ListingObservations;
 use crate::retry::FailureKind;
 use crate::retry::OperationMethod;
 use crate::retry::RetryContext;
@@ -30,7 +31,6 @@ use crate::retry::classify;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
-use std::time::Duration;
 
 #[allow(async_fn_in_trait)]
 pub trait AdInputApi: Send + Sync {
@@ -212,189 +212,14 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
         })
     }
 
-    async fn find_listing_summary(&self, listing_id: &str) -> Result<Option<Value>, ApiError> {
-        const PAGE_SIZE: usize = 50;
-        const PAGE_LIMIT: usize = 10_000;
-        let mut offset = 0;
-        let mut expected_total = None;
-        for _ in 0..PAGE_LIMIT {
-            let response = self
-                .json(HttpRequest::read(
-                    ObservationSource::AuthenticatedListingCollection,
-                    format!("/search?limit={PAGE_SIZE}&offset={offset}"),
-                ))
-                .await?;
-            if response.body_is_unparseable {
-                return Err(listing_observation_model_error(
-                    response.status,
-                    "collection_unparseable",
-                ));
-            }
-            let summaries = response
-                .body
-                .get("summaries")
-                .or_else(|| response.body.get("listings"))
-                .and_then(Value::as_array)
-                .ok_or_else(|| {
-                    listing_observation_model_error(response.status, "collection_unrecognized")
-                })?;
-            let total = response
-                .body
-                .get("total")
-                .and_then(Value::as_u64)
-                .and_then(|value| usize::try_from(value).ok())
-                .ok_or_else(|| {
-                    listing_observation_model_error(response.status, "collection_total_invalid")
-                })?;
-            let stable_total = *expected_total.get_or_insert(total);
-            if total != stable_total {
-                return Err(listing_observation_model_error(
-                    response.status,
-                    "collection_total_changed",
-                ));
-            }
-            for summary in summaries {
-                if listing_value_id_matches(summary.get("id"), listing_id) {
-                    return Ok(Some(normalize_observed_summary(summary, listing_id)));
-                }
-            }
-            offset += summaries.len();
-            if offset >= total {
-                return Ok(None);
-            }
-            if summaries.is_empty() {
-                return Err(listing_observation_model_error(
-                    response.status,
-                    "collection_pagination_incomplete",
-                ));
-            }
-        }
-        Err(listing_observation_model_error(
-            200,
-            "collection_pagination_bounded",
-        ))
-    }
-
-    async fn draft_delete_action(&self, draft_id: &str) -> Result<String, ApiError> {
-        const PAGE_SIZE: usize = 50;
-        const PAGE_LIMIT: usize = 10_000;
-        const ACTION_ATTEMPTS: usize = 6;
-        for action_attempt in 0..ACTION_ATTEMPTS {
-            let mut offset = 0;
-            let mut expected_total = None;
-            for _ in 0..PAGE_LIMIT {
-                let request = HttpRequest::read(
-                    ObservationSource::AuthenticatedListingCollection,
-                    format!("/search?facet=DRAFT&limit={PAGE_SIZE}&offset={offset}"),
-                )
-                .with_service(compatibility::SERVICE_AD_SUMMARIES);
-                let response = self.json(request).await?;
-                let summaries = response
-                    .body
-                    .get("summaries")
-                    .or_else(|| response.body.get("listings"))
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| {
-                        listing_observation_model_error(
-                            response.status,
-                            "draft_collection_unrecognized",
-                        )
-                    })?;
-                let total = response
-                    .body
-                    .get("total")
-                    .and_then(Value::as_u64)
-                    .and_then(|value| usize::try_from(value).ok())
-                    .ok_or_else(|| {
-                        listing_observation_model_error(
-                            response.status,
-                            "draft_collection_total_invalid",
-                        )
-                    })?;
-                let stable_total = *expected_total.get_or_insert(total);
-                if total != stable_total {
-                    return Err(listing_observation_model_error(
-                        response.status,
-                        "draft_collection_total_changed",
-                    ));
-                }
-                for summary in summaries {
-                    if !listing_value_id_matches(summary.get("id"), draft_id) {
-                        continue;
-                    }
-                    let action = summary
-                        .get("actions")
-                        .and_then(Value::as_array)
-                        .and_then(|actions| {
-                            actions.iter().find(|action| {
-                                action
-                                    .get("name")
-                                    .and_then(Value::as_str)
-                                    .is_some_and(|name| name.eq_ignore_ascii_case("DELETE"))
-                                    && action
-                                        .get("method")
-                                        .or_else(|| action.get("httpMethod"))
-                                        .and_then(Value::as_str)
-                                        .is_some_and(|method| method.eq_ignore_ascii_case("DELETE"))
-                            })
-                        })
-                        .ok_or_else(|| {
-                            listing_observation_model_error(
-                                response.status,
-                                "draft_delete_action_missing",
-                            )
-                        })?;
-                    let path = action
-                        .get("path")
-                        .or_else(|| action.get("urlPath"))
-                        .or_else(|| action.get("url_path"))
-                        .and_then(Value::as_str)
-                        .filter(|path| !path.is_empty())
-                        .ok_or_else(|| {
-                            listing_observation_model_error(
-                                response.status,
-                                "draft_delete_action_path_invalid",
-                            )
-                        })?;
-                    if !path.starts_with('/')
-                        || path.starts_with("//")
-                        || path.contains(['#', '\\'])
-                        || path.chars().any(char::is_control)
-                    {
-                        return Err(listing_observation_model_error(
-                            response.status,
-                            "draft_delete_action_path_invalid",
-                        ));
-                    }
-                    return Ok(path.to_owned());
-                }
-                offset += summaries.len();
-                if offset >= total {
-                    break;
-                }
-                if summaries.is_empty() {
-                    return Err(listing_observation_model_error(
-                        response.status,
-                        "draft_collection_pagination_incomplete",
-                    ));
-                }
-            }
-            if action_attempt + 1 < ACTION_ATTEMPTS {
-                let delay_ms = 250 * (1_u64 << action_attempt);
-                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-            }
-        }
-        Err(listing_observation_model_error(
-            200,
-            "draft_delete_action_unavailable",
-        ))
-    }
-
     async fn reconcile_missing_draft(&self, draft_id: &str, detail_error: ApiError) -> ApiError {
         let detail_observation = detail_error.observation.clone().unwrap_or_else(|| {
             Observation::confirmed_absent(ObservationSource::DraftDetail, Some(404))
         });
-        match self.find_listing_summary(draft_id).await {
+        match ListingObservations::new(&self.transport)
+            .find_summary(draft_id)
+            .await
+        {
             Ok(Some(summary)) => {
                 let collection = Observation::confirmed_present(
                     ObservationSource::AuthenticatedListingCollection,
@@ -695,7 +520,9 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     async fn delete_draft(&self, draft_id: &str) -> Result<(), ApiError> {
         validate_resource_id(draft_id, "draft")?;
         self.get_draft(draft_id).await?;
-        let path = self.draft_delete_action(draft_id).await?;
+        let path = ListingObservations::new(&self.transport)
+            .draft_delete_action(draft_id)
+            .await?;
         self.json(
             HttpRequest::mutation(
                 ObservationSource::DraftService,
@@ -842,7 +669,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
 
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
         validate_resource_id(listing_id, "listing")?;
-        let Some(_) = self.find_listing_summary(listing_id).await? else {
+        let Some(_) = ListingObservations::new(&self.transport)
+            .find_summary(listing_id)
+            .await?
+        else {
             return Err(listing_not_copyable(
                 listing_id,
                 "not_in_authenticated_seller_collection",
@@ -1119,8 +949,8 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
 
     async fn active_listing(&self, listing_id: &str) -> Result<Option<Value>, ApiError> {
         validate_resource_id(listing_id, "listing")?;
-        Ok(self
-            .find_listing_summary(listing_id)
+        Ok(ListingObservations::new(&self.transport)
+            .find_summary(listing_id)
             .await?
             .filter(listing_is_active))
     }
@@ -1150,7 +980,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             }
             return Ok(body);
         }
-        if let Some(summary) = self.find_listing_summary(listing_id).await? {
+        if let Some(summary) = ListingObservations::new(&self.transport)
+            .find_summary(listing_id)
+            .await?
+        {
             return Ok(summary);
         }
         let (detail_status, observation) = match detail {
@@ -1198,19 +1031,12 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     }
 }
 
-fn listing_value_id_matches(value: Option<&Value>, listing_id: &str) -> bool {
-    match value {
+fn observed_detail_matches(value: &Value, listing_id: &str) -> bool {
+    match value.get("id").or_else(|| value.get("listing_id")) {
         Some(Value::String(value)) => value == listing_id,
         Some(Value::Number(value)) => value.to_string() == listing_id,
         _ => false,
     }
-}
-
-fn observed_detail_matches(value: &Value, listing_id: &str) -> bool {
-    listing_value_id_matches(
-        value.get("id").or_else(|| value.get("listing_id")),
-        listing_id,
-    )
 }
 
 fn listing_is_active(value: &Value) -> bool {
@@ -1232,20 +1058,6 @@ fn listing_is_active(value: &Value) -> bool {
             state.trim().to_ascii_lowercase().as_str(),
             "active" | "published"
         )
-    })
-}
-
-fn normalize_observed_summary(summary: &Value, listing_id: &str) -> Value {
-    let data = summary.get("data").unwrap_or(&Value::Null);
-    json!({
-        "listing_id": listing_id,
-        "title": data.get("title"),
-        "price": data.get("subtitle"),
-        "state": summary.get("state"),
-        "location": data.get("location").or_else(|| data.get("area")).or_else(|| data.get("place")),
-        "image_url": data.get("image"),
-        "public_url": public_listing_url(listing_id),
-        "observation_source": "collection",
     })
 }
 
@@ -1308,26 +1120,6 @@ fn malformed_copy_source(listing_id: &str, status: u16) -> ApiError {
         ),
         "copy_eligibility": eligibility,
         "remote_draft_allocated": false,
-    })));
-    error
-}
-
-fn listing_observation_model_error(status: u16, model: &str) -> ApiError {
-    let mut error = ApiError::new(
-        "upstream.unrecognized_model",
-        "Tori returned an unrecognized listing collection model",
-    )
-    .with_observation(
-        Observation::unrecognized_response(
-            ObservationSource::AuthenticatedListingCollection,
-            Some(status),
-        ),
-        ObservationOperation::Read,
-    );
-    error.status = Some(status);
-    error.details = Some(Box::new(json!({
-        "status": status,
-        "response_model": model,
     })));
     error
 }

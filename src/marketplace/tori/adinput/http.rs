@@ -121,7 +121,7 @@ impl fmt::Debug for HttpRequest {
 }
 
 impl HttpRequest {
-    pub(super) fn read(source: ObservationSource, path: impl Into<String>) -> Self {
+    pub(crate) fn read(source: ObservationSource, path: impl Into<String>) -> Self {
         Self {
             method: Method::Get,
             path: path.into(),
@@ -150,12 +150,12 @@ impl HttpRequest {
         }
     }
 
-    pub(super) fn with_service(mut self, service: &'static str) -> Self {
+    pub(crate) fn with_service(mut self, service: &'static str) -> Self {
         self.service = Some(service);
         self
     }
 
-    pub(super) fn retry_context(&self) -> RetryContext {
+    pub(crate) fn retry_context(&self) -> RetryContext {
         let method = self.method.retry_method();
         if self.method.is_mutation() {
             RetryContext::mutation(method)
@@ -199,7 +199,7 @@ impl ApiError {
         }
     }
 
-    pub(super) fn response(
+    pub(crate) fn response(
         response: &HttpResponse,
         context: RetryContext,
         source: ObservationSource,
@@ -262,7 +262,7 @@ impl ApiError {
         self
     }
 
-    pub(super) fn with_observation(
+    pub(crate) fn with_observation(
         mut self,
         observation: Observation,
         operation: ObservationOperation,

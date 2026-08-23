@@ -1,9 +1,18 @@
+pub(crate) mod observation;
+mod scan;
+
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt,
     future::Future,
+    ops::ControlFlow,
     pin::Pin,
     sync::Arc,
+};
+
+use scan::{
+    COLLECTION_PAGE_SIZE, CollectionPage, CollectionPageSource, CollectionScan,
+    CollectionScanError, scan_collection,
 };
 
 use reqwest::{Method, StatusCode, header::HeaderValue};
@@ -29,10 +38,9 @@ use crate::{
     retry::{FailureKind, OperationMethod, RetryContext, classify},
 };
 
-pub const LISTING_PAGE_SIZE: usize = 50;
+pub const LISTING_PAGE_SIZE: usize = COLLECTION_PAGE_SIZE;
 pub const CATEGORY_SEARCH_LIMIT_DEFAULT: usize = 20;
 pub const CATEGORY_SEARCH_LIMIT_MAX: usize = 100;
-const MAX_LISTING_PAGES: usize = 10_000;
 
 pub trait ListingsApi: Send + Sync {
     fn categories(
@@ -61,6 +69,32 @@ pub trait ListingsApi: Send + Sync {
         &'a self,
         listing_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>>;
+}
+
+struct ListingCollectionSource<'a> {
+    api: &'a dyn ListingsApi,
+}
+
+impl CollectionPageSource for ListingCollectionSource<'_> {
+    type Item = UpstreamListingSummary;
+    type Metadata = Vec<UpstreamFacet>;
+    type Error = ListingsApiError;
+
+    async fn page(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<CollectionPage<Self::Item, Self::Metadata>, Self::Error> {
+        self.api
+            .listing_page(offset, limit)
+            .await
+            .map(|page| CollectionPage {
+                items: page.summaries,
+                total: page.total,
+                metadata: page.facets,
+                status: None,
+            })
+    }
 }
 
 pub struct HttpListingsApi {
@@ -533,64 +567,65 @@ impl<'a> Listings<'a> {
     }
 
     pub async fn list(&self) -> Result<ListingCollection, AppError> {
+        let source = ListingCollectionSource { api: self.api };
         let mut listings = Vec::new();
         let mut facets = Vec::new();
-        let mut total = None;
-        let mut offset = 0;
         let mut seen = HashSet::new();
-
-        for _ in 0..MAX_LISTING_PAGES {
-            let page = self
-                .api
-                .listing_page(offset, LISTING_PAGE_SIZE)
-                .await
-                .map_err(|error| {
-                    listing_error(error, None, RetryContext::read(OperationMethod::Get))
-                })?;
-            let expected_total = *total.get_or_insert(page.total);
-            if page.total != expected_total {
-                return Err(unexpected("listing total changed during pagination"));
-            }
+        let scan = scan_collection(&source, async |summaries, page_facets| {
             if facets.is_empty() {
-                facets = page.facets.into_iter().map(normalize_facet).collect();
+                facets = page_facets.into_iter().map(normalize_facet).collect();
             }
-            let page_len = page.summaries.len();
-            for summary in page.summaries {
-                let listing_id = value_id(&summary.id)?;
-                let detail = self.api.listing(&listing_id).await.map_err(|error| {
-                    listing_error(
-                        error,
-                        Some(&listing_id),
-                        RetryContext::read(OperationMethod::Get),
-                    )
-                })?;
-                if value_id(&detail.id)? != listing_id {
-                    return Err(unexpected("listing detail returned a different ID"));
+            for summary in summaries {
+                let listing_id = match value_id(&summary.id) {
+                    Ok(listing_id) => listing_id,
+                    Err(error) => return ControlFlow::Break(Err(error)),
+                };
+                let detail = match self.api.listing(&listing_id).await {
+                    Ok(detail) => detail,
+                    Err(error) => {
+                        return ControlFlow::Break(Err(listing_error(
+                            error,
+                            Some(&listing_id),
+                            RetryContext::read(OperationMethod::Get),
+                        )));
+                    }
+                };
+                match value_id(&detail.id) {
+                    Ok(detail_id) if detail_id == listing_id => {}
+                    Ok(_) => {
+                        return ControlFlow::Break(Err(unexpected(
+                            "listing detail returned a different ID",
+                        )));
+                    }
+                    Err(error) => return ControlFlow::Break(Err(error)),
                 }
                 let (trade_type, price) = commerce_from_fields(&detail.fields);
-                let normalized = normalize_summary(summary, trade_type, price)?;
+                let normalized = match normalize_summary(summary, trade_type, price) {
+                    Ok(normalized) => normalized,
+                    Err(error) => return ControlFlow::Break(Err(error)),
+                };
                 if !seen.insert(normalized.listing_id.clone()) {
-                    return Err(unexpected("listing pagination returned a duplicate item"));
+                    return ControlFlow::Break(Err(unexpected(
+                        "listing pagination returned a duplicate item",
+                    )));
                 }
                 listings.push(normalized);
             }
-            offset += page_len;
+            ControlFlow::Continue(())
+        })
+        .await
+        .map_err(list_scan_error)?;
+        let total = match scan {
+            CollectionScan::Complete { total } => total,
+            CollectionScan::Match(Err(error)) => return Err(error),
+            CollectionScan::Match(Ok(())) => unreachable!("listing scans stop only on errors"),
+        };
 
-            if offset >= expected_total {
-                return Ok(ListingCollection {
-                    listings,
-                    total: expected_total as u64,
-                    facets,
-                });
-            }
-            if page_len == 0 {
-                return Err(unexpected(
-                    "listing pagination ended before the reported total",
-                ));
-            }
-        }
-
-        Err(unexpected("listing pagination exceeded its safety bound"))
+        Ok(ListingCollection {
+            listings,
+            total: total as u64,
+            facets,
+        })
     }
 
     pub async fn show(&self, listing_id: &str) -> Result<ListingDetail, AppError> {
@@ -654,46 +689,33 @@ impl<'a> Listings<'a> {
         &self,
         listing_id: &str,
     ) -> Result<Option<ListingSummary>, ListingsApiError> {
-        let mut offset = 0;
-        let mut expected_total = None;
-        for _ in 0..MAX_LISTING_PAGES {
-            let page = self.api.listing_page(offset, LISTING_PAGE_SIZE).await?;
-            let total = *expected_total.get_or_insert(page.total);
-            if page.total != total {
-                return Err(ListingsApiError::UnexpectedResponse(
-                    "listing total changed during identity reconciliation".to_owned(),
-                ));
+        let source = ListingCollectionSource { api: self.api };
+        let scan = scan_collection(&source, async |summaries, _| {
+            for summary in summaries {
+                match summary_id(&summary.id) {
+                    Ok(id) if id == listing_id => return ControlFlow::Break(Ok(summary)),
+                    Ok(_) => {}
+                    Err(error) => return ControlFlow::Break(Err(error)),
+                }
             }
-            let page_len = page.summaries.len();
-            for summary in page.summaries {
-                let id = summary_id(&summary.id)?;
-                if id == listing_id {
-                    return normalize_summary(
-                        summary,
-                        TradeType::Unknown,
-                        Price::unavailable(None),
-                    )
+            ControlFlow::Continue(())
+        })
+        .await
+        .map_err(reconciliation_scan_error)?;
+
+        match scan {
+            CollectionScan::Complete { .. } => Ok(None),
+            CollectionScan::Match(Err(error)) => Err(error),
+            CollectionScan::Match(Ok(summary)) => {
+                normalize_summary(summary, TradeType::Unknown, Price::unavailable(None))
                     .map(Some)
                     .map_err(|_| {
                         ListingsApiError::UnexpectedResponse(
                             "matching listing summary was malformed".to_owned(),
                         )
-                    });
-                }
-            }
-            offset += page_len;
-            if offset >= total {
-                return Ok(None);
-            }
-            if page_len == 0 {
-                return Err(ListingsApiError::UnexpectedResponse(
-                    "listing pagination ended before the reported total".to_owned(),
-                ));
+                    })
             }
         }
-        Err(ListingsApiError::UnexpectedResponse(
-            "listing identity reconciliation exceeded its safety bound".to_owned(),
-        ))
     }
 
     pub async fn snapshot(&self, listing_id: &str) -> Result<ListingSnapshot, AppError> {
@@ -1708,6 +1730,38 @@ fn upstream_error(error: ListingsApiError, context: RetryContext) -> AppError {
         })));
     }
     error
+}
+
+fn list_scan_error(error: CollectionScanError<ListingsApiError>) -> AppError {
+    match error {
+        CollectionScanError::Source(error) => {
+            listing_error(error, None, RetryContext::read(OperationMethod::Get))
+        }
+        CollectionScanError::TotalChanged { .. } => {
+            unexpected("listing total changed during pagination")
+        }
+        CollectionScanError::PrematureEmptyPage { .. } => {
+            unexpected("listing pagination ended before the reported total")
+        }
+        CollectionScanError::PageBoundExceeded => {
+            unexpected("listing pagination exceeded its safety bound")
+        }
+    }
+}
+
+fn reconciliation_scan_error(error: CollectionScanError<ListingsApiError>) -> ListingsApiError {
+    match error {
+        CollectionScanError::Source(error) => error,
+        CollectionScanError::TotalChanged { .. } => ListingsApiError::UnexpectedResponse(
+            "listing total changed during identity reconciliation".to_owned(),
+        ),
+        CollectionScanError::PrematureEmptyPage { .. } => ListingsApiError::UnexpectedResponse(
+            "listing pagination ended before the reported total".to_owned(),
+        ),
+        CollectionScanError::PageBoundExceeded => ListingsApiError::UnexpectedResponse(
+            "listing identity reconciliation exceeded its safety bound".to_owned(),
+        ),
+    }
 }
 
 fn unexpected(message: &str) -> AppError {
