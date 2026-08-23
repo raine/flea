@@ -1,10 +1,13 @@
 use std::{
-    ffi::OsStr,
     fs::{self, File, OpenOptions},
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
@@ -84,33 +87,124 @@ impl ProcessingError {
 
 pub(crate) fn preprocess_path(path: &Path) -> Result<ProcessedImage, ProcessingError> {
     let path = path.to_owned();
-    run_bounded(move || read_source(&path).and_then(|bytes| preprocess_inner(bytes, None)))
+    run_bounded(MAX_PROCESSING_TIME, move |context| {
+        context.enter(ProcessingStage::Read)?;
+        let bytes = read_source(&path)?;
+        preprocess_inner(bytes, None, &context)
+    })
 }
 
 pub(crate) fn preprocess_bytes(bytes: Vec<u8>) -> Result<ProcessedImage, ProcessingError> {
     validate_source_size(bytes.len())?;
-    run_bounded(move || preprocess_inner(bytes, None))
+    run_bounded(MAX_PROCESSING_TIME, move |context| {
+        preprocess_inner(bytes, None, &context)
+    })
+}
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+enum ProcessingStage {
+    Starting,
+    Read,
+    HeicDecode,
+    RasterDecode,
+    Orientation,
+    ColorNormalization,
+    Resize,
+    Encode,
+}
+
+impl ProcessingStage {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Read => "read",
+            Self::HeicDecode => "heic_decode",
+            Self::RasterDecode => "raster_decode",
+            Self::Orientation => "orientation",
+            Self::ColorNormalization => "color_normalization",
+            Self::Resize => "resize",
+            Self::Encode => "encode",
+        }
+    }
+
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Read,
+            2 => Self::HeicDecode,
+            3 => Self::RasterDecode,
+            4 => Self::Orientation,
+            5 => Self::ColorNormalization,
+            6 => Self::Resize,
+            7 => Self::Encode,
+            _ => Self::Starting,
+        }
+    }
+}
+
+struct ProcessingContext {
+    deadline: Instant,
+    cancelled: Arc<AtomicBool>,
+    stage: Arc<AtomicU8>,
+}
+
+impl ProcessingContext {
+    fn enter(&self, stage: ProcessingStage) -> Result<(), ProcessingError> {
+        self.stage.store(stage as u8, Ordering::Release);
+        if self.cancelled.load(Ordering::Acquire) || Instant::now() >= self.deadline {
+            Err(processing_timeout(stage))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn remaining(&self) -> Duration {
+        self.deadline.saturating_duration_since(Instant::now())
+    }
 }
 
 fn run_bounded(
-    operation: impl FnOnce() -> Result<ProcessedImage, ProcessingError> + Send + 'static,
+    timeout: Duration,
+    operation: impl FnOnce(ProcessingContext) -> Result<ProcessedImage, ProcessingError>
+    + Send
+    + 'static,
 ) -> Result<ProcessedImage, ProcessingError> {
     let (sender, receiver) = mpsc::sync_channel(1);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let stage = Arc::new(AtomicU8::new(ProcessingStage::Starting as u8));
+    let context = ProcessingContext {
+        deadline: Instant::now() + timeout,
+        cancelled: Arc::clone(&cancelled),
+        stage: Arc::clone(&stage),
+    };
     std::thread::Builder::new()
         .name("flea-image-processing".to_owned())
         .spawn(move || {
-            let _ = sender.send(operation());
+            let _ = sender.send(operation(context));
         })
         .map_err(|_| processing_failed())?;
 
-    match receiver.recv_timeout(MAX_PROCESSING_TIME) {
+    match receiver.recv_timeout(timeout) {
         Ok(result) => result,
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(ProcessingError::new(
-            "draft.image_processing_timeout",
-            "Image preprocessing exceeded the 30-second safety limit",
-        )),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            cancelled.store(true, Ordering::Release);
+            Err(processing_timeout(ProcessingStage::from_u8(
+                stage.load(Ordering::Acquire),
+            )))
+        }
         Err(mpsc::RecvTimeoutError::Disconnected) => Err(processing_failed()),
     }
+}
+
+fn processing_timeout(stage: ProcessingStage) -> ProcessingError {
+    ProcessingError::new(
+        "draft.image_processing_timeout",
+        format!(
+            "Image preprocessing stage '{}' exceeded the 30-second safety limit",
+            stage.name()
+        ),
+    )
+    .with_details(json!({ "stage": stage.name() }))
 }
 
 fn read_source(path: &Path) -> Result<Vec<u8>, ProcessingError> {
@@ -162,13 +256,19 @@ fn source_too_large(length: u64) -> ProcessingError {
 fn preprocess_inner(
     bytes: Vec<u8>,
     decoder_settings: Option<&DecoderSettings<'_>>,
+    context: &ProcessingContext,
 ) -> Result<ProcessedImage, ProcessingError> {
     match detect_source_format(&bytes)? {
-        SourceFormat::Jpeg => process_raster(bytes, SourceFormat::Jpeg, ImageFormat::Jpeg, false),
-        SourceFormat::Png => process_raster(bytes, SourceFormat::Png, ImageFormat::Png, false),
+        SourceFormat::Jpeg => {
+            process_raster(bytes, SourceFormat::Jpeg, ImageFormat::Jpeg, false, context)
+        }
+        SourceFormat::Png => {
+            process_raster(bytes, SourceFormat::Png, ImageFormat::Png, false, context)
+        }
         source @ (SourceFormat::Heic | SourceFormat::Heif) => {
-            let decoded = decode_heif(bytes, decoder_settings)?;
-            process_raster(decoded, source, ImageFormat::Png, true)
+            context.enter(ProcessingStage::HeicDecode)?;
+            let decoded = decode_heif(bytes, decoder_settings, context)?;
+            process_raster(decoded, source, ImageFormat::Png, true, context)
         }
     }
 }
@@ -251,6 +351,7 @@ fn process_raster(
     source_format: SourceFormat,
     raster_format: ImageFormat,
     force_reencode: bool,
+    context: &ProcessingContext,
 ) -> Result<ProcessedImage, ProcessingError> {
     let png_metadata = (raster_format == ImageFormat::Png).then(|| inspect_png(&bytes));
     let raw_is_safe = match raster_format {
@@ -259,6 +360,7 @@ fn process_raster(
         _ => false,
     };
 
+    context.enter(ProcessingStage::RasterDecode)?;
     let mut reader = ImageReader::with_format(Cursor::new(bytes.as_slice()), raster_format);
     let mut initial_limits = Limits::default();
     initial_limits.max_alloc = Some(MAX_DECODED_BYTES);
@@ -303,13 +405,16 @@ fn process_raster(
         ));
     }
 
+    context.enter(ProcessingStage::Orientation)?;
     image.apply_orientation(orientation);
+    context.enter(ProcessingStage::ColorNormalization)?;
     normalize_color(
         &mut image,
         color_profile.as_deref(),
         png_metadata.and_then(|metadata| metadata.cicp),
     );
     if image.width() > MAX_FINAL_DIMENSION || image.height() > MAX_FINAL_DIMENSION {
+        context.enter(ProcessingStage::Resize)?;
         image = image.resize(
             MAX_FINAL_DIMENSION,
             MAX_FINAL_DIMENSION,
@@ -324,7 +429,8 @@ fn process_raster(
     } else {
         ImageFormat::Png
     };
-    let (encoded, width, height) = encode_bounded(image, output_format)?;
+    context.enter(ProcessingStage::Encode)?;
+    let (encoded, width, height) = encode_bounded(image, output_format, context)?;
     Ok(finish(
         encoded,
         output_format,
@@ -447,8 +553,10 @@ fn convert_icc_to_srgb(image: &mut DynamicImage, profile_bytes: &[u8]) -> bool {
 fn encode_bounded(
     mut image: DynamicImage,
     format: ImageFormat,
+    context: &ProcessingContext,
 ) -> Result<(Vec<u8>, u32, u32), ProcessingError> {
     loop {
+        context.enter(ProcessingStage::Encode)?;
         let encoded = match format {
             ImageFormat::Jpeg => encode_jpeg(&image)?,
             ImageFormat::Png => encode_png(&image)?,
@@ -465,6 +573,7 @@ fn encode_bounded(
         }
         let width = (image.width().saturating_mul(3) / 4).max(1);
         let height = (image.height().saturating_mul(3) / 4).max(1);
+        context.enter(ProcessingStage::Resize)?;
         image = image.resize_exact(width, height, ResizeFilter::Lanczos3);
     }
 }
@@ -576,6 +685,7 @@ struct DecoderSettings<'a> {
 fn decode_heif(
     bytes: Vec<u8>,
     settings: Option<&DecoderSettings<'_>>,
+    context: &ProcessingContext,
 ) -> Result<Vec<u8>, ProcessingError> {
     let default_programs = default_decoder_programs();
     let programs = settings.map_or(default_programs.as_slice(), |settings| settings.programs);
@@ -589,20 +699,26 @@ fn decode_heif(
     let started = Instant::now();
     for program in programs {
         workspace.clear_output()?;
-        let remaining = timeout.saturating_sub(started.elapsed());
+        context.enter(ProcessingStage::HeicDecode)?;
+        let decoder_remaining = timeout.saturating_sub(started.elapsed());
+        let total_remaining = context.remaining();
+        let remaining = decoder_remaining.min(total_remaining);
         if remaining.is_zero() {
-            return Err(ProcessingError::new(
-                "draft.heic_decode_timeout",
-                "HEIC/HEIF decoding exceeded the bounded safety timeout",
-            ));
+            return if total_remaining.is_zero() {
+                Err(processing_timeout(ProcessingStage::HeicDecode))
+            } else {
+                Err(heic_decode_timeout())
+            };
         }
-        match run_decoder(program, &workspace, remaining) {
+        match run_decoder(program, &workspace, remaining, MAX_FINAL_DIMENSION) {
             DecoderRun::Unavailable => continue,
+            DecoderRun::Rejected(error) => return Err(error),
             DecoderRun::TimedOut => {
-                return Err(ProcessingError::new(
-                    "draft.heic_decode_timeout",
-                    "HEIC/HEIF decoding exceeded the bounded safety timeout",
-                ));
+                return if context.remaining().is_zero() {
+                    Err(processing_timeout(ProcessingStage::HeicDecode))
+                } else {
+                    Err(heic_decode_timeout())
+                };
             }
             DecoderRun::Failed => found_decoder = true,
             DecoderRun::Succeeded => {
@@ -631,17 +747,31 @@ fn decode_heif(
     }
 }
 
+fn heic_decode_timeout() -> ProcessingError {
+    ProcessingError::new(
+        "draft.heic_decode_timeout",
+        "HEIC/HEIF decoding exceeded the bounded safety timeout",
+    )
+    .with_details(json!({ "stage": ProcessingStage::HeicDecode.name() }))
+}
+
 fn default_decoder_programs() -> Vec<DecoderProgram> {
-    let mut programs = vec![DecoderProgram {
+    #[cfg(target_os = "macos")]
+    return vec![
+        DecoderProgram {
+            executable: PathBuf::from("/usr/bin/sips"),
+            kind: DecoderKind::Sips,
+        },
+        DecoderProgram {
+            executable: PathBuf::from("heif-convert"),
+            kind: DecoderKind::Libheif,
+        },
+    ];
+    #[cfg(not(target_os = "macos"))]
+    vec![DecoderProgram {
         executable: PathBuf::from("heif-convert"),
         kind: DecoderKind::Libheif,
-    }];
-    #[cfg(target_os = "macos")]
-    programs.push(DecoderProgram {
-        executable: PathBuf::from("/usr/bin/sips"),
-        kind: DecoderKind::Sips,
-    });
-    programs
+    }]
 }
 
 struct TempWorkspace {
@@ -757,33 +887,127 @@ enum DecoderRun {
     Failed,
     TimedOut,
     Unavailable,
+    Rejected(ProcessingError),
 }
 
 fn run_decoder(
     program: &DecoderProgram,
     workspace: &TempWorkspace,
     timeout: Duration,
+    maximum_dimension: u32,
 ) -> DecoderRun {
+    let started = Instant::now();
+    let sips_dimensions = if matches!(program.kind, DecoderKind::Sips) {
+        match query_sips_dimensions(program, workspace, timeout) {
+            Ok(dimensions) => Some(dimensions),
+            Err(result) => return result,
+        }
+    } else {
+        None
+    };
+    let remaining = timeout.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        return DecoderRun::TimedOut;
+    }
+
     let mut command = Command::new(&program.executable);
     match program.kind {
         DecoderKind::Libheif => {
             command.arg(&workspace.input).arg(&workspace.output);
         }
         DecoderKind::Sips => {
+            command.args(["-s", "format", "png"]);
+            if sips_dimensions.is_some_and(|(width, height)| {
+                width > maximum_dimension || height > maximum_dimension
+            }) {
+                command
+                    .arg("--resampleHeightWidthMax")
+                    .arg(maximum_dimension.to_string());
+            }
             command
-                .args([OsStr::new("-s"), OsStr::new("format"), OsStr::new("png")])
                 .arg(&workspace.input)
                 .arg("--out")
                 .arg(&workspace.output);
         }
     }
+    configure_decoder_command(&mut command, workspace, false);
+    wait_for_decoder(command, remaining)
+}
+
+fn query_sips_dimensions(
+    program: &DecoderProgram,
+    workspace: &TempWorkspace,
+    timeout: Duration,
+) -> Result<(u32, u32), DecoderRun> {
+    let mut command = Command::new(&program.executable);
+    command
+        .args(["-g", "pixelWidth", "-g", "pixelHeight"])
+        .arg(&workspace.input);
+    configure_decoder_command(&mut command, workspace, true);
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(DecoderRun::Unavailable);
+        }
+        Err(_) => return Err(DecoderRun::Failed),
+    };
+    match child.wait_timeout(timeout) {
+        Ok(Some(status)) if status.success() => {}
+        Ok(Some(_)) => return Err(DecoderRun::Failed),
+        Ok(None) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(DecoderRun::TimedOut);
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(DecoderRun::Failed);
+        }
+    }
+    let mut output = String::new();
+    if child
+        .stdout
+        .take()
+        .is_none_or(|stdout| stdout.take(4_096).read_to_string(&mut output).is_err())
+    {
+        return Err(DecoderRun::Failed);
+    }
+    let width = sips_property(&output, "pixelWidth").ok_or(DecoderRun::Failed)?;
+    let height = sips_property(&output, "pixelHeight").ok_or(DecoderRun::Failed)?;
+    validate_dimensions(width, height, u64::from(width) * u64::from(height) * 4)
+        .map_err(DecoderRun::Rejected)?;
+    Ok((width, height))
+}
+
+fn sips_property(output: &str, property: &str) -> Option<u32> {
+    output.lines().find_map(|line| {
+        let (name, value) = line.trim().split_once(':')?;
+        (name == property)
+            .then(|| value.trim().parse().ok())
+            .flatten()
+    })
+}
+
+fn configure_decoder_command(
+    command: &mut Command,
+    workspace: &TempWorkspace,
+    capture_stdout: bool,
+) {
     command
         .current_dir(workspace.directory.path())
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(if capture_stdout {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stderr(Stdio::null());
-    apply_process_limits(&mut command);
+    apply_process_limits(command);
+}
 
+fn wait_for_decoder(mut command: Command, timeout: Duration) -> DecoderRun {
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -1258,12 +1482,42 @@ mod tests {
         };
 
         let source = include_bytes!("../tests/fixtures/heic-orientation-6.heic").to_vec();
-        let processed = preprocess_inner(source, Some(&settings)).unwrap();
+        let processed = preprocess_inner(source, Some(&settings), &test_context()).unwrap();
 
         assert_eq!(processed.report.source_format, "heic");
         assert_eq!((processed.width, processed.height), (3, 2));
         assert!(processed.report.metadata_stripped);
         assert!(!processed.bytes.windows(3).any(|value| value == b"GPS"));
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn large_heic_is_resized_by_sips_during_decode() {
+        let root = tempfile::tempdir().unwrap();
+        let program_dir = tempfile::tempdir().unwrap();
+        let decoded = png_bytes(DynamicImage::ImageRgb8(ImageBuffer::from_pixel(
+            1_600,
+            1_200,
+            Rgb([80, 90, 100]),
+        )));
+        fs::write(program_dir.path().join("decoded.png"), decoded).unwrap();
+        let program = fake_sips(program_dir.path());
+        let programs = [DecoderProgram {
+            executable: program,
+            kind: DecoderKind::Sips,
+        }];
+        let settings = DecoderSettings {
+            programs: &programs,
+            temp_root: Some(root.path()),
+            timeout: Duration::from_secs(2),
+        };
+
+        let processed = preprocess_inner(minimal_heic(), Some(&settings), &test_context()).unwrap();
+
+        assert_eq!((processed.width, processed.height), (1_600, 1_200));
+        assert_eq!(processed.report.uploaded_format, "jpeg");
+        assert!(processed.report.metadata_stripped);
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
     }
 
@@ -1283,7 +1537,7 @@ mod tests {
             timeout: Duration::from_secs(2),
         };
 
-        let error = preprocess_inner(minimal_heic(), Some(&settings)).unwrap_err();
+        let error = preprocess_inner(minimal_heic(), Some(&settings), &test_context()).unwrap_err();
 
         assert_eq!(error.code, "draft.heic_decode_failed");
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
@@ -1306,11 +1560,39 @@ mod tests {
         };
         let started = Instant::now();
 
-        let error = preprocess_inner(minimal_heic(), Some(&settings)).unwrap_err();
+        let error = preprocess_inner(minimal_heic(), Some(&settings), &test_context()).unwrap_err();
 
         assert_eq!(error.code, "draft.heic_decode_timeout");
         assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn total_timeout_reports_the_stage_and_stops_the_worker() {
+        let worker_running = Arc::new(AtomicBool::new(false));
+        let worker_state = Arc::clone(&worker_running);
+        let error = run_bounded(Duration::from_millis(20), move |context| {
+            worker_state.store(true, Ordering::Release);
+            loop {
+                if let Err(error) = context.enter(ProcessingStage::ColorNormalization) {
+                    worker_state.store(false, Ordering::Release);
+                    return Err(error);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(error.code, "draft.image_processing_timeout");
+        assert_eq!(
+            error.details.as_ref().unwrap()["stage"],
+            "color_normalization"
+        );
+        let stopped_by = Instant::now() + Duration::from_secs(1);
+        while worker_running.load(Ordering::Acquire) && Instant::now() < stopped_by {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!worker_running.load(Ordering::Acquire));
     }
 
     #[test]
@@ -1326,7 +1608,7 @@ mod tests {
             timeout: Duration::from_secs(1),
         };
 
-        let error = preprocess_inner(minimal_heic(), Some(&settings)).unwrap_err();
+        let error = preprocess_inner(minimal_heic(), Some(&settings), &test_context()).unwrap_err();
 
         assert_eq!(error.code, "draft.heic_decoder_unavailable");
         assert!(error.message.contains("install libheif"));
@@ -1359,6 +1641,14 @@ mod tests {
                 & 0o777,
             0o600
         );
+    }
+
+    fn test_context() -> ProcessingContext {
+        ProcessingContext {
+            deadline: Instant::now() + Duration::from_secs(30),
+            cancelled: Arc::new(AtomicBool::new(false)),
+            stage: Arc::new(AtomicU8::new(ProcessingStage::Starting as u8)),
+        }
     }
 
     fn png_bytes(image: DynamicImage) -> Vec<u8> {
@@ -1465,6 +1755,15 @@ mod tests {
             "#!/usr/bin/env bash\nset -euo pipefail\nexit 1\n"
         };
         executable_script(directory, "fake-heif-decoder", body)
+    }
+
+    #[cfg(unix)]
+    fn fake_sips(directory: &Path) -> PathBuf {
+        executable_script(
+            directory,
+            "fake-sips",
+            "#!/usr/bin/env bash\nset -euo pipefail\nscript_dir=$(cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [[ \" $* \" == *\" -g pixelWidth \"* ]]; then\n  printf '  pixelWidth: 5712\\n  pixelHeight: 4284\\n'\n  exit 0\nfi\n[[ \" $* \" == *\" --resampleHeightWidthMax 2560 \"* ]]\ncp -- \"$script_dir/decoded.png\" \"${@: -1}\"\n",
+        )
     }
 
     #[cfg(unix)]
