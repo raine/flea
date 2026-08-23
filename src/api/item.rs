@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::{fmt, future::Future, pin::Pin, sync::Arc};
 
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
@@ -16,7 +16,10 @@ use crate::{
 };
 
 pub trait PublicItemApi: Send + Sync {
-    fn item(&self, listing_id: &str) -> Result<Value, PublicItemApiError>;
+    fn item<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, PublicItemApiError>> + Send + 'a>>;
 }
 
 pub struct HttpPublicItemApi {
@@ -30,41 +33,35 @@ impl HttpPublicItemApi {
 }
 
 impl PublicItemApi for HttpPublicItemApi {
-    fn item(&self, listing_id: &str) -> Result<Value, PublicItemApiError> {
-        let request = RequestSpec::new(
-            Method::GET,
-            format!("/adview/{listing_id}"),
-            compatibility::SERVICE_ADVIEW,
-        );
-        let client = Arc::clone(&self.client);
-        let response = std::thread::scope(|scope| {
-            scope
-                .spawn(move || {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|_| {
-                            PublicItemApiError::Unexpected("HTTP runtime failed".to_owned())
-                        })?
-                        .block_on(client.execute(request))
-                        .map_err(item_http_error)
-                })
-                .join()
-                .map_err(|_| PublicItemApiError::Unexpected("HTTP worker failed".to_owned()))?
-        })?;
+    fn item<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, PublicItemApiError>> + Send + 'a>> {
+        Box::pin(async move {
+            let request = RequestSpec::new(
+                Method::GET,
+                format!("/adview/{listing_id}"),
+                compatibility::SERVICE_ADVIEW,
+            );
+            let response = self
+                .client
+                .execute(request)
+                .await
+                .map_err(item_http_error)?;
 
-        if !response.status.is_success() {
-            return Err(match response.status {
-                StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
-                    PublicItemApiError::Invalid
-                }
-                StatusCode::NOT_FOUND => PublicItemApiError::NotFound,
-                StatusCode::GONE => PublicItemApiError::Expired,
-                status => PublicItemApiError::Upstream(status.as_u16()),
-            });
-        }
-        serde_json::from_slice(&response.body)
-            .map_err(|_| PublicItemApiError::Unexpected("invalid JSON response".to_owned()))
+            if !response.status.is_success() {
+                return Err(match response.status {
+                    StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
+                        PublicItemApiError::Invalid
+                    }
+                    StatusCode::NOT_FOUND => PublicItemApiError::NotFound,
+                    StatusCode::GONE => PublicItemApiError::Expired,
+                    status => PublicItemApiError::Upstream(status.as_u16()),
+                });
+            }
+            serde_json::from_slice(&response.body)
+                .map_err(|_| PublicItemApiError::Unexpected("invalid JSON response".to_owned()))
+        })
     }
 }
 
@@ -122,11 +119,12 @@ impl<'a> PublicItems<'a> {
         Self { api }
     }
 
-    pub fn show(&self, listing_id: &str) -> Result<(PublicItemDetail, Value), AppError> {
+    pub async fn show(&self, listing_id: &str) -> Result<(PublicItemDetail, Value), AppError> {
         validate_id(listing_id)?;
         let raw = self
             .api
             .item(listing_id)
+            .await
             .map_err(|error| item_error(error, listing_id))?;
         let detail = normalize_item(&raw, listing_id)?;
         Ok((detail, raw))

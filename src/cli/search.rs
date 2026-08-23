@@ -204,11 +204,14 @@ struct SearchInput {
     raw: bool,
 }
 
-pub fn dispatch_with_api(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<Value, AppError> {
-    dispatch_with_apis(args, api, None)
+pub async fn dispatch_with_api(
+    args: SearchArgs,
+    api: &dyn PublicSearchApi,
+) -> Result<Value, AppError> {
+    dispatch_with_apis(args, api, None).await
 }
 
-pub fn dispatch_with_apis(
+pub async fn dispatch_with_apis(
     args: SearchArgs,
     api: &dyn PublicSearchApi,
     item_api: Option<&dyn PublicItemApi>,
@@ -226,7 +229,7 @@ pub fn dispatch_with_apis(
         let item_api = item_api.ok_or_else(|| {
             AppError::unexpected("search explanation requires the public item service")
         })?;
-        explain_matches(&mut result, item_api, request_limit);
+        explain_matches(&mut result, item_api, request_limit).await;
     }
     let mut value = serde_json::to_value(&result).map_err(|error| {
         AppError::output("failed to serialize search output").with_source(error)
@@ -440,7 +443,7 @@ pub fn saved_search_parameters(
     Ok(parameters)
 }
 
-fn explain_matches(
+async fn explain_matches(
     result: &mut SearchCollection,
     item_api: &dyn PublicItemApi,
     request_limit: usize,
@@ -463,7 +466,7 @@ fn explain_matches(
 
     for index in candidates.iter().take(request_limit).copied() {
         let listing_id = result.results[index].listing_id.clone();
-        match items.show(&listing_id) {
+        match items.show(&listing_id).await {
             Ok((detail, _)) => {
                 hydrated += 1;
                 if let Some(explanation) = description_explanation(

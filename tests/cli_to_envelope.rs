@@ -115,7 +115,7 @@ impl CommandRuntime for TestRuntime {
                     }
                     ToriCommand::Item(args) => {
                         let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
-                        item::dispatch_with_api(args, &api)
+                        item::dispatch_with_api(args, &api).await
                     }
                     ToriCommand::Listing(args) => {
                         let api = HttpListingsApi::new(Arc::new(self.client.clone()));
@@ -123,7 +123,7 @@ impl CommandRuntime for TestRuntime {
                     }
                     ToriCommand::Search(args) => {
                         let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                        search::dispatch_with_api(*args, &api)
+                        search::dispatch_with_api(*args, &api).await
                     }
                     ToriCommand::SavedSearch(args) => {
                         let api = HttpSavedSearchesApi::new(Arc::new(self.client.clone()));

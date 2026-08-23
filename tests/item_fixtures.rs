@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::{future::Future, pin::Pin, sync::Mutex};
 
 use clap::Parser;
 use flea::{
@@ -29,16 +29,20 @@ impl FixtureApi {
 }
 
 impl PublicItemApi for FixtureApi {
-    fn item(&self, listing_id: &str) -> Result<Value, PublicItemApiError> {
+    fn item<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, PublicItemApiError>> + Send + 'a>> {
         self.ids.lock().unwrap().push(listing_id.to_owned());
-        self.response.clone()
+        let response = self.response.clone();
+        Box::pin(async move { response })
     }
 }
 
-#[test]
-fn normalizes_complete_public_listing_detail() {
+#[tokio::test]
+async fn normalizes_complete_public_listing_detail() {
     let api = FixtureApi::success(full_fixture());
-    let (item, _) = PublicItems::new(&api).show("42346404").unwrap();
+    let (item, _) = PublicItems::new(&api).show("42346404").await.unwrap();
 
     assert_eq!(item.listing_id, "42346404");
     assert_eq!(item.title, "Potkulauta");
@@ -78,8 +82,8 @@ fn normalizes_complete_public_listing_detail() {
     }
 }
 
-#[test]
-fn raw_mode_preserves_the_exact_upstream_document() {
+#[tokio::test]
+async fn raw_mode_preserves_the_exact_upstream_document() {
     let raw = full_fixture();
     let api = FixtureApi::success(raw.clone());
     let cli = Cli::parse_from(["flea", "tori", "item", "show", "42346404", "--raw"]);
@@ -90,21 +94,24 @@ fn raw_mode_preserves_the_exact_upstream_document() {
         unreachable!()
     };
 
-    assert_eq!(item::dispatch_with_api(args, &api).unwrap(), raw);
+    assert_eq!(item::dispatch_with_api(args, &api).await.unwrap(), raw);
 }
 
-#[test]
-fn invalid_ids_fail_locally_with_an_actionable_structured_error() {
+#[tokio::test]
+async fn invalid_ids_fail_locally_with_an_actionable_structured_error() {
     let api = FixtureApi::success(full_fixture());
-    let error = PublicItems::new(&api).show("../42346404").unwrap_err();
+    let error = PublicItems::new(&api)
+        .show("../42346404")
+        .await
+        .unwrap_err();
 
     assert_eq!(error.code, "item.invalid_id");
     assert_eq!(error.next_actions[0].command, "flea tori search");
     assert!(api.ids.lock().unwrap().is_empty());
 }
 
-#[test]
-fn missing_expired_and_upstream_invalid_items_have_distinct_actionable_errors() {
+#[tokio::test]
+async fn missing_expired_and_upstream_invalid_items_have_distinct_actionable_errors() {
     for (api_error, code) in [
         (PublicItemApiError::NotFound, "item.not_found"),
         (PublicItemApiError::Expired, "item.expired"),
@@ -112,6 +119,7 @@ fn missing_expired_and_upstream_invalid_items_have_distinct_actionable_errors() 
     ] {
         let error = PublicItems::new(&FixtureApi::error(api_error))
             .show("42346404")
+            .await
             .unwrap_err();
         assert_eq!(error.code, code);
         assert_eq!(error.next_actions[0].command, "flea tori search");
@@ -119,8 +127,8 @@ fn missing_expired_and_upstream_invalid_items_have_distinct_actionable_errors() 
     }
 }
 
-#[test]
-fn read_failures_separate_transience_from_safe_replay_and_redact_details() {
+#[tokio::test]
+async fn read_failures_separate_transience_from_safe_replay_and_redact_details() {
     for (api_error, upstream_transient) in [
         (
             PublicItemApiError::Unexpected("secret response body".to_owned()),
@@ -135,6 +143,7 @@ fn read_failures_separate_transience_from_safe_replay_and_redact_details() {
     ] {
         let error = PublicItems::new(&FixtureApi::error(api_error))
             .show("42346404")
+            .await
             .unwrap_err();
         assert_eq!(error.upstream_transient, upstream_transient);
         assert!(error.safe_to_retry);
@@ -142,13 +151,13 @@ fn read_failures_separate_transience_from_safe_replay_and_redact_details() {
     }
 }
 
-#[test]
-fn sparse_upstream_details_keep_required_normalized_sections_explicit() {
+#[tokio::test]
+async fn sparse_upstream_details_keep_required_normalized_sections_explicit() {
     let api = FixtureApi::success(json!({
         "ad": {"title": "Free item", "description": ""},
         "meta": {"adId": "1"}
     }));
-    let (item, _) = PublicItems::new(&api).show("1").unwrap();
+    let (item, _) = PublicItems::new(&api).show("1").await.unwrap();
     let value = serde_json::to_value(item).unwrap();
 
     assert!(value.get("seller").unwrap().is_object());

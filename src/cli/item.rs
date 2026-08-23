@@ -29,10 +29,10 @@ pub enum ItemCommand {
     },
 }
 
-pub fn dispatch_with_api(args: ItemArgs, api: &dyn PublicItemApi) -> Result<Value, AppError> {
+pub async fn dispatch_with_api(args: ItemArgs, api: &dyn PublicItemApi) -> Result<Value, AppError> {
     match args.command {
         ItemCommand::Show { listing_id, raw } => {
-            let (detail, upstream) = PublicItems::new(api).show(&listing_id)?;
+            let (detail, upstream) = PublicItems::new(api).show(&listing_id).await?;
             if raw {
                 return Ok(upstream);
             }

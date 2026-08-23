@@ -82,7 +82,7 @@ async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
         }
         ToriCommand::Item(args) => {
             let api = HttpPublicItemApi::new(Arc::new(public_client()));
-            super::item::dispatch_with_api(args, &api)
+            super::item::dispatch_with_api(args, &api).await
         }
         ToriCommand::Listing(args) => {
             let client = tori_session::authenticated_client().await?;
@@ -92,7 +92,7 @@ async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
         ToriCommand::Search(args) => {
             let search_api = HttpPublicSearchApi::new(Arc::new(public_client()));
             let item_api = HttpPublicItemApi::new(Arc::new(public_client()));
-            super::search::dispatch_with_apis(*args, &search_api, Some(&item_api))
+            super::search::dispatch_with_apis(*args, &search_api, Some(&item_api)).await
         }
         ToriCommand::SavedSearch(args) => {
             let client: Arc<dyn crate::api::client::ToriClient> =

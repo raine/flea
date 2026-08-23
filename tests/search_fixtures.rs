@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Mutex};
 
 use clap::Parser;
 use flea::{
@@ -53,17 +53,22 @@ struct ExplainItemApi {
 }
 
 impl PublicItemApi for ExplainItemApi {
-    fn item(&self, listing_id: &str) -> Result<Value, PublicItemApiError> {
+    fn item<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, PublicItemApiError>> + Send + 'a>> {
         self.requests.lock().unwrap().push(listing_id.to_owned());
-        self.responses
+        let response = self
+            .responses
             .get(listing_id)
             .cloned()
-            .unwrap_or(Err(PublicItemApiError::NotFound))
+            .unwrap_or(Err(PublicItemApiError::NotFound));
+        Box::pin(async move { response })
     }
 }
 
-#[test]
-fn saved_search_creation_reuses_public_search_argument_mapping() {
+#[tokio::test]
+async fn saved_search_creation_reuses_public_search_argument_mapping() {
     let api = FixtureApi::new(empty_fixture());
     let cli = Cli::parse_from([
         "flea",
@@ -103,8 +108,8 @@ fn saved_search_creation_reuses_public_search_argument_mapping() {
     assert!(!parameters.contains_key("dealer_segment"));
 }
 
-#[test]
-fn canonical_leaf_category_value_is_accepted_by_search() {
+#[tokio::test]
+async fn canonical_leaf_category_value_is_accepted_by_search() {
     let api = FixtureApi::new(empty_fixture());
     let cli = Cli::parse_from([
         "flea",
@@ -128,7 +133,7 @@ fn canonical_leaf_category_value_is_accepted_by_search() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         panic!("search command");
     };
-    search::dispatch_with_api(*args, &api).unwrap();
+    search::dispatch_with_api(*args, &api).await.unwrap();
     let request = api.requests.lock().unwrap()[0].clone();
 
     assert_eq!(
@@ -137,8 +142,8 @@ fn canonical_leaf_category_value_is_accepted_by_search() {
     );
 }
 
-#[test]
-fn encodes_helsinki_twenty_kilometer_radius_as_tori_meter_parameters() {
+#[tokio::test]
+async fn encodes_helsinki_twenty_kilometer_radius_as_tori_meter_parameters() {
     let api = FixtureApi::new(empty_fixture());
     let cli = Cli::parse_from([
         "flea",
@@ -157,15 +162,15 @@ fn encodes_helsinki_twenty_kilometer_radius_as_tori_meter_parameters() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    search::dispatch_with_api(*args, &api).unwrap();
+    search::dispatch_with_api(*args, &api).await.unwrap();
     assert_eq!(
         api.requests.lock().unwrap()[0].path_and_query(),
         "/search/SEARCH_ID_BAP_COMMON?client=android&lat=60.1699&lon=24.9384&page=1&q=tuoli&radius=20000&rows=1"
     );
 }
 
-#[test]
-fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
+#[tokio::test]
+async fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
     let api = FixtureApi::new(full_fixture());
     let request = UpstreamSearchRequest {
         query: "tuoli".to_owned(),
@@ -263,8 +268,8 @@ fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
     }
 }
 
-#[test]
-fn resolves_unambiguous_location_names_case_insensitively() {
+#[tokio::test]
+async fn resolves_unambiguous_location_names_case_insensitively() {
     let api = FixtureApi::new(empty_fixture());
     let search = PublicSearch::new(&api);
     let location = search.resolve_location("  HELSINKI ").unwrap();
@@ -277,8 +282,8 @@ fn resolves_unambiguous_location_names_case_insensitively() {
     assert_eq!(matches.locations[0].name, "Helsinki");
 }
 
-#[test]
-fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
+#[tokio::test]
+async fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
     let api = FixtureApi::new(full_fixture());
     let cli = Cli::parse_from([
         "flea",
@@ -293,7 +298,7 @@ fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_api(*args, &api).unwrap();
+    let output = search::dispatch_with_api(*args, &api).await.unwrap();
 
     assert_eq!(
         api.requests.lock().unwrap()[0].path_and_query(),
@@ -307,8 +312,8 @@ fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
     );
 }
 
-#[test]
-fn unknown_and_ambiguous_place_names_return_actionable_structured_errors() {
+#[tokio::test]
+async fn unknown_and_ambiguous_place_names_return_actionable_structured_errors() {
     let mut api = FixtureApi::new(empty_fixture());
     api.location_response["filters"][0]["filter_items"][0]["filter_items"][3]["filter_items"] = json!([{
         "display_name": "Kauniainen", "name": "location", "value": "2.100018.110235.202700",
@@ -335,8 +340,8 @@ fn unknown_and_ambiguous_place_names_return_actionable_structured_errors() {
     assert!(unknown.details.as_ref().unwrap()["suggestion"].is_string());
 }
 
-#[test]
-fn omits_upstream_placeholder_zero_distance() {
+#[tokio::test]
+async fn omits_upstream_placeholder_zero_distance() {
     let api = FixtureApi::new(json!({
         "docs": [{"id": "1", "heading": "Nearby chair", "distance": 0.0}],
         "metadata": {
@@ -354,8 +359,8 @@ fn omits_upstream_placeholder_zero_distance() {
     assert_eq!(result.results[0].distance, None);
 }
 
-#[test]
-fn bounds_and_prioritizes_large_category_and_location_facets() {
+#[tokio::test]
+async fn bounds_and_prioritizes_large_category_and_location_facets() {
     let taxonomy_options = |name: &str| {
         (0..SEARCH_FACET_OPTION_LIMIT + 3)
             .map(|index| {
@@ -392,7 +397,7 @@ fn bounds_and_prioritizes_large_category_and_location_facets() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_api(*args, &api).unwrap();
+    let output = search::dispatch_with_api(*args, &api).await.unwrap();
 
     for facet in output["facets"].as_array().unwrap() {
         assert_eq!(
@@ -425,7 +430,7 @@ fn bounds_and_prioritizes_large_category_and_location_facets() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let broader = search::dispatch_with_api(*args, &api).unwrap();
+    let broader = search::dispatch_with_api(*args, &api).await.unwrap();
     for facet in broader["facets"].as_array().unwrap() {
         assert_eq!(
             facet["returned_option_count"],
@@ -436,8 +441,8 @@ fn bounds_and_prioritizes_large_category_and_location_facets() {
     assert!(broader.get("_next_actions").is_none());
 }
 
-#[test]
-fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
+#[tokio::test]
+async fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
     let api = FixtureApi::new(empty_fixture());
     for arguments in [
         vec![
@@ -492,7 +497,7 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
         let ToriCommand::Search(args) = tori_command(cli) else {
             unreachable!()
         };
-        assert!(search::dispatch_with_api(*args, &api).is_err());
+        assert!(search::dispatch_with_api(*args, &api).await.is_err());
     }
     assert!(api.requests.lock().unwrap().is_empty());
 
@@ -514,14 +519,15 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
     };
     assert!(
         search::dispatch_with_api(*args, &api)
+            .await
             .unwrap_err()
             .to_string()
             .contains("both --input and command flags")
     );
 }
 
-#[test]
-fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
+#[tokio::test]
+async fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
     struct ErrorApi;
     impl PublicSearchApi for ErrorApi {
         fn search(&self, _request: &UpstreamSearchRequest) -> Result<Value, SearchApiError> {
@@ -537,7 +543,9 @@ fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let error = search::dispatch_with_api(*args, &ErrorApi).unwrap_err();
+    let error = search::dispatch_with_api(*args, &ErrorApi)
+        .await
+        .unwrap_err();
     assert_eq!(error.code, "upstream.request_failed");
     assert!(error.upstream_transient);
     assert!(error.safe_to_retry);
@@ -547,8 +555,8 @@ fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
     assert!(!rendered.contains("secret"));
 }
 
-#[test]
-fn unicode_query_limit_counts_characters_instead_of_bytes() {
+#[tokio::test]
+async fn unicode_query_limit_counts_characters_instead_of_bytes() {
     let api = FixtureApi::new(empty_fixture());
     let query = "ä".repeat(500);
     let cli = Cli::parse_from(["flea", "tori", "search", &query]);
@@ -556,18 +564,18 @@ fn unicode_query_limit_counts_characters_instead_of_bytes() {
         unreachable!()
     };
 
-    search::dispatch_with_api(*args, &api).unwrap();
+    search::dispatch_with_api(*args, &api).await.unwrap();
     assert_eq!(api.requests.lock().unwrap()[0].query, query);
 }
 
-#[test]
-fn page_cap_action_requests_facets_for_executable_refinement() {
+#[tokio::test]
+async fn page_cap_action_requests_facets_for_executable_refinement() {
     let api = FixtureApi::new(full_fixture());
     let cli = Cli::parse_from(["flea", "tori", "search", "tuoli", "--page", "50"]);
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_api(*args, &api).unwrap();
+    let output = search::dispatch_with_api(*args, &api).await.unwrap();
 
     assert_eq!(
         output["_next_actions"][0]["command"],
@@ -575,8 +583,8 @@ fn page_cap_action_requests_facets_for_executable_refinement() {
     );
 }
 
-#[test]
-fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
+#[tokio::test]
+async fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
     let api = FixtureApi::new(full_fixture());
     let item_api = ExplainItemApi {
         responses: BTreeMap::new(),
@@ -586,7 +594,9 @@ fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_apis(*args, &api, Some(&item_api)).unwrap();
+    let output = search::dispatch_with_apis(*args, &api, Some(&item_api))
+        .await
+        .unwrap();
     let listing = output["results"][0].as_object().unwrap();
 
     assert!(item_api.requests.lock().unwrap().is_empty());
@@ -618,8 +628,8 @@ fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
     assert!(output.get("facets").is_none());
 }
 
-#[test]
-fn explains_a_generic_title_from_bounded_public_description_evidence() {
+#[tokio::test]
+async fn explains_a_generic_title_from_bounded_public_description_evidence() {
     let search_api = FixtureApi::new(json!({
         "docs": [
             {"id": "45917182", "heading": "Potkulauta"},
@@ -656,7 +666,9 @@ fn explains_a_generic_title_from_bounded_public_description_evidence() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api)).unwrap();
+    let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api))
+        .await
+        .unwrap();
 
     assert_eq!(item_api.requests.lock().unwrap().as_slice(), ["45917182"]);
     let explanation = &output["results"][0]["match_explanation"];
@@ -677,8 +689,8 @@ fn explains_a_generic_title_from_bounded_public_description_evidence() {
     assert_eq!(output["explain"]["truncated"], false);
 }
 
-#[test]
-fn explain_enforces_its_request_bound_and_reports_partial_failures() {
+#[tokio::test]
+async fn explain_enforces_its_request_bound_and_reports_partial_failures() {
     let search_api = FixtureApi::new(json!({
         "docs": [
             {"id": "1", "heading": "Potkulauta"},
@@ -711,7 +723,9 @@ fn explain_enforces_its_request_bound_and_reports_partial_failures() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api)).unwrap();
+    let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api))
+        .await
+        .unwrap();
 
     assert_eq!(item_api.requests.lock().unwrap().as_slice(), ["1", "2"]);
     assert_eq!(output["results"].as_array().unwrap().len(), 3);
@@ -728,8 +742,8 @@ fn explain_enforces_its_request_bound_and_reports_partial_failures() {
     assert_eq!(output["explain"]["failures"][0]["safe_to_retry"], true);
 }
 
-#[test]
-fn explain_bounds_and_mode_combinations_fail_before_search_requests() {
+#[tokio::test]
+async fn explain_bounds_and_mode_combinations_fail_before_search_requests() {
     let api = FixtureApi::new(empty_fixture());
     for arguments in [
         vec!["flea", "tori", "search", "query", "--explain", "0"],
@@ -741,20 +755,20 @@ fn explain_bounds_and_mode_combinations_fail_before_search_requests() {
         let ToriCommand::Search(args) = tori_command(cli) else {
             unreachable!()
         };
-        assert!(search::dispatch_with_api(*args, &api).is_err());
+        assert!(search::dispatch_with_api(*args, &api).await.is_err());
     }
     assert!(api.requests.lock().unwrap().is_empty());
 }
 
-#[test]
-fn raw_mode_preserves_the_upstream_document() {
+#[tokio::test]
+async fn raw_mode_preserves_the_upstream_document() {
     let raw = full_fixture();
     let api = FixtureApi::new(raw.clone());
     let cli = Cli::parse_from(["flea", "tori", "search", "tuoli", "--raw"]);
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    assert_eq!(search::dispatch_with_api(*args, &api).unwrap(), raw);
+    assert_eq!(search::dispatch_with_api(*args, &api).await.unwrap(), raw);
 }
 
 fn empty_fixture() -> Value {
