@@ -88,7 +88,7 @@ pub struct SearchArgs {
     /// Free-text marketplace query. May be omitted to browse filtered listings.
     pub query: Option<String>,
 
-    /// Canonical taxonomy_value from `flea category search`, such as 2.93.3215.8368. At most 64 characters.
+    /// Canonical taxonomy_value from `flea tori category search`, such as 2.93.3215.8368. At most 64 characters.
     #[arg(long)]
     pub category: Option<String>,
 
@@ -592,7 +592,7 @@ fn next_page_command(
     resolved_area: Option<&crate::domain::search::SearchAreaContext>,
     explain: Option<usize>,
 ) -> String {
-    let mut parts = vec!["flea search".to_owned()];
+    let mut parts = vec!["flea tori search".to_owned()];
     if !request.query.is_empty() {
         parts.push(shell_quote(&request.query));
     }

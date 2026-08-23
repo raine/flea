@@ -1,10 +1,14 @@
-use std::{fmt, fs, io, path::Path};
+use std::{fmt, fs, io, marker::PhantomData, path::Path};
 
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use fs2::FileExt;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use sha2::{Digest, Sha256};
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+
+use crate::marketplace::PortalId;
 
 use super::{
     StatePaths,
@@ -28,21 +32,6 @@ impl CredentialRecord {
     pub fn bearer_is_valid_at(&self, now_unix: u64, minimum_remaining_seconds: u64) -> bool {
         self.bearer_expires_at_unix.saturating_sub(now_unix) > minimum_remaining_seconds
     }
-
-    fn validate(&self) -> Result<(), CredentialStoreError> {
-        let required = [
-            self.user_id.as_str(),
-            self.refresh_token.as_str(),
-            self.bearer_token.as_str(),
-            self.device_id.as_str(),
-            self.installation_id.as_str(),
-            self.ab_test_device_id.as_str(),
-        ];
-        if required.iter().any(|value| value.is_empty()) || self.id_token.as_deref() == Some("") {
-            return Err(CredentialStoreError::MissingRequiredValue);
-        }
-        Ok(())
-    }
 }
 
 impl fmt::Debug for CredentialRecord {
@@ -61,6 +50,92 @@ impl fmt::Debug for CredentialRecord {
     }
 }
 
+impl StoredCredential for CredentialRecord {
+    fn account_id(&self) -> &str {
+        &self.user_id
+    }
+
+    fn validate(&self) -> Result<(), CredentialStoreError> {
+        let required = [
+            self.user_id.as_str(),
+            self.refresh_token.as_str(),
+            self.bearer_token.as_str(),
+            self.device_id.as_str(),
+            self.installation_id.as_str(),
+            self.ab_test_device_id.as_str(),
+        ];
+        if required.iter().any(|value| value.is_empty())
+            || self.id_token.as_deref() == Some("")
+            || self.bearer_expires_at_unix == 0
+        {
+            return Err(CredentialStoreError::MissingRequiredValue);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VintedCredentialRecord {
+    pub portal: PortalId,
+    pub user_id: String,
+    #[serde(default)]
+    pub login: Option<String>,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub access_expires_at_unix: u64,
+    pub device_uuid: String,
+    pub anonymous_id: String,
+    #[serde(default)]
+    pub user_device_token: Option<String>,
+}
+
+impl fmt::Debug for VintedCredentialRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VintedCredentialRecord")
+            .field("portal", &self.portal)
+            .field("user_id", &"[REDACTED]")
+            .field("login", &"[REDACTED]")
+            .field("access_token", &"[REDACTED]")
+            .field("refresh_token", &"[REDACTED]")
+            .field("access_expires_at_unix", &self.access_expires_at_unix)
+            .field("device_uuid", &"[REDACTED]")
+            .field("anonymous_id", &"[REDACTED]")
+            .field("user_device_token", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl StoredCredential for VintedCredentialRecord {
+    fn account_id(&self) -> &str {
+        &self.user_id
+    }
+
+    fn validate(&self) -> Result<(), CredentialStoreError> {
+        let required = [
+            self.user_id.as_str(),
+            self.access_token.as_str(),
+            self.refresh_token.as_str(),
+            self.device_uuid.as_str(),
+            self.anonymous_id.as_str(),
+        ];
+        if self.portal != PortalId::Fi
+            || required.iter().any(|value| value.is_empty())
+            || self.login.as_deref() == Some("")
+            || self.user_device_token.as_deref() == Some("")
+            || self.access_expires_at_unix == 0
+        {
+            return Err(CredentialStoreError::MissingRequiredValue);
+        }
+        Ok(())
+    }
+}
+
+pub trait StoredCredential: Serialize + DeserializeOwned {
+    fn account_id(&self) -> &str;
+    fn validate(&self) -> Result<(), CredentialStoreError>;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CredentialStoreError {
     #[error("credential storage operation failed")]
@@ -69,6 +144,10 @@ pub enum CredentialStoreError {
     InvalidData(#[source] serde_json::Error),
     #[error("credential data is missing a required value")]
     MissingRequiredValue,
+    #[error("credential account selection is invalid")]
+    InvalidAccountSelection,
+    #[error("credential account does not match its storage key")]
+    AccountMismatch,
 }
 
 impl From<io::Error> for CredentialStoreError {
@@ -77,23 +156,31 @@ impl From<io::Error> for CredentialStoreError {
     }
 }
 
-pub struct CredentialStore<W = AtomicFile> {
+pub struct TypedCredentialStore<R, W = AtomicFile> {
     paths: StatePaths,
     writer: W,
+    marker: PhantomData<R>,
 }
 
-impl CredentialStore<AtomicFile> {
+pub type CredentialStore<W = AtomicFile> = TypedCredentialStore<CredentialRecord, W>;
+pub type VintedCredentialStore<W = AtomicFile> = TypedCredentialStore<VintedCredentialRecord, W>;
+
+impl<R: StoredCredential> TypedCredentialStore<R, AtomicFile> {
     pub fn new(paths: StatePaths) -> Self {
         Self::with_writer(paths, AtomicFile)
     }
 }
 
-impl<W: AtomicFileStore> CredentialStore<W> {
+impl<R: StoredCredential, W: AtomicFileStore> TypedCredentialStore<R, W> {
     pub fn with_writer(paths: StatePaths, writer: W) -> Self {
-        Self { paths, writer }
+        Self {
+            paths,
+            writer,
+            marker: PhantomData,
+        }
     }
 
-    pub fn lock(&self) -> Result<LockedCredentials<'_, W>, CredentialStoreError> {
+    pub fn lock(&self) -> Result<LockedCredentials<'_, R, W>, CredentialStoreError> {
         self.paths.ensure()?;
         let lock_path = self.paths.credentials_lock_file();
         let lock_file = open_lock_file(&lock_path)?;
@@ -104,11 +191,11 @@ impl<W: AtomicFileStore> CredentialStore<W> {
         })
     }
 
-    pub fn load(&self) -> Result<Option<CredentialRecord>, CredentialStoreError> {
+    pub fn load(&self) -> Result<Option<R>, CredentialStoreError> {
         self.lock()?.load()
     }
 
-    pub fn save(&self, credentials: &CredentialRecord) -> Result<(), CredentialStoreError> {
+    pub fn save(&self, credentials: &R) -> Result<(), CredentialStoreError> {
         self.lock()?.save(credentials)
     }
 
@@ -118,7 +205,7 @@ impl<W: AtomicFileStore> CredentialStore<W> {
 
     pub fn with_locked<T>(
         &self,
-        operation: impl FnOnce(&LockedCredentials<'_, W>) -> Result<T, CredentialStoreError>,
+        operation: impl FnOnce(&LockedCredentials<'_, R, W>) -> Result<T, CredentialStoreError>,
     ) -> Result<T, CredentialStoreError> {
         let locked = self.lock()?;
         operation(&locked)
@@ -126,9 +213,7 @@ impl<W: AtomicFileStore> CredentialStore<W> {
 
     pub fn rotate(
         &self,
-        operation: impl FnOnce(
-            Option<CredentialRecord>,
-        ) -> Result<CredentialRecord, CredentialStoreError>,
+        operation: impl FnOnce(Option<R>) -> Result<R, CredentialStoreError>,
     ) -> Result<(), CredentialStoreError> {
         self.with_locked(|locked| {
             let latest = locked.load()?;
@@ -138,50 +223,108 @@ impl<W: AtomicFileStore> CredentialStore<W> {
     }
 }
 
-pub struct LockedCredentials<'a, W: AtomicFileStore> {
-    store: &'a CredentialStore<W>,
+pub struct LockedCredentials<'a, R, W: AtomicFileStore> {
+    store: &'a TypedCredentialStore<R, W>,
     lock_file: fs::File,
 }
 
-impl<W: AtomicFileStore> LockedCredentials<'_, W> {
-    pub fn load(&self) -> Result<Option<CredentialRecord>, CredentialStoreError> {
-        let path = self.store.paths.credentials_file();
+impl<R: StoredCredential, W: AtomicFileStore> LockedCredentials<'_, R, W> {
+    pub fn load(&self) -> Result<Option<R>, CredentialStoreError> {
+        let Some(account_key) = read_current_account(&self.store.paths)? else {
+            return Ok(None);
+        };
+        let path = self.store.paths.account_credentials_file(&account_key);
         reject_symlink(&path)?;
-        match fs::read(path) {
-            Ok(contents) => {
-                let record: CredentialRecord =
-                    serde_json::from_slice(&contents).map_err(CredentialStoreError::InvalidData)?;
-                record.validate()?;
-                Ok(Some(record))
+        let contents = match fs::read(path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                remove_if_present(&self.store.paths.current_account_file())?;
+                sync_directory(&self.store.paths.auth_dir())?;
+                return Ok(None);
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error.into()),
+            Err(error) => return Err(error.into()),
+        };
+        let record: R =
+            serde_json::from_slice(&contents).map_err(CredentialStoreError::InvalidData)?;
+        record.validate()?;
+        if account_storage_key(record.account_id()) != account_key {
+            return Err(CredentialStoreError::AccountMismatch);
         }
+        Ok(Some(record))
     }
 
-    pub fn save(&self, credentials: &CredentialRecord) -> Result<(), CredentialStoreError> {
+    pub fn save(&self, credentials: &R) -> Result<(), CredentialStoreError> {
         credentials.validate()?;
+        let account_key = account_storage_key(credentials.account_id());
         let contents =
             serde_json::to_vec(credentials).map_err(CredentialStoreError::InvalidData)?;
-        self.store
-            .writer
-            .write(&self.store.paths.credentials_file(), &contents)?;
+        self.store.writer.write(
+            &self.store.paths.account_credentials_file(&account_key),
+            &contents,
+        )?;
+        self.store.writer.write(
+            &self.store.paths.current_account_file(),
+            account_key.as_bytes(),
+        )?;
         Ok(())
     }
 
     pub fn delete(&self) -> Result<(), CredentialStoreError> {
-        match fs::remove_file(self.store.paths.credentials_file()) {
-            Ok(()) => sync_directory(&self.store.paths.auth_dir())?,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
-        }
+        let account_key = match read_current_account(&self.store.paths) {
+            Ok(Some(account_key)) => account_key,
+            Ok(None) => return Ok(()),
+            Err(CredentialStoreError::InvalidAccountSelection) => {
+                remove_if_present(&self.store.paths.current_account_file())?;
+                sync_directory(&self.store.paths.auth_dir())?;
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        remove_if_present(&self.store.paths.current_account_file())?;
+        sync_directory(&self.store.paths.auth_dir())?;
+        remove_if_present(&self.store.paths.account_credentials_file(&account_key))?;
+        sync_directory(&self.store.paths.accounts_dir())?;
         Ok(())
     }
 }
 
-impl<W: AtomicFileStore> Drop for LockedCredentials<'_, W> {
+impl<R, W: AtomicFileStore> Drop for LockedCredentials<'_, R, W> {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.lock_file);
+    }
+}
+
+fn read_current_account(paths: &StatePaths) -> Result<Option<String>, CredentialStoreError> {
+    let path = paths.current_account_file();
+    reject_symlink(&path)?;
+    let contents = match fs::read(path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let account_key = std::str::from_utf8(&contents)
+        .ok()
+        .filter(|value| valid_account_key(value))
+        .ok_or(CredentialStoreError::InvalidAccountSelection)?;
+    Ok(Some(account_key.to_owned()))
+}
+
+fn account_storage_key(account_id: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(account_id.as_bytes()))
+}
+
+fn valid_account_key(value: &str) -> bool {
+    value.len() == 43
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn remove_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -222,8 +365,8 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
-    use super::{CredentialRecord, CredentialStore, CredentialStoreError};
-    use crate::storage::{StatePaths, atomic_file::AtomicFileStore};
+    use super::*;
+    use crate::{marketplace::MarketplaceContext, storage::atomic_file::AtomicFileStore};
 
     struct FailingWriter;
 
@@ -246,18 +389,41 @@ mod tests {
         }
     }
 
+    fn vinted_credentials() -> VintedCredentialRecord {
+        VintedCredentialRecord {
+            portal: PortalId::Fi,
+            user_id: "vinted-user".to_owned(),
+            login: Some("login-secret".to_owned()),
+            access_token: "access-secret".to_owned(),
+            refresh_token: "refresh-secret".to_owned(),
+            access_expires_at_unix: 500,
+            device_uuid: "device-secret".to_owned(),
+            anonymous_id: "anonymous-secret".to_owned(),
+            user_device_token: Some("udt-secret".to_owned()),
+        }
+    }
+
     #[test]
-    fn saves_private_credentials_and_lock_file() {
+    fn saves_private_account_credentials_and_pointer() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         let store = CredentialStore::new(paths.clone());
 
         store.save(&credentials("refresh-secret")).unwrap();
-        let loaded = store.load().unwrap().unwrap();
-        assert_eq!(loaded.refresh_token, "refresh-secret");
+        assert_eq!(
+            store.load().unwrap().unwrap().refresh_token,
+            "refresh-secret"
+        );
 
         #[cfg(unix)]
-        for path in [paths.credentials_file(), paths.credentials_lock_file()] {
+        for path in [
+            paths.current_account_file(),
+            paths.credentials_lock_file(),
+            paths.account_credentials_file(&account_storage_key("user-secret")),
+        ] {
             assert_eq!(
                 fs::metadata(path).unwrap().permissions().mode() & 0o777,
                 0o600
@@ -266,39 +432,54 @@ mod tests {
     }
 
     #[test]
-    fn loads_credentials_created_before_id_token_persistence() {
+    fn marketplace_scopes_do_not_share_credentials_or_locks() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
-        paths.ensure().unwrap();
-        fs::write(
-            paths.credentials_file(),
-            br#"{"user_id":"user","refresh_token":"refresh","bearer_token":"bearer","bearer_expires_at_unix":500,"device_id":"device","installation_id":"installation","ab_test_device_id":"ab"}"#,
-        )
-        .unwrap();
+        let tori_paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
+        let vinted_paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            MarketplaceContext::VINTED_FI,
+        );
 
-        let loaded = CredentialStore::new(paths).load().unwrap().unwrap();
+        CredentialStore::new(tori_paths.clone())
+            .save(&credentials("tori-refresh"))
+            .unwrap();
+        VintedCredentialStore::new(vinted_paths.clone())
+            .save(&vinted_credentials())
+            .unwrap();
 
-        assert!(loaded.id_token.is_none());
-    }
-
-    #[test]
-    fn rejects_empty_required_values() {
-        let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
-        let mut record = credentials("refresh");
-        record.device_id.clear();
-
-        assert!(matches!(
-            CredentialStore::new(paths).save(&record),
-            Err(CredentialStoreError::MissingRequiredValue)
-        ));
+        assert_eq!(
+            CredentialStore::new(tori_paths.clone())
+                .load()
+                .unwrap()
+                .unwrap()
+                .refresh_token,
+            "tori-refresh"
+        );
+        assert_eq!(
+            VintedCredentialStore::new(vinted_paths.clone())
+                .load()
+                .unwrap()
+                .unwrap()
+                .refresh_token,
+            "refresh-secret"
+        );
+        assert_ne!(
+            tori_paths.credentials_lock_file(),
+            vinted_paths.credentials_lock_file()
+        );
     }
 
     #[test]
     fn rotation_reads_the_latest_record_while_holding_the_lock() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
-        let store = CredentialStore::new(paths.clone());
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
+        let store = CredentialStore::new(paths);
         store.save(&credentials("first")).unwrap();
 
         store
@@ -314,11 +495,15 @@ mod tests {
     #[test]
     fn failed_rotation_preserves_the_previous_record() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         CredentialStore::new(paths.clone())
             .save(&credentials("first"))
             .unwrap();
-        let failing_store = CredentialStore::with_writer(paths.clone(), FailingWriter);
+        let failing_store: CredentialStore<FailingWriter> =
+            TypedCredentialStore::with_writer(paths.clone(), FailingWriter);
 
         let result = failing_store.rotate(|_| Ok(credentials("second")));
 
@@ -336,7 +521,10 @@ mod tests {
     #[test]
     fn process_lock_serializes_credential_access() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         let first = CredentialStore::new(paths.clone());
         let second = CredentialStore::new(paths);
         let barrier = Arc::new(Barrier::new(2));
@@ -355,24 +543,77 @@ mod tests {
         worker.join().unwrap();
     }
 
+    #[test]
+    fn rejects_invalid_current_account_pointer() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
+        paths.ensure().unwrap();
+        fs::write(paths.current_account_file(), b"../escape").unwrap();
+
+        assert!(matches!(
+            CredentialStore::new(paths).load(),
+            Err(CredentialStoreError::InvalidAccountSelection)
+        ));
+    }
+
+    #[test]
+    fn delete_recovers_from_an_invalid_current_account_pointer() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
+        paths.ensure().unwrap();
+        fs::write(paths.current_account_file(), b"../escape").unwrap();
+
+        CredentialStore::new(paths.clone()).delete().unwrap();
+
+        assert!(!paths.current_account_file().exists());
+    }
+
+    #[test]
+    fn missing_selected_account_is_treated_as_logged_out() {
+        let temporary = tempdir().unwrap();
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
+        let record = credentials("account");
+        let store = CredentialStore::new(paths.clone());
+        store.save(&record).unwrap();
+        fs::remove_file(paths.account_credentials_file(&account_storage_key(record.account_id())))
+            .unwrap();
+
+        assert!(store.load().unwrap().is_none());
+        assert!(!paths.current_account_file().exists());
+    }
+
     #[cfg(unix)]
     #[test]
-    fn rejects_symbolic_links_for_credentials_and_lock_files() {
+    fn rejects_symbolic_links_for_account_files_and_lock_files() {
         use std::os::unix::fs::symlink;
 
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         paths.ensure().unwrap();
         let target = temporary.path().join("target");
         fs::write(&target, b"secret").unwrap();
-        symlink(&target, paths.credentials_file()).unwrap();
+        let account_key = account_storage_key("user-secret");
+        fs::write(paths.current_account_file(), account_key.as_bytes()).unwrap();
+        symlink(&target, paths.account_credentials_file(&account_key)).unwrap();
 
         assert!(matches!(
             CredentialStore::new(paths.clone()).load(),
             Err(CredentialStoreError::Io(_))
         ));
 
-        fs::remove_file(paths.credentials_file()).unwrap();
+        fs::remove_file(paths.account_credentials_file(&account_key)).unwrap();
         fs::remove_file(paths.credentials_lock_file()).unwrap();
         symlink(&target, paths.credentials_lock_file()).unwrap();
         assert!(matches!(
@@ -383,8 +624,12 @@ mod tests {
     }
 
     #[test]
-    fn debug_output_redacts_all_identifiers_and_tokens() {
-        let output = format!("{:?}", credentials("refresh-secret"));
+    fn debug_output_redacts_tori_and_vinted_secrets() {
+        let output = format!(
+            "{:?} {:?}",
+            credentials("refresh-secret"),
+            vinted_credentials()
+        );
 
         for secret in [
             "refresh-secret",
@@ -394,6 +639,11 @@ mod tests {
             "device-secret",
             "installation-secret",
             "ab-secret",
+            "vinted-user",
+            "login-secret",
+            "access-secret",
+            "anonymous-secret",
+            "udt-secret",
         ] {
             assert!(!output.contains(secret));
         }

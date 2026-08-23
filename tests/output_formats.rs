@@ -13,7 +13,7 @@ fn success_envelope_matches_json_and_toon_snapshots() {
         "fields": [{ "key": "title", "status": "set", "value": "Chair" }]
     }));
     envelope.next_actions.push(NextAction {
-        command: "flea draft show 36443414".to_owned(),
+        command: "flea tori draft show 36443414".to_owned(),
     });
 
     assert_snapshot(
@@ -44,7 +44,7 @@ fn search_success_matches_json_and_toon_snapshots() {
         "pagination":{"page":1,"limit":20,"returned":1,"total":1200,"has_next":true,"next_page":2}
     }));
     envelope.next_actions.push(NextAction {
-        command: "flea search 'tuoli' --page 2 --limit 20".to_owned(),
+        command: "flea tori search 'tuoli' --page 2 --limit 20".to_owned(),
     });
 
     assert_snapshot(
@@ -75,7 +75,7 @@ fn failure_envelope_matches_json_and_toon_snapshots() {
         log_path: "/state/flea/logs/flea.fixture.jsonl".to_owned(),
     }));
     error.next_actions.push(NextAction {
-        command: "flea draft update 36443414 --input PATH".to_owned(),
+        command: "flea tori draft update 36443414 --input PATH".to_owned(),
     });
     let envelope = Envelope::failure(error);
 
@@ -106,7 +106,7 @@ fn failure_envelopes_preserve_diagnostics_and_partial_recovery() {
         log_path: "/state/flea/logs/flea.jsonl".to_owned(),
     }));
     error.next_actions.push(NextAction {
-        command: "flea draft show draft-1".to_owned(),
+        command: "flea tori draft show draft-1".to_owned(),
     });
 
     let envelope = Envelope::failure(error);
@@ -117,7 +117,7 @@ fn failure_envelopes_preserve_diagnostics_and_partial_recovery() {
     assert_eq!(decoded["diagnostics"]["correlation_id"], "correlation-1");
     assert_eq!(
         decoded["next_actions"][0]["command"],
-        "flea draft show draft-1"
+        "flea tori draft show draft-1"
     );
 }
 
@@ -127,10 +127,10 @@ fn assert_snapshot(actual: String, expected: &str) {
 
 #[test]
 fn syntax_failures_use_clap_presentation() {
-    let result = flea::run(["flea", "--format", "json", "draft", "show"]);
+    let result = flea::run(["flea", "--format", "json", "tori", "draft", "show"]);
 
     assert_eq!(result.exit_code, 2);
     assert_eq!(result.presentation, flea::Presentation::PlainStderr);
-    assert!(result.document.contains("Usage: flea draft show"));
+    assert!(result.document.contains("Usage: flea tori draft show"));
     assert!(!result.document.contains("cli.invalid_usage"));
 }

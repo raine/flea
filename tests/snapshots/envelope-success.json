@@ -13,7 +13,7 @@
   },
   "next_actions": [
     {
-      "command": "flea draft show 36443414"
+      "command": "flea tori draft show 36443414"
     }
   ]
 }

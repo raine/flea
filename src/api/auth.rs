@@ -2,13 +2,16 @@
 
 use std::time::Duration;
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::Engine as _;
 use hmac::{Hmac, Mac};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sha2::{Digest, Sha256, Sha512};
+use sha2::Sha512;
 use url::Url;
 use uuid::Uuid;
+
+pub use super::oauth::SecretString;
+use super::oauth::{pkce_challenge, random_secret, states_equal};
 
 use crate::{
     domain::envelope::NextAction,
@@ -34,31 +37,6 @@ const AUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_AUTH_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_CALLBACK_URL_BYTES: usize = 8 * 1024;
 const MAX_AUTHORIZATION_CODE_BYTES: usize = 4 * 1024;
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct SecretString(String);
-
-impl SecretString {
-    fn new(value: String) -> Self {
-        Self(value)
-    }
-
-    pub(crate) fn expose(&self) -> &str {
-        &self.0
-    }
-
-    #[doc(hidden)]
-    pub fn new_for_adapter(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-impl std::fmt::Debug for SecretString {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("<redacted>")
-    }
-}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct OAuthFlow {
@@ -534,7 +512,7 @@ impl<A> BrowserAuth<A> {
             ab_test_device_id: Uuid::new_v4().to_string(),
         };
         let output = AuthStart {
-            completion_command: "flea auth login".to_owned(),
+            completion_command: crate::cli::invocation::tori("auth login"),
             flow_id,
             login_url: login_url.into(),
             expires_at_unix,
@@ -603,23 +581,11 @@ impl<A: AuthenticationApi> BrowserAuth<A> {
 }
 
 fn generate_pkce_verifier() -> SecretString {
-    let mut random = [0_u8; 48];
-    for chunk in random.chunks_exact_mut(16) {
-        chunk.copy_from_slice(Uuid::new_v4().as_bytes());
-    }
-    SecretString::new(URL_SAFE_NO_PAD.encode(random))
-}
-
-fn pkce_challenge(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
+    random_secret(48)
 }
 
 fn random_identifier() -> SecretString {
-    let mut random = [0_u8; 32];
-    for chunk in random.chunks_exact_mut(16) {
-        chunk.copy_from_slice(Uuid::new_v4().as_bytes());
-    }
-    SecretString::new(URL_SAFE_NO_PAD.encode(random))
+    random_secret(32)
 }
 
 async fn bounded_json<T: DeserializeOwned>(
@@ -703,10 +669,9 @@ fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretS
             "the identity provider did not authorize the login",
         ));
     }
-    if !state
-        .as_deref()
-        .is_some_and(|actual_state| states_equal(actual_state, expected_state))
-    {
+    if !state.as_deref().is_some_and(|actual_state| {
+        states_equal(actual_state, expected_state, b"oauth-state-comparison")
+    }) {
         return Err(restart_error(
             "auth.state_mismatch",
             "the authentication callback state is invalid",
@@ -722,18 +687,6 @@ fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretS
     Ok(SecretString::new(code))
 }
 
-fn states_equal(actual: &str, expected: &str) -> bool {
-    let mut expected_mac = Hmac::<Sha256>::new_from_slice(b"oauth-state-comparison")
-        .expect("the static comparison key has a valid length");
-    expected_mac.update(expected.as_bytes());
-    let expected_tag = expected_mac.finalize().into_bytes();
-
-    let mut actual_mac = Hmac::<Sha256>::new_from_slice(b"oauth-state-comparison")
-        .expect("the static comparison key has a valid length");
-    actual_mac.update(actual.as_bytes());
-    actual_mac.verify_slice(&expected_tag).is_ok()
-}
-
 fn invalid_callback() -> AppError {
     restart_error(
         "auth.callback_invalid",
@@ -744,7 +697,7 @@ fn invalid_callback() -> AppError {
 fn restart_error(code: &str, message: &str) -> AppError {
     let mut error = AppError::new(code, message, ExitClass::Authentication);
     error.next_actions.push(NextAction {
-        command: "flea auth login".to_owned(),
+        command: crate::cli::invocation::tori("auth login"),
     });
     error
 }
@@ -787,7 +740,7 @@ fn ensure_refresh_success(status: StatusCode) -> Result<(), AppError> {
         "status": status.as_u16()
     })));
     error.next_actions.push(NextAction {
-        command: "flea auth login".to_owned(),
+        command: crate::cli::invocation::tori("auth login"),
     });
     Err(error)
 }
@@ -803,7 +756,7 @@ fn refresh_transport_error() -> AppError {
     ))
     .with_details(serde_json::json!({ "stage": "token_refresh" }));
     error.next_actions.push(NextAction {
-        command: "flea auth login".to_owned(),
+        command: crate::cli::invocation::tori("auth login"),
     });
     error
 }
@@ -815,7 +768,7 @@ fn refresh_malformed_error() -> AppError {
     )
     .with_details(serde_json::json!({ "stage": "token_refresh" }));
     error.next_actions.push(NextAction {
-        command: "flea auth login".to_owned(),
+        command: crate::cli::invocation::tori("auth login"),
     });
     error
 }
@@ -838,7 +791,7 @@ fn upstream_error(stage: &'static str, upstream_transient: bool) -> AppError {
     error.details = Some(Box::new(serde_json::json!({ "stage": stage })));
     if !error.safe_to_retry {
         error.next_actions.push(NextAction {
-            command: "flea auth login".to_owned(),
+            command: crate::cli::invocation::tori("auth login"),
         });
     }
     error
@@ -852,7 +805,7 @@ fn unexpected_response(stage: &'static str) -> AppError {
     );
     error.details = Some(Box::new(serde_json::json!({ "stage": stage })));
     error.next_actions.push(NextAction {
-        command: "flea auth login".to_owned(),
+        command: crate::cli::invocation::tori("auth login"),
     });
     error
 }
@@ -983,7 +936,7 @@ mod tests {
         assert!((43..=128).contains(&first.pkce_verifier.expose().len()));
         assert_eq!(query.get("code_challenge_method").unwrap(), "S256");
         assert_eq!(output.expires_at_unix, 1_600);
-        assert_eq!(output.completion_command, "flea auth login");
+        assert_eq!(output.completion_command, "flea tori auth login");
         let debug = format!("{first:?}");
         assert!(!debug.contains(first.pkce_verifier.expose()));
         assert!(!debug.contains(&first.device_id));
@@ -1018,7 +971,7 @@ mod tests {
         let error = auth.complete(&flow, "invalid", 1_600).await.unwrap_err();
 
         assert_eq!(error.code, "auth.flow_expired");
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
         assert!(auth.api.calls.lock().unwrap().is_empty());
     }
 
@@ -1046,7 +999,7 @@ mod tests {
             } else {
                 assert_eq!(
                     result.unwrap_err().next_actions[0].command,
-                    "flea auth login"
+                    "flea tori auth login"
                 );
             }
         }
@@ -1273,7 +1226,7 @@ mod tests {
 
         assert_eq!(error.code, "auth.refresh_rejected");
         assert_eq!(error.exit_class, ExitClass::Authentication);
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
         assert!(!format!("{error:?}").contains("refresh-secret"));
     }
 
@@ -1310,7 +1263,7 @@ mod tests {
 
             assert!(error.upstream_transient);
             assert!(!error.safe_to_retry);
-            assert_eq!(error.next_actions[0].command, "flea auth login");
+            assert_eq!(error.next_actions[0].command, "flea tori auth login");
         }
     }
 

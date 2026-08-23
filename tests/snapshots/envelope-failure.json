@@ -20,7 +20,7 @@
   },
   "next_actions": [
     {
-      "command": "flea draft update 36443414 --input PATH"
+      "command": "flea tori draft update 36443414 --input PATH"
     }
   ],
   "diagnostics": {

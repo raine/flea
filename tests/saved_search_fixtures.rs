@@ -211,7 +211,7 @@ fn uncertain_create_recovers_existing_result_or_proves_retryable_absence() {
         .unwrap_err();
     assert_eq!(error.code, "mutation.uncertain");
     assert!(error.safe_to_retry);
-    assert_eq!(error.next_actions[0].command, "flea saved-search list");
+    assert_eq!(error.next_actions[0].command, "flea tori saved-search list");
 }
 
 #[test]
@@ -232,14 +232,14 @@ fn uncertain_update_and_delete_return_read_only_recovery_actions() {
     assert_eq!(body["parameters"]["dealer_segment"], json!(["1"]));
     assert_eq!(
         update.next_actions[0].command,
-        "flea saved-search show 987654321"
+        "flea tori saved-search show 987654321"
     );
 
     let delete = saved.delete("987654321").unwrap_err();
     assert!(delete.safe_to_retry);
     assert_eq!(
         delete.next_actions[0].command,
-        "flea saved-search show 987654321"
+        "flea tori saved-search show 987654321"
     );
 }
 

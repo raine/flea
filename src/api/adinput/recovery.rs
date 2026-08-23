@@ -366,7 +366,7 @@ impl Recovery {
             manual_inspection_required: false,
             upstream_transient: false,
             safe_to_retry: false,
-            next_safe_actions: vec![format!("flea draft show {draft_id}")],
+            next_safe_actions: vec![format!("flea tori draft show {draft_id}")],
             destructive_actions: Vec::new(),
             fresh_state: None,
         }
@@ -385,7 +385,7 @@ impl Recovery {
         );
         self.fresh_state = Some(state.clone());
         if status == ObservationStatus::Observed && self.listing_id.is_none() {
-            self.destructive_actions = vec![format!("flea draft delete {}", self.draft_id)];
+            self.destructive_actions = vec![format!("flea tori draft delete {}", self.draft_id)];
         }
     }
 
@@ -515,8 +515,8 @@ impl WorkflowError {
         };
         if lifecycle_conflict {
             recovery.next_safe_actions = vec![
-                format!("flea draft show {draft_id}"),
-                "flea listing list".to_owned(),
+                format!("flea tori draft show {draft_id}"),
+                "flea tori listing list".to_owned(),
             ];
             recovery.destructive_actions.clear();
         }
@@ -551,8 +551,8 @@ impl WorkflowError {
     ) -> Self {
         let observed_revision = state.revision.clone().unwrap_or_default();
         let next_safe_actions = vec![
-            format!("flea draft show {draft_id}"),
-            format!("flea draft validate {draft_id}"),
+            format!("flea tori draft show {draft_id}"),
+            format!("flea tori draft validate {draft_id}"),
         ];
         let mut recovery = Recovery {
             failed_stage: Some("verify_revision".to_owned()),
@@ -616,7 +616,7 @@ impl WorkflowError {
                     .map(|failure| failure.command.clone()),
             )
             .collect::<Vec<_>>();
-        next_safe_actions.push(format!("flea draft show {}", report.draft_id));
+        next_safe_actions.push(format!("flea tori draft show {}", report.draft_id));
         let mut seen_actions = BTreeSet::new();
         next_safe_actions.retain(|action| seen_actions.insert(action.clone()));
         let absent_fields = report
@@ -705,9 +705,9 @@ impl WorkflowError {
         let allowed = allowed_delivery_values(delivery);
         let next_safe_actions = allowed
             .first()
-            .map(|value| format!("flea draft update {draft_id} --delivery {value}"))
+            .map(|value| format!("flea tori draft update {draft_id} --delivery {value}"))
             .into_iter()
-            .chain(std::iter::once(format!("flea draft show {draft_id}")))
+            .chain(std::iter::once(format!("flea tori draft show {draft_id}")))
             .collect();
         let missing = requested.is_empty();
         Self {

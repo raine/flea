@@ -180,7 +180,10 @@ mod tests {
     #[test]
     fn persists_loads_and_deletes_flows() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         let store = AuthFlowStore::new(paths.clone());
 
         store.save(&flow()).unwrap();
@@ -206,7 +209,10 @@ mod tests {
     #[test]
     fn deletes_expired_flows() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         let store = AuthFlowStore::new(paths.clone());
         store.save(&flow()).unwrap();
 
@@ -220,7 +226,10 @@ mod tests {
     #[test]
     fn rejects_flow_ids_that_can_escape_the_flow_directory() {
         let temporary = tempdir().unwrap();
-        let store = AuthFlowStore::new(StatePaths::from_root(temporary.path()));
+        let store = AuthFlowStore::new(StatePaths::from_root(
+            temporary.path(),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        ));
 
         assert!(matches!(
             store.load("../credentials", 0),

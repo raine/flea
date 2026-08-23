@@ -10,7 +10,7 @@ partial:
   draft_id: "36443414"
   completed_steps[1]: fetch_draft
 next_actions[1]{command}:
-  "flea draft update 36443414 --input PATH"
+  "flea tori draft update 36443414 --input PATH"
 diagnostics:
   trace_id: "trace-fixture"
   correlation_id: "correlation-fixture"

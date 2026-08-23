@@ -21,8 +21,8 @@ pub struct CategoryArgs {
 pub enum CategoryCommand {
     #[command(
         about = "Search categories (authentication required)",
-        long_about = "Search and rank Tori categories by ID, label, and hierarchy context. Authentication is required. If you are not signed in, run `flea auth login` before searching. Each result contains a category_id for listing workflows and a canonical taxonomy_value accepted by `flea search --category`. Results default to 20 and --limit accepts 1 through 100.",
-        after_long_help = "Search-filter example:\n  flea category search tietokonekomponentit\n  flea search --category 2.93.3215.8368\n\nBroad-query refinement:\n  flea category search tarvikkeet\n  flea category search tarvikkeet --path 'Urheilu ja ulkoilu > Pyöräily'\n\nUse --parent with a category_id or --path with a returned category path to search its descendants. Follow next_actions to continue a truncated search."
+        long_about = "Search and rank Tori categories by ID, label, and hierarchy context. Authentication is required. If you are not signed in, run `flea tori auth login` before searching. Each result contains a category_id for listing workflows and a canonical taxonomy_value accepted by `flea tori search --category`. Results default to 20 and --limit accepts 1 through 100.",
+        after_long_help = "Search-filter example:\n  flea tori category search tietokonekomponentit\n  flea tori search --category 2.93.3215.8368\n\nBroad-query refinement:\n  flea tori category search tarvikkeet\n  flea tori category search tarvikkeet --path 'Urheilu ja ulkoilu > Pyöräily'\n\nUse --parent with a category_id or --path with a returned category path to search its descendants. Follow next_actions to continue a truncated search."
     )]
     Search {
         /// Category ID or text used to match category labels and paths.
@@ -50,7 +50,7 @@ pub enum CategoryCommand {
     },
     #[command(
         about = "List categories (authentication required)",
-        long_about = "List root categories or the direct children of a parent category machine value. Authentication is required. If you are not signed in, run `flea auth login` before listing. Each result contains a category_id for listing workflows and a canonical taxonomy_value accepted by `flea search --category`."
+        long_about = "List root categories or the direct children of a parent category machine value. Authentication is required. If you are not signed in, run `flea tori auth login` before listing. Each result contains a category_id for listing workflows and a canonical taxonomy_value accepted by `flea tori search --category`."
     )]
     List {
         /// Parent category machine value whose children to list.
@@ -119,7 +119,7 @@ fn next_page_command(
     offset: usize,
     limit: usize,
 ) -> String {
-    let mut parts = vec!["flea category search".to_owned(), shell_quote(query)];
+    let mut parts = vec!["flea tori category search".to_owned(), shell_quote(query)];
     if let Some(parent) = parent {
         parts.push(format!("--parent {}", shell_quote(parent)));
     }

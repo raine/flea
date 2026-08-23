@@ -25,7 +25,7 @@ pub enum FavoriteCommand {
         long_about = "Inspect whether a marketplace listing is saved and return every favorites folder containing it."
     )]
     Status {
-        /// Numeric marketplace listing ID returned by `flea search`.
+        /// Numeric marketplace listing ID returned by `flea tori search`.
         listing_id: String,
     },
     #[command(
@@ -33,10 +33,10 @@ pub enum FavoriteCommand {
         long_about = "Add a marketplace listing to an explicit favorites folder or the account's default folder."
     )]
     Add {
-        /// Numeric marketplace listing ID returned by `flea search`.
+        /// Numeric marketplace listing ID returned by `flea tori search`.
         listing_id: String,
 
-        /// Favorites folder ID returned by `flea favorite folders`.
+        /// Favorites folder ID returned by `flea tori favorite folders`.
         #[arg(long)]
         folder: Option<u64>,
     },
@@ -45,10 +45,10 @@ pub enum FavoriteCommand {
         long_about = "Remove a marketplace listing from an explicit favorites folder or the account's default folder."
     )]
     Remove {
-        /// Numeric marketplace listing ID returned by `flea search`.
+        /// Numeric marketplace listing ID returned by `flea tori search`.
         listing_id: String,
 
-        /// Favorites folder ID returned by `flea favorite folders`.
+        /// Favorites folder ID returned by `flea tori favorite folders`.
         #[arg(long)]
         folder: Option<u64>,
     },

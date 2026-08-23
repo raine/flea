@@ -15,12 +15,13 @@ use crate::{
         search::HttpPublicSearchApi,
     },
     cli::{
-        Command, CommandRuntime,
+        Command, CommandRuntime, ToriCommand, VintedCommand,
         auth::{AuthCommandHandler, FileAuthStore, unix_time_now},
         auth_callback, category, draft, favorite, listing, saved_search,
     },
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
+    marketplace::{MarketplaceContext, MarketplaceId, marketplace, marketplaces},
     storage::{
         StatePaths,
         credentials::{CredentialRecord, CredentialStore, CredentialStoreError},
@@ -33,78 +34,187 @@ pub struct ProductionRuntime;
 impl CommandRuntime for ProductionRuntime {
     fn execute(&self, command: Command) -> Result<Value, AppError> {
         match command {
-            Command::Auth(args) => execute_auth(args),
-            Command::Category(args) => {
-                let client = authenticated_client()?;
-                let api = HttpListingsApi::new(Arc::new(client));
-                category::dispatch_with_api(args, &api)
-            }
-            Command::Draft(args) => match args.command {
-                command @ super::draft::DraftCommand::Preview {
-                    verify_category: false,
-                    ..
-                } => draft::execute_preview(command, None),
-                command @ super::draft::DraftCommand::Preview {
-                    verify_category: true,
-                    ..
-                } => {
-                    let client = authenticated_client()?;
-                    let api = HttpListingsApi::new(Arc::new(client));
-                    draft::execute_preview(command, Some(&api))
-                }
-                command => {
-                    let client = authenticated_client()?;
-                    let api = HttpAdInputApi::new(ClientTransport::new(client));
-                    block_on(draft::execute(command, api, WorkflowConfig::default()))
-                }
-            },
-            Command::Favorite(args) => {
-                let client = authenticated_client()?;
-                let api = HttpFavoritesApi::new(Arc::new(client));
-                favorite::dispatch_with_api(args, &api)
-            }
-            Command::Item(args) => {
-                let api = HttpPublicItemApi::new(Arc::new(public_client()));
-                super::item::dispatch_with_api(args, &api)
-            }
-            Command::Listing(args) => {
-                let client = authenticated_client()?;
-                let api = HttpListingsApi::new(Arc::new(client));
-                listing::dispatch_with_api(args, &api)
-            }
-            Command::Search(args) => {
-                let search_api = HttpPublicSearchApi::new(Arc::new(public_client()));
-                let item_api = HttpPublicItemApi::new(Arc::new(public_client()));
-                super::search::dispatch_with_apis(*args, &search_api, Some(&item_api))
-            }
-            Command::SavedSearch(args) => {
-                let client: Arc<dyn crate::api::client::ToriClient> =
-                    Arc::new(authenticated_client()?);
-                let api = HttpSavedSearchesApi::new(Arc::clone(&client));
-                let search_api = HttpPublicSearchApi::new(client);
-                saved_search::dispatch_with_apis(*args, &api, &search_api)
-            }
-            Command::Location(args) => {
-                let api = HttpPublicSearchApi::new(Arc::new(public_client()));
-                super::location::dispatch_with_api(args, &api)
-            }
+            Command::Capabilities => capabilities_output(),
+            Command::Marketplaces => marketplaces_output(),
+            Command::Tori(args) => execute_tori(args.command),
+            Command::Vinted(args) => execute_vinted(args.portal, args.command),
             Command::Skill(args) => super::skill::dispatch(args),
+            Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
         }
     }
 }
 
-fn execute_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
+fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
+    match command {
+        ToriCommand::Auth(args) => execute_tori_auth(args),
+        ToriCommand::Capabilities => marketplace_capabilities(MarketplaceId::Tori),
+        ToriCommand::Category(args) => {
+            let client = authenticated_client()?;
+            let api = HttpListingsApi::new(Arc::new(client));
+            category::dispatch_with_api(args, &api)
+        }
+        ToriCommand::Draft(args) => match args.command {
+            command @ super::draft::DraftCommand::Preview {
+                verify_category: false,
+                ..
+            } => draft::execute_preview(command, None),
+            command @ super::draft::DraftCommand::Preview {
+                verify_category: true,
+                ..
+            } => {
+                let client = authenticated_client()?;
+                let api = HttpListingsApi::new(Arc::new(client));
+                draft::execute_preview(command, Some(&api))
+            }
+            command => {
+                let client = authenticated_client()?;
+                let api = HttpAdInputApi::new(ClientTransport::new(client));
+                block_on(draft::execute(command, api, WorkflowConfig::default()))
+            }
+        },
+        ToriCommand::Favorite(args) => {
+            let client = authenticated_client()?;
+            let api = HttpFavoritesApi::new(Arc::new(client));
+            favorite::dispatch_with_api(args, &api)
+        }
+        ToriCommand::Item(args) => {
+            let api = HttpPublicItemApi::new(Arc::new(public_client()));
+            super::item::dispatch_with_api(args, &api)
+        }
+        ToriCommand::Listing(args) => {
+            let client = authenticated_client()?;
+            let api = HttpListingsApi::new(Arc::new(client));
+            listing::dispatch_with_api(args, &api)
+        }
+        ToriCommand::Search(args) => {
+            let search_api = HttpPublicSearchApi::new(Arc::new(public_client()));
+            let item_api = HttpPublicItemApi::new(Arc::new(public_client()));
+            super::search::dispatch_with_apis(*args, &search_api, Some(&item_api))
+        }
+        ToriCommand::SavedSearch(args) => {
+            let client: Arc<dyn crate::api::client::ToriClient> = Arc::new(authenticated_client()?);
+            let api = HttpSavedSearchesApi::new(Arc::clone(&client));
+            let search_api = HttpPublicSearchApi::new(client);
+            saved_search::dispatch_with_apis(*args, &api, &search_api)
+        }
+        ToriCommand::Location(args) => {
+            let api = HttpPublicSearchApi::new(Arc::new(public_client()));
+            super::location::dispatch_with_api(args, &api)
+        }
+    }
+}
+
+fn execute_vinted(
+    portal: crate::marketplace::PortalId,
+    command: VintedCommand,
+) -> Result<Value, AppError> {
+    match command {
+        VintedCommand::Auth(args) => {
+            crate::marketplace::vinted::interactive::execute_command(portal, args)
+        }
+        VintedCommand::Capabilities => marketplace_capabilities(MarketplaceId::Vinted),
+        VintedCommand::Unsupported(parts) => Err(capability_unavailable(
+            MarketplaceContext::VINTED_FI,
+            first_external_command(&parts),
+        )),
+    }
+}
+
+fn capabilities_output() -> Result<Value, AppError> {
+    Ok(serde_json::json!({ "marketplaces": marketplaces() }))
+}
+
+fn marketplaces_output() -> Result<Value, AppError> {
+    let configured = marketplaces()
+        .iter()
+        .map(|descriptor| {
+            serde_json::json!({
+                "marketplace": descriptor.marketplace,
+                "portals": descriptor.portals,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "marketplaces": configured }))
+}
+
+fn marketplace_capabilities(marketplace_id: MarketplaceId) -> Result<Value, AppError> {
+    let descriptor = marketplace(marketplace_id);
+    Ok(serde_json::json!({
+        "marketplace": descriptor.marketplace,
+        "portals": descriptor.portals,
+        "capabilities": descriptor.capabilities,
+    }))
+}
+
+fn unsupported_root_command(parts: &[std::ffi::OsString]) -> AppError {
+    let command = first_external_command(parts);
+    if !matches!(
+        command,
+        "auth"
+            | "category"
+            | "draft"
+            | "favorite"
+            | "item"
+            | "listing"
+            | "location"
+            | "saved-search"
+            | "search"
+    ) {
+        return AppError::usage("the root command is not recognized")
+            .with_details(serde_json::json!({ "command": command }));
+    }
+    let mut error = AppError::new(
+        "marketplace.required",
+        "marketplace commands require an explicit marketplace",
+        ExitClass::Usage,
+    )
+    .with_details(serde_json::json!({ "command": command }));
+    error.next_actions.push(NextAction {
+        command: super::invocation::marketplaces(),
+    });
+    error
+}
+
+fn capability_unavailable(context: MarketplaceContext, command: &str) -> AppError {
+    let mut error = AppError::new(
+        "marketplace.capability_unavailable",
+        "the selected marketplace does not provide this capability",
+        ExitClass::Usage,
+    )
+    .with_details(serde_json::json!({
+        "context": context,
+        "command": command,
+    }));
+    error.next_actions.push(NextAction {
+        command: super::invocation::capabilities(context),
+    });
+    error
+}
+
+fn first_external_command(parts: &[std::ffi::OsString]) -> &str {
+    parts
+        .first()
+        .and_then(|part| part.to_str())
+        .filter(|part| !part.is_empty() && part.len() <= 64 && !part.chars().any(char::is_control))
+        .unwrap_or("unknown")
+}
+
+fn execute_tori_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
     let command = match args.command {
         super::auth::AuthCommand::Callback {
             state_root,
             callback_url,
-        } => return auth_callback::capture(&StatePaths::from_root(state_root), &callback_url),
+        } => {
+            return auth_callback::capture(
+                &StatePaths::from_root(state_root, MarketplaceContext::TORI_FI),
+                &callback_url,
+            );
+        }
         command => command,
     };
     let paths = state_paths()?;
     match command {
         super::auth::AuthCommand::Login => execute_interactive_login(paths),
-        super::auth::AuthCommand::VintedLoginPoc => super::vinted_auth::execute(),
         super::auth::AuthCommand::Status => auth_status(
             paths,
             &SchibstedToriAuthenticationApi::new(),
@@ -385,9 +495,9 @@ fn unavailable_status(
         expires_in_seconds: None,
         next_actions: vec![NextAction {
             command: if login_required {
-                "flea auth login"
+                "flea tori auth login"
             } else {
-                "flea auth status"
+                "flea tori auth status"
             }
             .to_owned(),
         }],
@@ -399,13 +509,16 @@ fn resolution_storage(
     operation: &'static str,
 ) -> CredentialResolutionFailure {
     let error = match error {
-        CredentialStoreError::InvalidData(_) | CredentialStoreError::MissingRequiredValue => {
+        CredentialStoreError::InvalidData(_)
+        | CredentialStoreError::MissingRequiredValue
+        | CredentialStoreError::InvalidAccountSelection
+        | CredentialStoreError::AccountMismatch => {
             let mut malformed = AppError::authentication(
                 "auth.credentials_malformed",
                 "stored authentication credentials are malformed",
             );
             malformed.next_actions.push(NextAction {
-                command: "flea auth login".to_owned(),
+                command: crate::cli::invocation::tori("auth login"),
             });
             malformed
         }
@@ -419,7 +532,8 @@ fn resolution_storage(
 }
 
 fn state_paths() -> Result<StatePaths, AppError> {
-    StatePaths::discover().map_err(|error| auth_storage(error, "discover"))
+    StatePaths::discover(MarketplaceContext::TORI_FI)
+        .map_err(|error| auth_storage(error, "discover"))
 }
 
 fn auth_storage(
@@ -436,7 +550,7 @@ fn auth_storage(
     result
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "flea auth status".to_owned(),
+            command: crate::cli::invocation::tori("auth status"),
         });
     result
 }
@@ -446,7 +560,7 @@ fn auth_required() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "flea auth login".to_owned(),
+            command: crate::cli::invocation::tori("auth login"),
         });
     error
 }
@@ -558,7 +672,10 @@ mod tests {
     #[test]
     fn concurrent_clients_share_one_rotating_refresh() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         CredentialStore::new(paths.clone())
             .save(&expired_credentials())
             .unwrap();
@@ -594,20 +711,29 @@ mod tests {
     #[test]
     fn status_reports_missing_credentials_with_login_action() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
 
         let status = auth_status(paths, &SchibstedToriAuthenticationApi::new(), 1_000).unwrap();
 
         assert_eq!(status["authenticated"], false);
         assert_eq!(status["health"], "missing");
-        assert_eq!(status["_next_actions"][0]["command"], "flea auth login");
+        assert_eq!(
+            status["_next_actions"][0]["command"],
+            "flea tori auth login"
+        );
         assert!(status.get("user_id").is_none());
     }
 
     #[test]
     fn status_reports_locally_valid_credentials_without_network_access() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         let mut credentials = expired_credentials();
         credentials.bearer_expires_at_unix = 1_031;
         CredentialStore::new(paths.clone())
@@ -628,7 +754,10 @@ mod tests {
     fn status_refreshes_near_expiry_and_expired_credentials() {
         for (expires_at, expected_state) in [(1_030, "near_expiry"), (999, "expired")] {
             let temporary = tempdir().unwrap();
-            let paths = StatePaths::from_root(temporary.path().join("state"));
+            let paths = StatePaths::from_root(
+                temporary.path().join("state"),
+                crate::marketplace::MarketplaceContext::TORI_FI,
+            );
             let mut credentials = expired_credentials();
             credentials.bearer_expires_at_unix = expires_at;
             CredentialStore::new(paths.clone())
@@ -661,7 +790,10 @@ mod tests {
     #[test]
     fn status_distinguishes_refresh_rejection_without_exposing_secrets() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         CredentialStore::new(paths.clone())
             .save(&expired_credentials())
             .unwrap();
@@ -679,7 +811,10 @@ mod tests {
         assert_eq!(status["authenticated"], false);
         assert_eq!(status["health"], "refresh_rejected");
         assert_eq!(status["stored_bearer_state"], "expired");
-        assert_eq!(status["_next_actions"][0]["command"], "flea auth login");
+        assert_eq!(
+            status["_next_actions"][0]["command"],
+            "flea tori auth login"
+        );
         for secret in ["user", "refresh-old", "bearer-old", "response-secret"] {
             assert!(!rendered.contains(secret));
         }
@@ -688,7 +823,10 @@ mod tests {
     #[test]
     fn status_distinguishes_malformed_refresh_and_stored_credentials() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         CredentialStore::new(paths.clone())
             .save(&expired_credentials())
             .unwrap();
@@ -702,13 +840,23 @@ mod tests {
         assert_eq!(refresh_status["stored_bearer_state"], "expired");
         assert_eq!(
             refresh_status["_next_actions"][0]["command"],
-            "flea auth login"
+            "flea tori auth login"
         );
 
         let malformed_temporary = tempdir().unwrap();
-        let malformed_paths = StatePaths::from_root(malformed_temporary.path().join("state"));
-        malformed_paths.ensure().unwrap();
-        std::fs::write(malformed_paths.credentials_file(), b"not-json-secret").unwrap();
+        let malformed_paths = StatePaths::from_root(
+            malformed_temporary.path().join("state"),
+            MarketplaceContext::TORI_FI,
+        );
+        CredentialStore::new(malformed_paths.clone())
+            .save(&expired_credentials())
+            .unwrap();
+        let account_key = std::fs::read_to_string(malformed_paths.current_account_file()).unwrap();
+        std::fs::write(
+            malformed_paths.account_credentials_file(&account_key),
+            b"not-json-secret",
+        )
+        .unwrap();
         let stored_status = auth_status(
             malformed_paths,
             &SchibstedToriAuthenticationApi::new(),
@@ -723,7 +871,10 @@ mod tests {
     #[test]
     fn status_marks_network_failure_as_temporarily_unavailable() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         CredentialStore::new(paths.clone())
             .save(&expired_credentials())
             .unwrap();
@@ -738,7 +889,10 @@ mod tests {
         assert_eq!(status["health"], "temporarily_unavailable");
         assert_eq!(status["validation"], "unverified");
         assert_eq!(status["stored_bearer_state"], "expired");
-        assert_eq!(status["_next_actions"][0]["command"], "flea auth login");
+        assert_eq!(
+            status["_next_actions"][0]["command"],
+            "flea tori auth login"
+        );
     }
 
     #[test]
@@ -747,7 +901,7 @@ mod tests {
 
         assert_eq!(error.code, "auth.storage_failed");
         assert_eq!(error.details.unwrap()["operation"], "write");
-        assert_eq!(error.next_actions[0].command, "flea auth status");
+        assert_eq!(error.next_actions[0].command, "flea tori auth status");
     }
 
     #[test]
@@ -755,6 +909,6 @@ mod tests {
         let error = auth_required();
 
         assert_eq!(error.code, "auth.required");
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
     }
 }

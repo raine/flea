@@ -607,10 +607,10 @@ fn draft_inspection(
                 allowed_values,
                 discovery_command: (relevant && !small).then(|| {
                     if field.key == "category" {
-                        "flea category search QUERY".to_owned()
+                        "flea tori category search QUERY".to_owned()
                     } else {
                         format!(
-                            "flea draft show {} --include-options {}",
+                            "flea tori draft show {} --include-options {}",
                             state.draft_id, field.key
                         )
                     }
@@ -645,7 +645,7 @@ fn draft_inspection(
         .collect::<std::collections::BTreeSet<_>>();
     if validation.ready {
         commands.insert(format!(
-            "flea draft publish {} --if-revision {}",
+            "flea tori draft publish {} --if-revision {}",
             state.draft_id, validation.revision
         ));
     }

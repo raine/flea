@@ -9,9 +9,16 @@ use flea::{
             UpstreamSearchRequest,
         },
     },
-    cli::{Cli, Command, search},
+    cli::{Cli, Command, ToriCommand, search},
 };
 use serde_json::{Value, json};
+
+fn tori_command(cli: Cli) -> ToriCommand {
+    let Command::Tori(args) = cli.command else {
+        panic!("expected Tori command")
+    };
+    args.command
+}
 
 struct FixtureApi {
     search_response: Value,
@@ -60,6 +67,7 @@ fn saved_search_creation_reuses_public_search_argument_mapping() {
     let api = FixtureApi::new(empty_fixture());
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "saved-search",
         "create",
         "--name",
@@ -76,7 +84,7 @@ fn saved_search_creation_reuses_public_search_argument_mapping() {
         "--facet",
         "brand=42",
     ]);
-    let Command::SavedSearch(args) = cli.command else {
+    let ToriCommand::SavedSearch(args) = tori_command(cli) else {
         panic!("saved search command")
     };
     let flea::cli::saved_search::SavedSearchCommand::Create { search: args, .. } = args.command
@@ -100,6 +108,7 @@ fn canonical_leaf_category_value_is_accepted_by_search() {
     let api = FixtureApi::new(empty_fixture());
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "search",
         "kävelymatto & tuoli",
         "--category",
@@ -116,7 +125,7 @@ fn canonical_leaf_category_value_is_accepted_by_search() {
         "--limit",
         "20",
     ]);
-    let Command::Search(args) = cli.command else {
+    let ToriCommand::Search(args) = tori_command(cli) else {
         panic!("search command");
     };
     search::dispatch_with_api(*args, &api).unwrap();
@@ -133,6 +142,7 @@ fn encodes_helsinki_twenty_kilometer_radius_as_tori_meter_parameters() {
     let api = FixtureApi::new(empty_fixture());
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "search",
         "tuoli",
         "--latitude",
@@ -144,7 +154,7 @@ fn encodes_helsinki_twenty_kilometer_radius_as_tori_meter_parameters() {
         "--limit",
         "1",
     ]);
-    let Command::Search(args) = cli.command else {
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     search::dispatch_with_api(*args, &api).unwrap();
@@ -272,6 +282,7 @@ fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
     let api = FixtureApi::new(full_fixture());
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "search",
         "tuoli",
         "--area",
@@ -279,7 +290,7 @@ fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
         "--limit",
         "20",
     ]);
-    let Command::Search(args) = cli.command else {
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     let output = search::dispatch_with_api(*args, &api).unwrap();
@@ -292,7 +303,7 @@ fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
     assert_eq!(output["resolved_area"]["locations"][2]["name"], "Vantaa");
     assert_eq!(
         output["_next_actions"][0]["command"],
-        "flea search 'tuoli' --area '1.100018.110091,1.100018.110049,1.100018.110092' --page 2 --limit 20"
+        "flea tori search 'tuoli' --area '1.100018.110091,1.100018.110049,1.100018.110092' --page 2 --limit 20"
     );
 }
 
@@ -377,8 +388,8 @@ fn bounds_and_prioritizes_large_category_and_location_facets() {
         ],
         "metadata": {"result_size":{"match_count":0},"paging":{"current":1,"last":1}}
     }));
-    let cli = Cli::parse_from(["flea", "search", "GPU", "--include-facets"]);
-    let Command::Search(args) = cli.command else {
+    let cli = Cli::parse_from(["flea", "tori", "search", "GPU", "--include-facets"]);
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     let output = search::dispatch_with_api(*args, &api).unwrap();
@@ -397,20 +408,21 @@ fn bounds_and_prioritizes_large_category_and_location_facets() {
     assert_eq!(
         output["_next_actions"][0],
         json!({
-            "command": "flea search 'GPU' --include-facets --facet-option-limit 103 --page 1 --limit 20",
+            "command": "flea tori search 'GPU' --include-facets --facet-option-limit 103 --page 1 --limit 20",
             "reason": "facet_options_truncated"
         })
     );
 
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "search",
         "GPU",
         "--include-facets",
         "--facet-option-limit",
         "103",
     ]);
-    let Command::Search(args) = cli.command else {
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     let broader = search::dispatch_with_api(*args, &api).unwrap();
@@ -430,6 +442,7 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
     for arguments in [
         vec![
             "flea",
+            "tori",
             "search",
             "x",
             "--latitude",
@@ -441,6 +454,7 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
         ],
         vec![
             "flea",
+            "tori",
             "search",
             "x",
             "--latitude",
@@ -450,6 +464,7 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
         ],
         vec![
             "flea",
+            "tori",
             "search",
             "x",
             "--latitude",
@@ -459,11 +474,12 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
             "--radius-km",
             "0",
         ],
-        vec!["flea", "search", "x", "--page", "51"],
-        vec!["flea", "search", "x", "--limit", "301"],
-        vec!["flea", "search", "x", "--condition", ""],
+        vec!["flea", "tori", "search", "x", "--page", "51"],
+        vec!["flea", "tori", "search", "x", "--limit", "301"],
+        vec!["flea", "tori", "search", "x", "--condition", ""],
         vec![
             "flea",
+            "tori",
             "search",
             "x",
             "--price-from",
@@ -473,7 +489,7 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
         ],
     ] {
         let cli = Cli::try_parse_from(arguments).unwrap();
-        let Command::Search(args) = cli.command else {
+        let ToriCommand::Search(args) = tori_command(cli) else {
             unreachable!()
         };
         assert!(search::dispatch_with_api(*args, &api).is_err());
@@ -485,6 +501,7 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
     std::fs::write(&path, r#"{"page":2}"#).unwrap();
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "search",
         "x",
         "--page",
@@ -492,7 +509,7 @@ fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_locally() {
         "--input",
         path.to_str().unwrap(),
     ]);
-    let Command::Search(args) = cli.command else {
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     assert!(
@@ -516,8 +533,8 @@ fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
             unreachable!()
         }
     }
-    let cli = Cli::parse_from(["flea", "search", "private query"]);
-    let Command::Search(args) = cli.command else {
+    let cli = Cli::parse_from(["flea", "tori", "search", "private query"]);
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     let error = search::dispatch_with_api(*args, &ErrorApi).unwrap_err();
@@ -534,8 +551,8 @@ fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
 fn unicode_query_limit_counts_characters_instead_of_bytes() {
     let api = FixtureApi::new(empty_fixture());
     let query = "ä".repeat(500);
-    let cli = Cli::parse_from(["flea", "search", &query]);
-    let Command::Search(args) = cli.command else {
+    let cli = Cli::parse_from(["flea", "tori", "search", &query]);
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
 
@@ -546,15 +563,15 @@ fn unicode_query_limit_counts_characters_instead_of_bytes() {
 #[test]
 fn page_cap_action_requests_facets_for_executable_refinement() {
     let api = FixtureApi::new(full_fixture());
-    let cli = Cli::parse_from(["flea", "search", "tuoli", "--page", "50"]);
-    let Command::Search(args) = cli.command else {
+    let cli = Cli::parse_from(["flea", "tori", "search", "tuoli", "--page", "50"]);
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     let output = search::dispatch_with_api(*args, &api).unwrap();
 
     assert_eq!(
         output["_next_actions"][0]["command"],
-        "flea search 'tuoli' --include-facets --page 1 --limit 20"
+        "flea tori search 'tuoli' --include-facets --page 1 --limit 20"
     );
 }
 
@@ -565,8 +582,8 @@ fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
         responses: BTreeMap::new(),
         requests: Mutex::default(),
     };
-    let cli = Cli::parse_from(["flea", "search", "tuoli"]);
-    let Command::Search(args) = cli.command else {
+    let cli = Cli::parse_from(["flea", "tori", "search", "tuoli"]);
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     let output = search::dispatch_with_apis(*args, &api, Some(&item_api)).unwrap();
@@ -628,8 +645,15 @@ fn explains_a_generic_title_from_bounded_public_description_evidence() {
         )]),
         requests: Mutex::default(),
     };
-    let cli = Cli::parse_from(["flea", "search", "micro mini potkulauta", "--explain", "1"]);
-    let Command::Search(args) = cli.command else {
+    let cli = Cli::parse_from([
+        "flea",
+        "tori",
+        "search",
+        "micro mini potkulauta",
+        "--explain",
+        "1",
+    ]);
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api)).unwrap();
@@ -676,8 +700,15 @@ fn explain_enforces_its_request_bound_and_reports_partial_failures() {
         ]),
         requests: Mutex::default(),
     };
-    let cli = Cli::parse_from(["flea", "search", "micro mini potkulauta", "--explain", "2"]);
-    let Command::Search(args) = cli.command else {
+    let cli = Cli::parse_from([
+        "flea",
+        "tori",
+        "search",
+        "micro mini potkulauta",
+        "--explain",
+        "2",
+    ]);
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api)).unwrap();
@@ -701,13 +732,13 @@ fn explain_enforces_its_request_bound_and_reports_partial_failures() {
 fn explain_bounds_and_mode_combinations_fail_before_search_requests() {
     let api = FixtureApi::new(empty_fixture());
     for arguments in [
-        vec!["flea", "search", "query", "--explain", "0"],
-        vec!["flea", "search", "query", "--explain", "21"],
-        vec!["flea", "search", "--explain", "1"],
-        vec!["flea", "search", "query", "--explain", "1", "--raw"],
+        vec!["flea", "tori", "search", "query", "--explain", "0"],
+        vec!["flea", "tori", "search", "query", "--explain", "21"],
+        vec!["flea", "tori", "search", "--explain", "1"],
+        vec!["flea", "tori", "search", "query", "--explain", "1", "--raw"],
     ] {
         let cli = Cli::parse_from(arguments);
-        let Command::Search(args) = cli.command else {
+        let ToriCommand::Search(args) = tori_command(cli) else {
             unreachable!()
         };
         assert!(search::dispatch_with_api(*args, &api).is_err());
@@ -719,8 +750,8 @@ fn explain_bounds_and_mode_combinations_fail_before_search_requests() {
 fn raw_mode_preserves_the_upstream_document() {
     let raw = full_fixture();
     let api = FixtureApi::new(raw.clone());
-    let cli = Cli::parse_from(["flea", "search", "tuoli", "--raw"]);
-    let Command::Search(args) = cli.command else {
+    let cli = Cli::parse_from(["flea", "tori", "search", "tuoli", "--raw"]);
+    let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
     assert_eq!(search::dispatch_with_api(*args, &api).unwrap(), raw);

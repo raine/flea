@@ -1,5 +1,9 @@
 {
   "ok": true,
+  "context": {
+    "marketplace": "tori",
+    "portal": "fi"
+  },
   "data": {
     "draft_id": "draft-1",
     "etag": "etag-7",
@@ -81,7 +85,7 @@
   },
   "next_actions": [
     {
-      "command": "flea draft publish draft-1 --if-revision revision-7"
+      "command": "flea tori draft publish draft-1 --if-revision revision-7"
     }
   ]
 }

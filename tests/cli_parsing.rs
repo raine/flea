@@ -1,51 +1,94 @@
 use clap::Parser;
 use flea::{
     cli::{
-        Cli, Command, category::CategoryCommand, draft::DraftCommand, listing::ListingCommand,
-        search::SearchSort,
+        Cli, Command, ToriCommand, category::CategoryCommand, draft::DraftCommand,
+        listing::ListingCommand, search::SearchSort,
     },
     output::OutputFormat,
 };
 
+fn tori_command(cli: Cli) -> ToriCommand {
+    let Command::Tori(args) = cli.command else {
+        panic!("expected Tori command")
+    };
+    args.command
+}
+
 #[test]
 fn every_command_leaf_parses() {
     let cases = [
-        vec!["flea", "auth", "login"],
-        vec!["flea", "auth", "vinted-login-poc"],
-        vec!["flea", "auth", "status"],
-        vec!["flea", "auth", "logout"],
-        vec!["flea", "category", "search", "chairs"],
-        vec!["flea", "category", "list"],
-        vec!["flea", "draft", "create"],
-        vec!["flea", "draft", "create", "--from-listing", "listing-1"],
-        vec!["flea", "draft", "preview", "--title", "Chair"],
-        vec!["flea", "draft", "show", "draft-1"],
-        vec!["flea", "draft", "update", "draft-1", "--title", "Chair"],
-        vec!["flea", "draft", "image", "add", "draft-1", "one.jpg"],
-        vec!["flea", "draft", "image", "remove", "draft-1", "image-1"],
-        vec!["flea", "draft", "validate", "draft-1"],
+        vec!["flea", "tori", "auth", "login"],
+        vec!["flea", "tori", "auth", "status"],
+        vec!["flea", "tori", "auth", "logout"],
+        vec!["flea", "tori", "capabilities"],
+        vec!["flea", "vinted", "auth", "login"],
+        vec!["flea", "vinted", "auth", "status"],
+        vec!["flea", "vinted", "auth", "logout"],
+        vec!["flea", "vinted", "capabilities"],
+        vec!["flea", "marketplaces"],
+        vec!["flea", "capabilities"],
+        vec!["flea", "tori", "category", "search", "chairs"],
+        vec!["flea", "tori", "category", "list"],
+        vec!["flea", "tori", "draft", "create"],
         vec![
             "flea",
+            "tori",
+            "draft",
+            "create",
+            "--from-listing",
+            "listing-1",
+        ],
+        vec!["flea", "tori", "draft", "preview", "--title", "Chair"],
+        vec!["flea", "tori", "draft", "show", "draft-1"],
+        vec![
+            "flea", "tori", "draft", "update", "draft-1", "--title", "Chair",
+        ],
+        vec![
+            "flea", "tori", "draft", "image", "add", "draft-1", "one.jpg",
+        ],
+        vec![
+            "flea", "tori", "draft", "image", "remove", "draft-1", "image-1",
+        ],
+        vec!["flea", "tori", "draft", "validate", "draft-1"],
+        vec![
+            "flea",
+            "tori",
             "draft",
             "publish",
             "draft-1",
             "--if-revision",
             "one",
         ],
-        vec!["flea", "draft", "delete", "draft-1"],
-        vec!["flea", "listing", "list"],
-        vec!["flea", "listing", "show", "listing-1"],
-        vec!["flea", "listing", "update", "listing-1", "--price", "45"],
-        vec!["flea", "listing", "dispose", "listing-1"],
-        vec!["flea", "listing", "delete", "listing-1"],
-        vec!["flea", "item", "show", "42346404"],
-        vec!["flea", "item", "show", "42346404", "--raw"],
-        vec!["flea", "search", "chair"],
-        vec!["flea", "search", "chair", "--area", "Helsinki,Espoo,Vantaa"],
-        vec!["flea", "saved-search", "list"],
-        vec!["flea", "saved-search", "show", "alert-1"],
+        vec!["flea", "tori", "draft", "delete", "draft-1"],
+        vec!["flea", "tori", "listing", "list"],
+        vec!["flea", "tori", "listing", "show", "listing-1"],
         vec![
             "flea",
+            "tori",
+            "listing",
+            "update",
+            "listing-1",
+            "--price",
+            "45",
+        ],
+        vec!["flea", "tori", "listing", "dispose", "listing-1"],
+        vec!["flea", "tori", "listing", "delete", "listing-1"],
+        vec!["flea", "tori", "item", "show", "42346404"],
+        vec!["flea", "tori", "item", "show", "42346404", "--raw"],
+        vec!["flea", "tori", "search", "chair"],
+        vec![
+            "flea",
+            "tori",
+            "search",
+            "chair",
+            "--area",
+            "Helsinki,Espoo,Vantaa",
+        ],
+        vec!["flea", "tori", "saved-search", "list"],
+        vec!["flea", "tori", "saved-search", "show", "alert-1"],
+        vec![
+            "flea",
+            "tori",
             "saved-search",
             "create",
             "--name",
@@ -55,9 +98,17 @@ fn every_command_leaf_parses() {
             "--location",
             "Helsinki",
         ],
-        vec!["flea", "saved-search", "update", "alert-1", "--push", "off"],
-        vec!["flea", "saved-search", "delete", "alert-1"],
-        vec!["flea", "location", "search", "Helsinki"],
+        vec![
+            "flea",
+            "tori",
+            "saved-search",
+            "update",
+            "alert-1",
+            "--push",
+            "off",
+        ],
+        vec!["flea", "tori", "saved-search", "delete", "alert-1"],
+        vec!["flea", "tori", "location", "search", "Helsinki"],
         vec!["flea", "skill"],
         vec!["flea", "skill", "install", "--agent", "claude"],
     ];
@@ -70,13 +121,14 @@ fn every_command_leaf_parses() {
 
 #[test]
 fn publish_requires_an_expected_revision() {
-    assert!(Cli::try_parse_from(["flea", "draft", "publish", "draft-1"]).is_err());
+    assert!(Cli::try_parse_from(["flea", "tori", "draft", "publish", "draft-1"]).is_err());
 }
 
 #[test]
 fn parses_draft_show_expansions() {
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "draft",
         "show",
         "draft-1",
@@ -84,7 +136,7 @@ fn parses_draft_show_expansions() {
         "--include-options",
         "category",
     ]);
-    let Command::Draft(draft) = cli.command else {
+    let ToriCommand::Draft(draft) = tori_command(cli) else {
         panic!("expected draft command");
     };
     let DraftCommand::Show {
@@ -99,8 +151,15 @@ fn parses_draft_show_expansions() {
     assert!(include_fields);
     assert_eq!(include_options.as_deref(), Some("category"));
 
-    let cli = Cli::parse_from(["flea", "draft", "show", "draft-1", "--include-options"]);
-    let Command::Draft(draft) = cli.command else {
+    let cli = Cli::parse_from([
+        "flea",
+        "tori",
+        "draft",
+        "show",
+        "draft-1",
+        "--include-options",
+    ]);
+    let ToriCommand::Draft(draft) = tori_command(cli) else {
         panic!("expected draft command");
     };
     assert!(matches!(
@@ -116,6 +175,7 @@ fn parses_draft_show_expansions() {
 fn parses_category_search_hierarchy_and_pagination_options() {
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "category",
         "search",
         "tarvikkeet",
@@ -126,7 +186,7 @@ fn parses_category_search_hierarchy_and_pagination_options() {
         "--limit",
         "10",
     ]);
-    let Command::Category(category) = cli.command else {
+    let ToriCommand::Category(category) = tori_command(cli) else {
         panic!("expected category command");
     };
     let CategoryCommand::Search {
@@ -149,11 +209,18 @@ fn parses_category_search_hierarchy_and_pagination_options() {
 #[test]
 fn category_search_rejects_malformed_limits_and_conflicting_context() {
     for arguments in [
-        vec!["flea", "category", "search", "chair", "--limit", "0"],
-        vec!["flea", "category", "search", "chair", "--limit", "101"],
-        vec!["flea", "category", "search", "chair", "--limit", "many"],
+        vec![
+            "flea", "tori", "category", "search", "chair", "--limit", "0",
+        ],
+        vec![
+            "flea", "tori", "category", "search", "chair", "--limit", "101",
+        ],
+        vec![
+            "flea", "tori", "category", "search", "chair", "--limit", "many",
+        ],
         vec![
             "flea",
+            "tori",
             "category",
             "search",
             "chair",
@@ -171,6 +238,7 @@ fn category_search_rejects_malformed_limits_and_conflicting_context() {
 fn parses_global_format_and_common_draft_input() {
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "draft",
         "update",
         "36443414",
@@ -187,7 +255,7 @@ fn parses_global_format_and_common_draft_input() {
     ]);
 
     assert_eq!(cli.format, OutputFormat::Json);
-    let Command::Draft(draft) = cli.command else {
+    let ToriCommand::Draft(draft) = tori_command(cli) else {
         panic!("expected draft command");
     };
     let DraftCommand::Update { draft_id, values } = draft.command else {
@@ -202,6 +270,7 @@ fn parses_global_format_and_common_draft_input() {
 fn listing_update_rejects_conflicting_description_inputs() {
     let result = Cli::try_parse_from([
         "flea",
+        "tori",
         "listing",
         "update",
         "listing-1",
@@ -218,6 +287,7 @@ fn listing_update_rejects_conflicting_description_inputs() {
 fn parses_public_search_coordinates_facets_and_pagination() {
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "search",
         "chair",
         "--latitude",
@@ -240,7 +310,7 @@ fn parses_public_search_coordinates_facets_and_pagination() {
         "--facet-option-limit",
         "250",
     ]);
-    let Command::Search(search) = cli.command else {
+    let ToriCommand::Search(search) = tori_command(cli) else {
         panic!("expected search command");
     };
     assert_eq!(search.query.as_deref(), Some("chair"));
@@ -256,8 +326,15 @@ fn parses_public_search_coordinates_facets_and_pagination() {
 
 #[test]
 fn parses_concise_explicit_helsinki_area() {
-    let cli = Cli::parse_from(["flea", "search", "chair", "--area", "Helsinki,Espoo,Vantaa"]);
-    let Command::Search(search) = cli.command else {
+    let cli = Cli::parse_from([
+        "flea",
+        "tori",
+        "search",
+        "chair",
+        "--area",
+        "Helsinki,Espoo,Vantaa",
+    ]);
+    let ToriCommand::Search(search) = tori_command(cli) else {
         panic!("expected search command");
     };
 
@@ -269,6 +346,7 @@ fn clap_rejects_conflicting_area_exact_location_and_coordinates() {
     for arguments in [
         vec![
             "flea",
+            "tori",
             "search",
             "chair",
             "--area",
@@ -278,6 +356,7 @@ fn clap_rejects_conflicting_area_exact_location_and_coordinates() {
         ],
         vec![
             "flea",
+            "tori",
             "search",
             "chair",
             "--area",
@@ -292,14 +371,24 @@ fn clap_rejects_conflicting_area_exact_location_and_coordinates() {
 
 #[test]
 fn clap_rejects_duplicate_scalar_search_flags() {
-    let result = Cli::try_parse_from(["flea", "search", "chair", "--page", "1", "--page", "2"]);
+    let result = Cli::try_parse_from([
+        "flea", "tori", "search", "chair", "--page", "1", "--page", "2",
+    ]);
     assert!(result.is_err());
 }
 
 #[test]
 fn listing_tree_exposes_update_variant() {
-    let cli = Cli::parse_from(["flea", "listing", "update", "listing-1", "--title", "Chair"]);
-    let Command::Listing(listing) = cli.command else {
+    let cli = Cli::parse_from([
+        "flea",
+        "tori",
+        "listing",
+        "update",
+        "listing-1",
+        "--title",
+        "Chair",
+    ]);
+    let ToriCommand::Listing(listing) = tori_command(cli) else {
         panic!("expected listing command");
     };
     assert!(matches!(listing.command, ListingCommand::Update { .. }));

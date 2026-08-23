@@ -14,23 +14,194 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "macos")]
+use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    api::vinted_auth::VintedAuthentication, domain::envelope::NextAction, error::AppError,
+    domain::envelope::NextAction,
+    error::{AppError, ExitClass},
+    marketplace::vinted::auth::VintedAuthentication,
+    marketplace::{CapabilityMaturity, MarketplaceContext, PortalId},
+    storage::{StatePaths, credentials::VintedCredentialStore},
 };
 
-const MAX_CALLBACK_URL_BYTES: usize = 8 * 1024;
-const RETRY_COMMAND: &str = "flea auth vinted-login-poc";
+use crate::cli::auth::{AuthArgs, AuthCommand, unix_time_now};
+#[cfg(target_os = "macos")]
+use crate::storage::atomic_file::{AtomicFile, AtomicFileStore, sync_directory};
 
-pub fn execute() -> Result<Value, AppError> {
+const MAX_CALLBACK_URL_BYTES: usize = 8 * 1024;
+pub fn execute_command(portal: PortalId, args: AuthArgs) -> Result<Value, AppError> {
+    if portal != PortalId::Fi {
+        return Err(AppError::usage("the selected Vinted portal is unavailable"));
+    }
+    let paths = StatePaths::discover(MarketplaceContext::VINTED_FI)
+        .map_err(|error| storage_error(error, "discover"))?;
+    match args.command {
+        AuthCommand::Login => execute_login(paths),
+        AuthCommand::Status => execute_status(paths),
+        AuthCommand::Logout => execute_logout(paths),
+        AuthCommand::Callback { .. } => Err(AppError::unexpected(
+            "the Vinted callback receiver does not use the CLI callback command",
+        )),
+    }
+}
+
+fn execute_login(paths: StatePaths) -> Result<Value, AppError> {
     let auth = VintedAuthentication::new();
-    let (flow, start) = auth.start(super::auth::unix_time_now()?)?;
-    let callback = open_and_capture_callback(&start.login_url, start.expires_at_unix)?;
-    let result = block_on(auth.complete(&flow, &callback, super::auth::unix_time_now()?))?;
-    serde_json::to_value(result).map_err(|error| {
-        AppError::output("failed to serialize Vinted login output").with_source(error)
+    let (flow, start) = auth.start(unix_time_now()?)?;
+    let callback = open_and_capture_callback(&paths, &start.login_url, start.expires_at_unix)?;
+    let completion = block_on(auth.complete(&flow, &callback, unix_time_now()?))?;
+    VintedCredentialStore::new(paths)
+        .save(&completion.credentials)
+        .map_err(|error| storage_error(error, "write"))?;
+    serialize(completion.output, "Vinted login")
+}
+
+#[derive(Serialize)]
+struct VintedAuthStatus {
+    authenticated: bool,
+    health: &'static str,
+    validation: &'static str,
+    refresh_maturity: CapabilityMaturity,
+    refresh_performed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    login: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    access_expires_at_unix: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_in_seconds: Option<u64>,
+    #[serde(rename = "_next_actions", skip_serializing_if = "Vec::is_empty")]
+    next_actions: Vec<NextAction>,
+}
+
+fn execute_status(paths: StatePaths) -> Result<Value, AppError> {
+    let now = unix_time_now()?;
+    let Some(credentials) = VintedCredentialStore::new(paths)
+        .load()
+        .map_err(|error| storage_error(error, "read"))?
+    else {
+        return serialize(
+            unavailable_status("missing", "local_storage"),
+            "Vinted auth status",
+        );
+    };
+    if credentials.access_expires_at_unix <= now {
+        return serialize(
+            VintedAuthStatus {
+                access_expires_at_unix: Some(credentials.access_expires_at_unix),
+                ..unavailable_status("expired", "local_expiry")
+            },
+            "Vinted auth status",
+        );
+    }
+
+    let (_, login) = match block_on(VintedAuthentication::new().validate_credentials(&credentials))
+    {
+        Ok(account) => account,
+        Err(error) => {
+            return serialize(
+                validation_failure_status(&credentials, &error),
+                "Vinted auth status",
+            );
+        }
+    };
+    serialize(
+        VintedAuthStatus {
+            authenticated: true,
+            health: "valid",
+            validation: "online_current_user",
+            refresh_maturity: CapabilityMaturity::SourceDerived,
+            refresh_performed: false,
+            user_id: Some(credentials.user_id),
+            login,
+            access_expires_at_unix: Some(credentials.access_expires_at_unix),
+            expires_in_seconds: Some(credentials.access_expires_at_unix.saturating_sub(now)),
+            next_actions: Vec::new(),
+        },
+        "Vinted auth status",
+    )
+}
+
+fn execute_logout(paths: StatePaths) -> Result<Value, AppError> {
+    VintedCredentialStore::new(paths)
+        .delete()
+        .map_err(|error| storage_error(error, "delete"))?;
+    Ok(serde_json::json!({
+        "authenticated": false,
+        "marketplace": "vinted",
+        "portal": "fi",
+    }))
+}
+
+fn unavailable_status(health: &'static str, validation: &'static str) -> VintedAuthStatus {
+    VintedAuthStatus {
+        authenticated: false,
+        health,
+        validation,
+        refresh_maturity: CapabilityMaturity::SourceDerived,
+        refresh_performed: false,
+        user_id: None,
+        login: None,
+        access_expires_at_unix: None,
+        expires_in_seconds: None,
+        next_actions: vec![retry_action()],
+    }
+}
+
+fn validation_failure_status(
+    credentials: &crate::storage::credentials::VintedCredentialRecord,
+    error: &AppError,
+) -> VintedAuthStatus {
+    let rejected = error.code == "vinted_auth.validation_rejected";
+    VintedAuthStatus {
+        authenticated: false,
+        health: if rejected {
+            "rejected"
+        } else {
+            "temporarily_unavailable"
+        },
+        validation: "online_current_user",
+        refresh_maturity: CapabilityMaturity::SourceDerived,
+        refresh_performed: false,
+        user_id: Some(credentials.user_id.clone()),
+        login: credentials.login.clone(),
+        access_expires_at_unix: Some(credentials.access_expires_at_unix),
+        expires_in_seconds: None,
+        next_actions: vec![if rejected {
+            retry_action()
+        } else {
+            NextAction {
+                command: crate::cli::invocation::vinted_fi("auth status"),
+            }
+        }],
+    }
+}
+
+fn serialize(value: impl Serialize, stage: &'static str) -> Result<Value, AppError> {
+    serde_json::to_value(value).map_err(|error| {
+        AppError::output(format!("failed to serialize {stage} output")).with_source(error)
     })
+}
+
+fn storage_error(
+    error: impl std::error::Error + Send + Sync + 'static,
+    operation: &'static str,
+) -> AppError {
+    let mut result = AppError::new(
+        "auth.storage_failed",
+        "Vinted authentication state could not be updated safely",
+        ExitClass::Authentication,
+    )
+    .with_details(serde_json::json!({ "operation": operation }))
+    .with_source(error);
+    result.next_actions.push(NextAction {
+        command: crate::cli::invocation::vinted_fi("auth status"),
+    });
+    result
 }
 
 fn read_callback(reader: impl Read) -> Result<String, AppError> {
@@ -82,12 +253,16 @@ fn browser_launch_error(
 
 fn retry_action() -> NextAction {
     NextAction {
-        command: RETRY_COMMAND.to_owned(),
+        command: crate::cli::invocation::vinted_fi("auth login"),
     }
 }
 
 #[cfg(target_os = "linux")]
-fn open_and_capture_callback(login_url: &str, _expires_at_unix: u64) -> Result<String, AppError> {
+fn open_and_capture_callback(
+    _paths: &StatePaths,
+    login_url: &str,
+    _expires_at_unix: u64,
+) -> Result<String, AppError> {
     let status = std::process::Command::new("xdg-open")
         .arg(login_url)
         .status()
@@ -100,7 +275,7 @@ fn open_and_capture_callback(login_url: &str, _expires_at_unix: u64) -> Result<S
     }
     eprintln!("Browser opened for Vinted.");
     eprintln!(
-        "This proof-of-concept uses manual callback capture on Linux. Complete sign-in, copy the full vintedfr://auth?... callback URL, and paste it below."
+        "Complete sign-in, copy the full vintedfr://auth?... callback URL, and paste it below."
     );
     eprint!("Vinted callback URL: ");
     io::stderr()
@@ -110,8 +285,12 @@ fn open_and_capture_callback(login_url: &str, _expires_at_unix: u64) -> Result<S
 }
 
 #[cfg(target_os = "macos")]
-fn open_and_capture_callback(login_url: &str, expires_at_unix: u64) -> Result<String, AppError> {
-    let mut receiver = MacCallbackReceiver::prepare()?;
+fn open_and_capture_callback(
+    paths: &StatePaths,
+    login_url: &str,
+    expires_at_unix: u64,
+) -> Result<String, AppError> {
+    let mut receiver = MacCallbackReceiver::prepare(paths)?;
     let result = (|| {
         let status = std::process::Command::new("/usr/bin/open")
             .arg(login_url)
@@ -135,7 +314,11 @@ fn open_and_capture_callback(login_url: &str, expires_at_unix: u64) -> Result<St
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn open_and_capture_callback(_login_url: &str, _expires_at_unix: u64) -> Result<String, AppError> {
+fn open_and_capture_callback(
+    _paths: &StatePaths,
+    _login_url: &str,
+    _expires_at_unix: u64,
+) -> Result<String, AppError> {
     let mut error = AppError::authentication(
         "vinted_auth.interactive_login_unsupported",
         "interactive Vinted browser login requires Linux or macOS",
@@ -145,9 +328,19 @@ fn open_and_capture_callback(_login_url: &str, _expires_at_unix: u64) -> Result<
 }
 
 #[cfg(target_os = "macos")]
+const MAC_CALLBACK_BUNDLE_ID: &str = "fi.raine.flea.vinted-auth";
+
+#[cfg(target_os = "macos")]
+#[derive(Deserialize, Serialize)]
+struct BorrowedUrlHandler {
+    previous_handler: String,
+}
+
+#[cfg(target_os = "macos")]
 struct MacCallbackReceiver {
     app: PathBuf,
     callback_file: PathBuf,
+    recovery_file: PathBuf,
     previous_handler: Option<String>,
     installed: bool,
     _temporary: tempfile::TempDir,
@@ -155,9 +348,7 @@ struct MacCallbackReceiver {
 
 #[cfg(target_os = "macos")]
 impl MacCallbackReceiver {
-    fn prepare() -> Result<Self, AppError> {
-        const BUNDLE_ID: &str = "fi.raine.flea.vinted-auth-poc";
-
+    fn prepare(paths: &StatePaths) -> Result<Self, AppError> {
         let temporary = tempfile::Builder::new()
             .prefix("flea-vinted-auth-")
             .tempdir()
@@ -170,12 +361,27 @@ impl MacCallbackReceiver {
             .join("Applications");
         fs::create_dir_all(&applications).map_err(callback_receiver_error)?;
         let app = applications.join("Flea Vinted Auth.app");
-        reject_existing_app(&app)?;
-        let previous_handler = default_url_handler("vintedfr")?;
+        let recovery_file = paths.auth_dir().join("borrowed-url-handler.json");
+        recover_interrupted_receiver(&app, &recovery_file)?;
+        let previous_handler = default_url_handler("vintedfr")?.ok_or_else(|| {
+            callback_receiver_error(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Vinted has no URL handler to restore after login",
+            ))
+        })?;
+        paths.ensure().map_err(callback_receiver_error)?;
+        let recovery = serde_json::to_vec(&BorrowedUrlHandler {
+            previous_handler: previous_handler.clone(),
+        })
+        .map_err(callback_receiver_error)?;
+        AtomicFile
+            .write(&recovery_file, &recovery)
+            .map_err(callback_receiver_error)?;
         let mut receiver = Self {
             app,
             callback_file,
-            previous_handler,
+            recovery_file,
+            previous_handler: Some(previous_handler),
             installed: false,
             _temporary: temporary,
         };
@@ -199,7 +405,7 @@ impl MacCallbackReceiver {
                 "-replace",
                 "CFBundleIdentifier",
                 "-string",
-                BUNDLE_ID,
+                MAC_CALLBACK_BUNDLE_ID,
                 path_text(&plist)?,
             ]))?;
             checked_command(std::process::Command::new("/usr/bin/plutil").args([
@@ -218,7 +424,7 @@ impl MacCallbackReceiver {
             ]))?;
             checked_command(launch_services_command().args(["-f", path_text(&receiver.app)?]))?;
             receiver.installed = true;
-            set_default_url_handler("vintedfr", BUNDLE_ID)?;
+            set_default_url_handler("vintedfr", MAC_CALLBACK_BUNDLE_ID)?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -250,17 +456,14 @@ impl MacCallbackReceiver {
     }
 
     fn cleanup(&mut self) -> Result<(), AppError> {
-        if !self.installed && !self.app.exists() {
+        if !self.installed && !self.app.exists() && !self.recovery_file.exists() {
             return Ok(());
         }
+        if let Some(previous_handler) = &self.previous_handler {
+            set_default_url_handler("vintedfr", previous_handler)?;
+        }
         let mut first_error = None;
-        if self.installed {
-            if let Some(previous_handler) = &self.previous_handler {
-                keep_first_error(
-                    &mut first_error,
-                    set_default_url_handler("vintedfr", previous_handler),
-                );
-            }
+        if self.installed && self.app.exists() {
             keep_first_error(
                 &mut first_error,
                 checked_command(launch_services_command().args(["-u", path_text(&self.app)?])),
@@ -271,6 +474,9 @@ impl MacCallbackReceiver {
                 &mut first_error,
                 fs::remove_dir_all(&self.app).map_err(callback_receiver_error),
             );
+        }
+        if first_error.is_none() {
+            keep_first_error(&mut first_error, remove_private_file(&self.recovery_file));
         }
         self.installed = false;
         match first_error {
@@ -295,12 +501,82 @@ impl Drop for MacCallbackReceiver {
 }
 
 #[cfg(target_os = "macos")]
-fn reject_existing_app(app: &Path) -> Result<(), AppError> {
-    match fs::symlink_metadata(app) {
-        Ok(_) => Err(callback_receiver_error(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "the callback receiver application path already exists",
-        ))),
+fn recover_interrupted_receiver(app: &Path, recovery_file: &Path) -> Result<(), AppError> {
+    if !recovery_file.exists() {
+        return match fs::symlink_metadata(app) {
+            Ok(_) => Err(callback_receiver_error(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!(
+                    "the callback receiver application exists without recovery metadata: {}",
+                    app.display()
+                ),
+            ))),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(callback_receiver_error(error)),
+        };
+    }
+    let metadata = fs::symlink_metadata(recovery_file).map_err(callback_receiver_error)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() || metadata.len() > 4_096 {
+        return Err(callback_receiver_error(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the URL handler recovery record is invalid",
+        )));
+    }
+    let record: BorrowedUrlHandler =
+        serde_json::from_slice(&fs::read(recovery_file).map_err(callback_receiver_error)?)
+            .map_err(callback_receiver_error)?;
+    if record.previous_handler.is_empty()
+        || record.previous_handler == MAC_CALLBACK_BUNDLE_ID
+        || record.previous_handler.chars().any(char::is_control)
+    {
+        return Err(callback_receiver_error(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the previous URL handler identifier is invalid",
+        )));
+    }
+    set_default_url_handler("vintedfr", &record.previous_handler)?;
+    if app.exists() {
+        verify_owned_callback_app(app)?;
+        checked_command(launch_services_command().args(["-u", path_text(app)?]))?;
+        fs::remove_dir_all(app).map_err(callback_receiver_error)?;
+    }
+    remove_private_file(recovery_file)
+}
+
+#[cfg(target_os = "macos")]
+fn verify_owned_callback_app(app: &Path) -> Result<(), AppError> {
+    let plist = app.join("Contents/Info.plist");
+    let output = std::process::Command::new("/usr/bin/plutil")
+        .args([
+            "-extract",
+            "CFBundleIdentifier",
+            "raw",
+            "-o",
+            "-",
+            path_text(&plist)?,
+        ])
+        .output()
+        .map_err(callback_receiver_error)?;
+    let identifier = String::from_utf8_lossy(&output.stdout);
+    if output.status.success() && identifier.trim() == MAC_CALLBACK_BUNDLE_ID {
+        Ok(())
+    } else {
+        Err(callback_receiver_error(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the callback application is not owned by Flea",
+        )))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn remove_private_file(path: &Path) -> Result<(), AppError> {
+    match fs::remove_file(path) {
+        Ok(()) => {
+            if let Some(parent) = path.parent() {
+                sync_directory(parent).map_err(callback_receiver_error)?;
+            }
+            Ok(())
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(callback_receiver_error(error)),
     }
@@ -484,6 +760,43 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 mod tests {
     use super::*;
 
+    fn credentials() -> crate::storage::credentials::VintedCredentialRecord {
+        crate::storage::credentials::VintedCredentialRecord {
+            portal: PortalId::Fi,
+            user_id: "user-1".to_owned(),
+            login: Some("fixture".to_owned()),
+            access_token: "access".to_owned(),
+            refresh_token: "refresh".to_owned(),
+            access_expires_at_unix: 2_000,
+            device_uuid: "device".to_owned(),
+            anonymous_id: "anonymous".to_owned(),
+            user_device_token: None,
+        }
+    }
+
+    #[test]
+    fn status_maps_online_validation_failures_to_health_documents() {
+        let rejected =
+            AppError::authentication("vinted_auth.validation_rejected", "token rejected");
+        let rejected = validation_failure_status(&credentials(), &rejected);
+        assert_eq!(rejected.health, "rejected");
+        assert_eq!(
+            rejected.next_actions[0].command,
+            "flea vinted --portal fi auth login"
+        );
+
+        let unavailable = AppError::upstream(
+            "vinted_auth.validation_transport_failed",
+            "network unavailable",
+        );
+        let unavailable = validation_failure_status(&credentials(), &unavailable);
+        assert_eq!(unavailable.health, "temporarily_unavailable");
+        assert_eq!(
+            unavailable.next_actions[0].command,
+            "flea vinted --portal fi auth status"
+        );
+    }
+
     #[test]
     fn callback_input_is_bounded_and_strips_the_terminal_newline() {
         assert_eq!(
@@ -492,14 +805,20 @@ mod tests {
         );
         let error = read_callback(&vec![b'x'; MAX_CALLBACK_URL_BYTES + 1][..]).unwrap_err();
         assert_eq!(error.code, "vinted_auth.callback_input_failed");
-        assert_eq!(error.next_actions[0].command, RETRY_COMMAND);
+        assert_eq!(
+            error.next_actions[0].command,
+            "flea vinted --portal fi auth login"
+        );
     }
 
     #[test]
-    fn browser_errors_use_the_proof_of_concept_recovery_command() {
+    fn browser_errors_use_the_public_vinted_recovery_command() {
         let error = browser_launch_error("fixture", std::io::Error::other("failed"));
 
         assert_eq!(error.code, "vinted_auth.browser_launch_failed");
-        assert_eq!(error.next_actions[0].command, RETRY_COMMAND);
+        assert_eq!(
+            error.next_actions[0].command,
+            "flea vinted --portal fi auth login"
+        );
     }
 }

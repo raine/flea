@@ -3,7 +3,7 @@ use std::sync::Mutex;
 use clap::Parser;
 use flea::{
     api::item::{PublicItemApi, PublicItemApiError, PublicItems},
-    cli::{Cli, Command, item},
+    cli::{Cli, Command, ToriCommand, item},
 };
 use serde_json::{Value, json};
 
@@ -82,8 +82,11 @@ fn normalizes_complete_public_listing_detail() {
 fn raw_mode_preserves_the_exact_upstream_document() {
     let raw = full_fixture();
     let api = FixtureApi::success(raw.clone());
-    let cli = Cli::parse_from(["flea", "item", "show", "42346404", "--raw"]);
-    let Command::Item(args) = cli.command else {
+    let cli = Cli::parse_from(["flea", "tori", "item", "show", "42346404", "--raw"]);
+    let Command::Tori(tori) = cli.command else {
+        unreachable!()
+    };
+    let ToriCommand::Item(args) = tori.command else {
         unreachable!()
     };
 
@@ -96,7 +99,7 @@ fn invalid_ids_fail_locally_with_an_actionable_structured_error() {
     let error = PublicItems::new(&api).show("../42346404").unwrap_err();
 
     assert_eq!(error.code, "item.invalid_id");
-    assert_eq!(error.next_actions[0].command, "flea search");
+    assert_eq!(error.next_actions[0].command, "flea tori search");
     assert!(api.ids.lock().unwrap().is_empty());
 }
 
@@ -111,7 +114,7 @@ fn missing_expired_and_upstream_invalid_items_have_distinct_actionable_errors() 
             .show("42346404")
             .unwrap_err();
         assert_eq!(error.code, code);
-        assert_eq!(error.next_actions[0].command, "flea search");
+        assert_eq!(error.next_actions[0].command, "flea tori search");
         assert_eq!(error.details.as_deref().unwrap()["listing_id"], "42346404");
     }
 }

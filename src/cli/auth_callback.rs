@@ -53,7 +53,7 @@ pub fn open_and_wait(
         if now >= expires_at_unix {
             return Err(retry_login_error(
                 "auth.flow_expired",
-                "browser sign-in did not finish before the authentication flow expired; retry flea auth login",
+                "browser sign-in did not finish before the authentication flow expired; retry flea tori auth login",
             ));
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -106,14 +106,14 @@ pub fn read(paths: &StatePaths) -> Result<String, AppError> {
 fn callback_capture_error() -> AppError {
     retry_login_error(
         "auth.callback_not_captured",
-        "the browser callback could not be captured; allow the browser to open Flea Auth, then run `flea auth login` again",
+        "the browser callback could not be captured; allow the browser to open Flea Auth, then run `flea tori auth login` again",
     )
 }
 
 fn callback_receiver_error(error: impl std::error::Error + Send + Sync + 'static) -> AppError {
     retry_login_error(
         "auth.callback_receiver_failed",
-        "the browser callback receiver could not be prepared; check state directory permissions and install the operating system's desktop URL handler tools, then retry flea auth login",
+        "the browser callback receiver could not be prepared; check state directory permissions and install the operating system's desktop URL handler tools, then retry flea tori auth login",
     )
     .with_details(json!({
         "platform": std::env::consts::OS,
@@ -128,7 +128,7 @@ fn browser_launch_error(
 ) -> AppError {
     retry_login_error(
         "auth.browser_launch_failed",
-        format!("the default browser could not be opened with {launcher}; verify the launcher is installed and a default browser is configured, then retry flea auth login"),
+        format!("the default browser could not be opened with {launcher}; verify the launcher is installed and a default browser is configured, then retry flea tori auth login"),
     )
     .with_details(json!({ "launcher": launcher }))
     .with_source(error)
@@ -137,7 +137,7 @@ fn browser_launch_error(
 fn retry_login_error(code: &str, message: impl Into<String>) -> AppError {
     let mut error = AppError::authentication(code, message);
     error.next_actions.push(NextAction {
-        command: "flea auth login".to_owned(),
+        command: crate::cli::invocation::tori("auth login"),
     });
     error
 }
@@ -195,7 +195,7 @@ fn install_linux_receiver(
     let executable = desktop_path(executable)?;
     let state_root = desktop_path(&paths.root())?;
     let contents = format!(
-        "[Desktop Entry]\nType=Application\nName=Flea Auth\nNoDisplay=true\nTerminal=false\nExec={executable} auth callback --state-root {state_root} %u\nMimeType=x-scheme-handler/{SCHEME};\n"
+        "[Desktop Entry]\nType=Application\nName=Flea Auth\nNoDisplay=true\nTerminal=false\nExec={executable} tori auth callback --state-root {state_root} %u\nMimeType=x-scheme-handler/{SCHEME};\n"
     );
     let path = data_home.join("applications").join(desktop_file);
     write_atomic(&path, contents.as_bytes()).map_err(callback_receiver_error)
@@ -246,7 +246,7 @@ fn open_browser(_login_url: &str) -> Result<(), AppError> {
 fn interactive_login_unsupported() -> AppError {
     retry_login_error(
         "auth.interactive_login_unsupported",
-        "interactive browser login requires Linux or macOS; run `flea auth login` on a supported platform",
+        "interactive browser login requires Linux or macOS; run `flea tori auth login` on a supported platform",
     )
 }
 
@@ -436,26 +436,32 @@ mod tests {
     #[test]
     fn callback_capture_recommends_public_login() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         let error = read(&paths).unwrap_err();
 
         assert_eq!(error.code, "auth.callback_not_captured");
-        assert!(error.message.contains("`flea auth login`"));
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert!(error.message.contains("`flea tori auth login`"));
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
     }
 
     #[test]
     fn unsupported_platform_error_identifies_public_login() {
         let error = interactive_login_unsupported();
 
-        assert!(error.message.contains("`flea auth login`"));
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert!(error.message.contains("`flea tori auth login`"));
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
     }
 
     #[test]
     fn captures_callback_in_a_private_bounded_file() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         let callback = format!("{SCHEME}://login?code=code&state=state");
 
         assert_eq!(
@@ -468,12 +474,15 @@ mod tests {
     #[test]
     fn rejects_callbacks_for_other_schemes() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("state"));
+        let paths = StatePaths::from_root(
+            temporary.path().join("state"),
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
 
         let error = capture(&paths, "https://example.com/callback").unwrap_err();
 
         assert_eq!(error.code, "auth.callback_not_captured");
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
         assert!(!paths.oauth_callback_file().exists());
     }
 
@@ -483,7 +492,10 @@ mod tests {
         let temporary = tempdir().unwrap();
         let executable = Path::new("/opt/Flea $Tools/flea");
 
-        let paths = StatePaths::from_root("/home/example/.local/state/flea");
+        let paths = StatePaths::from_root(
+            "/home/example/.local/state/flea",
+            crate::marketplace::MarketplaceContext::TORI_FI,
+        );
         install_linux_receiver(
             &paths,
             executable,
@@ -501,7 +513,7 @@ mod tests {
         assert!(desktop.contains("Type=Application"));
         assert!(desktop.contains(&format!("MimeType=x-scheme-handler/{SCHEME};")));
         assert!(desktop.contains(
-            "Exec=\"/opt/Flea \\$Tools/flea\" auth callback --state-root \"/home/example/.local/state/flea\" %u"
+            "Exec=\"/opt/Flea \\$Tools/flea\" tori auth callback --state-root \"/home/example/.local/state/flea\" %u"
         ));
     }
 
@@ -515,7 +527,7 @@ mod tests {
 
         assert_eq!(error.code, "auth.browser_launch_failed");
         assert_eq!(error.details.unwrap()["launcher"], "xdg-open");
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
         assert!(error.message.contains("default browser"));
     }
 
@@ -538,6 +550,6 @@ mod tests {
 
         assert_eq!(error.code, "auth.browser_launch_failed");
         assert_eq!(error.details.unwrap()["launcher"], "/usr/bin/open");
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
     }
 }

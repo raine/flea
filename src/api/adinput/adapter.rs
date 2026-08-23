@@ -355,7 +355,7 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
                 "draft_id": draft_id,
                 "completed_steps": completed_steps,
                 "recovery_guidance": format!(
-                    "Inspect the draft with `flea draft show {draft_id}`; do not repeat creation"
+                    "Inspect the draft with `flea tori draft show {draft_id}`; do not repeat creation"
                 )
             })));
             error

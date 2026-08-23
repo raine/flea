@@ -6,38 +6,49 @@ use std::{env, ffi::OsString, io, path::PathBuf};
 
 use atomic_file::secure_directory;
 
+use crate::marketplace::MarketplaceContext;
+
 const STATE_DIR: &str = "flea";
-const LEGACY_STATE_DIR: &str = "tori-cli";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatePaths {
     root: PathBuf,
+    context: MarketplaceContext,
 }
 
 impl StatePaths {
-    pub fn discover() -> io::Result<Self> {
-        Self::from_environment(env::var_os("XDG_STATE_HOME"), env::var_os("HOME"))
+    pub fn discover(context: MarketplaceContext) -> io::Result<Self> {
+        let paths =
+            Self::from_environment(env::var_os("XDG_STATE_HOME"), env::var_os("HOME"), context)?;
+        paths.remove_unscoped_credentials()?;
+        Ok(paths)
     }
 
-    pub fn from_state_home(state_home: impl Into<PathBuf>) -> Self {
-        let state_home = state_home.into();
-        let root = state_home.join(STATE_DIR);
-        let legacy_root = state_home.join(LEGACY_STATE_DIR);
-        if path_exists(&root) || !is_directory(&legacy_root) {
-            Self { root }
-        } else {
-            Self { root: legacy_root }
+    pub fn from_state_home(state_home: impl Into<PathBuf>, context: MarketplaceContext) -> Self {
+        Self {
+            root: state_home.into().join(STATE_DIR),
+            context,
         }
     }
 
-    pub fn from_root(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+    pub fn from_root(root: impl Into<PathBuf>, context: MarketplaceContext) -> Self {
+        Self {
+            root: root.into(),
+            context,
+        }
+    }
+
+    pub fn context(&self) -> MarketplaceContext {
+        self.context
     }
 
     pub fn ensure(&self) -> io::Result<()> {
         secure_directory(&self.root)?;
+        secure_directory(&self.root.join("auth"))?;
+        secure_directory(&self.marketplace_auth_dir())?;
         secure_directory(&self.auth_dir())?;
         secure_directory(&self.flows_dir())?;
+        secure_directory(&self.accounts_dir())?;
         secure_directory(&self.logs_dir())
     }
 
@@ -45,16 +56,31 @@ impl StatePaths {
         self.root.clone()
     }
 
+    fn marketplace_auth_dir(&self) -> PathBuf {
+        self.root
+            .join("auth")
+            .join(self.context.marketplace.to_string())
+    }
+
     pub fn auth_dir(&self) -> PathBuf {
-        self.root.join("auth")
+        self.marketplace_auth_dir()
+            .join(self.context.portal.to_string())
     }
 
     pub fn flows_dir(&self) -> PathBuf {
         self.auth_dir().join("flows")
     }
 
-    pub fn credentials_file(&self) -> PathBuf {
-        self.auth_dir().join("credentials.json")
+    pub fn accounts_dir(&self) -> PathBuf {
+        self.auth_dir().join("accounts")
+    }
+
+    pub fn current_account_file(&self) -> PathBuf {
+        self.auth_dir().join("current-account")
+    }
+
+    pub fn account_credentials_file(&self, account_key: &str) -> PathBuf {
+        self.accounts_dir().join(format!("{account_key}.json"))
     }
 
     pub fn credentials_lock_file(&self) -> PathBuf {
@@ -73,9 +99,29 @@ impl StatePaths {
         self.root.join("logs")
     }
 
+    fn remove_unscoped_credentials(&self) -> io::Result<()> {
+        let mut paths = vec![self.root.join("auth/credentials.json")];
+        if let Some(state_home) = self.root.parent() {
+            paths.push(state_home.join("tori-cli/auth/credentials.json"));
+        }
+        for path in paths {
+            match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    if let Some(parent) = path.parent() {
+                        atomic_file::sync_directory(parent)?;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
     fn from_environment(
         xdg_state_home: Option<OsString>,
         home: Option<OsString>,
+        context: MarketplaceContext,
     ) -> io::Result<Self> {
         let state_home = xdg_state_home
             .filter(|path| PathBuf::from(path).is_absolute())
@@ -90,16 +136,8 @@ impl StatePaths {
                     "cannot determine the local state directory",
                 )
             })?;
-        Ok(Self::from_state_home(state_home))
+        Ok(Self::from_state_home(state_home, context))
     }
-}
-
-fn path_exists(path: &std::path::Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
-}
-
-fn is_directory(path: &std::path::Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
 }
 
 #[cfg(test)]
@@ -111,12 +149,14 @@ mod tests {
     use tempfile::tempdir;
 
     use super::StatePaths;
+    use crate::marketplace::MarketplaceContext;
 
     #[test]
     fn uses_absolute_xdg_state_home() {
         let paths = StatePaths::from_environment(
             Some(OsString::from("/var/lib/example")),
             Some(OsString::from("/home/example")),
+            MarketplaceContext::TORI_FI,
         )
         .unwrap();
 
@@ -128,6 +168,7 @@ mod tests {
         let paths = StatePaths::from_environment(
             Some(OsString::from("relative")),
             Some(OsString::from("/home/example")),
+            MarketplaceContext::TORI_FI,
         )
         .unwrap();
 
@@ -138,32 +179,40 @@ mod tests {
     }
 
     #[test]
-    fn uses_existing_legacy_state_when_flea_state_is_absent() {
+    fn removes_unscoped_credential_files() {
         let temporary = tempdir().unwrap();
-        let legacy = temporary.path().join("tori-cli");
-        std::fs::create_dir(&legacy).unwrap();
+        let root = temporary.path().join("flea");
+        let old_flea_auth = root.join("auth");
+        let old_tori_auth = temporary.path().join("tori-cli/auth");
+        std::fs::create_dir_all(&old_flea_auth).unwrap();
+        std::fs::create_dir_all(&old_tori_auth).unwrap();
+        std::fs::write(old_flea_auth.join("credentials.json"), b"secret").unwrap();
+        std::fs::write(old_tori_auth.join("credentials.json"), b"secret").unwrap();
+        let paths = StatePaths::from_root(root, MarketplaceContext::TORI_FI);
 
-        let paths = StatePaths::from_state_home(temporary.path());
+        paths.remove_unscoped_credentials().unwrap();
 
-        assert_eq!(paths.root(), legacy);
+        assert!(!old_flea_auth.join("credentials.json").exists());
+        assert!(!old_tori_auth.join("credentials.json").exists());
     }
 
     #[test]
-    fn prefers_flea_state_when_both_state_directories_exist() {
-        let temporary = tempdir().unwrap();
-        let flea = temporary.path().join("flea");
-        std::fs::create_dir(&flea).unwrap();
-        std::fs::create_dir(temporary.path().join("tori-cli")).unwrap();
+    fn scopes_authentication_by_marketplace_and_portal() {
+        let root = std::path::Path::new("/tmp/flea-state");
 
-        let paths = StatePaths::from_state_home(temporary.path());
+        let tori = StatePaths::from_root(root, MarketplaceContext::TORI_FI);
+        let vinted = StatePaths::from_root(root, MarketplaceContext::VINTED_FI);
 
-        assert_eq!(paths.root(), flea);
+        assert_eq!(tori.auth_dir(), root.join("auth/tori/fi"));
+        assert_eq!(vinted.auth_dir(), root.join("auth/vinted/fi"));
+        assert_ne!(tori.credentials_lock_file(), vinted.credentials_lock_file());
     }
 
     #[test]
-    fn creates_the_state_tree_with_private_permissions() {
+    fn creates_the_scoped_state_tree_with_private_permissions() {
         let temporary = tempdir().unwrap();
-        let paths = StatePaths::from_root(temporary.path().join("flea"));
+        let paths =
+            StatePaths::from_root(temporary.path().join("flea"), MarketplaceContext::VINTED_FI);
 
         paths.ensure().unwrap();
 
@@ -171,6 +220,7 @@ mod tests {
             paths.root(),
             paths.auth_dir(),
             paths.flows_dir(),
+            paths.accounts_dir(),
             paths.logs_dir(),
         ] {
             assert!(directory.is_dir());

@@ -464,7 +464,7 @@ async fn creation_observation_failure_preserves_authoritative_identity() {
         recovery.completed_steps,
         ["create_draft", "establish_identity"]
     );
-    assert_eq!(recovery.next_safe_actions, ["flea draft show 98231"]);
+    assert_eq!(recovery.next_safe_actions, ["flea tori draft show 98231"]);
     assert_eq!(
         recovery.create.unwrap().allocation,
         RecoveryStatus::Persisted
@@ -741,8 +741,8 @@ async fn structured_upstream_errors_name_the_active_field_and_preserve_progress(
     assert_eq!(
         recovery.next_safe_actions,
         [
-            "flea draft show draft-1",
-            "flea draft update draft-1 --price VALUE"
+            "flea tori draft show draft-1",
+            "flea tori draft update draft-1 --price VALUE"
         ]
     );
     let requests = transport.requests();
@@ -958,8 +958,8 @@ async fn unchanged_etag_proves_an_ambiguous_field_absent_and_limits_recovery() {
     assert_eq!(
         recovery.next_safe_actions,
         [
-            "flea draft show draft-1",
-            "flea draft update draft-1 --price VALUE"
+            "flea tori draft show draft-1",
+            "flea tori draft update draft-1 --price VALUE"
         ]
     );
     assert_eq!(error.details.unwrap()["observation"]["etag_changed"], false);
@@ -1004,7 +1004,7 @@ async fn failed_observation_keeps_the_active_field_indeterminate() {
     assert!(recovery.absent_fields.is_empty());
     assert!(recovery.manual_inspection_required);
     assert!(!recovery.safe_to_retry);
-    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+    assert_eq!(recovery.next_safe_actions, ["flea tori draft show draft-1"]);
     assert_eq!(recovery.observation.status, ObservationStatus::Unavailable);
     assert!(recovery.destructive_actions.is_empty());
     assert_eq!(
@@ -1053,7 +1053,7 @@ async fn update_conflict_fetches_and_returns_fresh_remote_state() {
         ObservationStatus::ChangedByAnotherClient
     );
     assert_eq!(recovery.observed_etag.as_deref(), Some("two"));
-    assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+    assert_eq!(recovery.next_safe_actions, ["flea tori draft show draft-1"]);
     assert!(recovery.destructive_actions.is_empty());
     assert_eq!(recovery.fresh_state.unwrap().values["title"], "other agent");
     let requests = transport.requests();
@@ -1551,8 +1551,8 @@ async fn price_failure_preserves_transience_and_unsafe_recovery_details() {
     assert_eq!(
         recovery.next_safe_actions,
         [
-            "flea draft show draft-1",
-            "flea draft update draft-1 --price VALUE"
+            "flea tori draft show draft-1",
+            "flea tori draft update draft-1 --price VALUE"
         ]
     );
     let requests = transport.requests();
@@ -1787,8 +1787,8 @@ async fn dedicated_delivery_failure_requires_authoritative_recovery() {
     assert_eq!(
         recovery.next_safe_actions,
         [
-            "flea draft show draft-1",
-            "flea draft update draft-1 --delivery VALUE"
+            "flea tori draft show draft-1",
+            "flea tori draft update draft-1 --delivery VALUE"
         ]
     );
 }
@@ -1858,8 +1858,8 @@ async fn post_creation_failure_keeps_recovery_context() {
     assert_eq!(
         recovery.next_safe_actions,
         [
-            "flea draft show draft-1",
-            "flea draft update draft-1 --category VALUE"
+            "flea tori draft show draft-1",
+            "flea tori draft update draft-1 --category VALUE"
         ]
     );
 }
@@ -1934,12 +1934,12 @@ async fn incomplete_creation_continues_with_update_and_image_actions() {
     assert_eq!(recovery.absent_fields, ["title"]);
     assert_eq!(recovery.unattempted_fields, ["postal_code"]);
     assert!(recovery.next_safe_actions.iter().any(|action| action
-        == "flea draft update draft-1 --input PATH_WITH_ABSENT_AND_UNATTEMPTED_FIELDS"));
+        == "flea tori draft update draft-1 --input PATH_WITH_ABSENT_AND_UNATTEMPTED_FIELDS"));
     assert!(
         recovery
             .next_safe_actions
             .iter()
-            .any(|action| action == "flea draft image add draft-1 --image PATH...")
+            .any(|action| action == "flea tori draft image add draft-1 --image PATH...")
     );
 
     let updated = workflow.update("draft-1", &requested).await.unwrap();
@@ -1976,7 +1976,7 @@ async fn image_failure_keeps_allocated_draft_and_unattempted_image_plan() {
         recovery
             .next_safe_actions
             .iter()
-            .any(|action| action == "flea draft image add draft-1 --image PATH...")
+            .any(|action| action == "flea tori draft image add draft-1 --image PATH...")
     );
 }
 
@@ -2552,7 +2552,7 @@ async fn post_attachment_conflict_preserves_revision_values_and_uploaded_image_i
     );
     assert_eq!(
         recovery.next_safe_actions,
-        ["flea draft show draft-1", "flea listing list"]
+        ["flea tori draft show draft-1", "flea tori listing list"]
     );
     assert!(recovery.destructive_actions.is_empty());
 }
@@ -2624,7 +2624,10 @@ async fn image_failure_recovery_uses_absolute_positions_and_lifecycle_states() {
             .iter()
             .all(|action| !action.contains("image add"))
     );
-    assert_eq!(recovery.destructive_actions, ["flea draft delete draft-1"]);
+    assert_eq!(
+        recovery.destructive_actions,
+        ["flea tori draft delete draft-1"]
+    );
 }
 
 #[tokio::test]
@@ -2767,8 +2770,8 @@ async fn uncertain_image_removal_reports_only_retained_images_as_safe_work() {
     assert_eq!(
         recovery.next_safe_actions,
         [
-            "flea draft show draft-1",
-            "flea draft image remove draft-1 IMAGE_ID..."
+            "flea tori draft show draft-1",
+            "flea tori draft image remove draft-1 IMAGE_ID..."
         ]
     );
 }
@@ -3324,7 +3327,7 @@ async fn stale_publish_revision_is_a_read_only_conflict() {
     assert_eq!(error.details.as_ref().unwrap()["safe_to_retry"], false);
     assert_eq!(
         error.details.as_ref().unwrap()["next_action"],
-        "flea draft show draft-1"
+        "flea tori draft show draft-1"
     );
     let recovery = error.recovery.unwrap();
     assert!(!recovery.upstream_transient);
@@ -3332,7 +3335,10 @@ async fn stale_publish_revision_is_a_read_only_conflict() {
     assert_eq!(recovery.failed_stage.as_deref(), Some("verify_revision"));
     assert_eq!(
         recovery.next_safe_actions,
-        ["flea draft show draft-1", "flea draft validate draft-1"]
+        [
+            "flea tori draft show draft-1",
+            "flea tori draft validate draft-1"
+        ]
     );
     assert!(
         transport
@@ -3594,7 +3600,7 @@ async fn publish_validation_rejects_missing_fields_and_missing_delivery() {
     );
     assert_eq!(
         recovery.next_safe_actions[0],
-        "flea draft update draft-1 --title VALUE"
+        "flea tori draft update draft-1 --title VALUE"
     );
 
     let no_delivery = draft(
@@ -3618,7 +3624,7 @@ async fn publish_validation_rejects_missing_fields_and_missing_delivery() {
     assert_eq!(error.details.unwrap()["missing"][0]["field"], "delivery");
     assert_eq!(
         error.recovery.unwrap().next_safe_actions[0],
-        "flea draft update draft-1 --delivery VALUE"
+        "flea tori draft update draft-1 --delivery VALUE"
     );
 }
 
@@ -3672,7 +3678,10 @@ async fn truncated_composer_options_are_local_unverifiable_validation() {
     assert!(!recovery.safe_to_retry);
     assert_eq!(recovery.failed_stage.as_deref(), Some("validate"));
     assert_eq!(recovery.publication, Some(RecoveryStatus::Unattempted));
-    assert_eq!(recovery.next_safe_actions[0], "flea draft show draft-1");
+    assert_eq!(
+        recovery.next_safe_actions[0],
+        "flea tori draft show draft-1"
+    );
 }
 
 #[tokio::test]
@@ -3694,7 +3703,7 @@ async fn publish_marks_transient_validation_evidence_reads_as_unverifiable() {
                 category_taxonomy("furniture/chairs", true),
             ],
             "fetch_delivery_options",
-            "flea draft show draft-1",
+            "flea tori draft show draft-1",
             vec!["fetch_draft", "fetch_category_taxonomy"],
         ),
         (
@@ -3704,7 +3713,7 @@ async fn publish_marks_transient_validation_evidence_reads_as_unverifiable() {
                 response(503, json!({ "message": "taxonomy unavailable" })),
             ],
             "fetch_category_taxonomy",
-            "flea category list",
+            "flea tori category list",
             vec!["fetch_draft", "fetch_delivery_options"],
         ),
     ] {
@@ -3969,9 +3978,12 @@ async fn publish_failures_report_each_completed_workflow_boundary() {
                 recovery.observation.state,
                 flea::domain::observation::ObservationState::TemporarilyUnavailable
             );
-            assert_eq!(recovery.next_safe_actions, ["flea listing show draft-1"]);
+            assert_eq!(
+                recovery.next_safe_actions,
+                ["flea tori listing show draft-1"]
+            );
         } else {
-            assert_eq!(recovery.next_safe_actions, ["flea draft show draft-1"]);
+            assert_eq!(recovery.next_safe_actions, ["flea tori draft show draft-1"]);
         }
     }
 }
@@ -4015,7 +4027,10 @@ async fn uncertain_publication_observes_before_recommending_any_continuation() {
         assert_eq!(recovery.publication, Some(RecoveryStatus::Indeterminate));
         assert_eq!(
             recovery.next_safe_actions,
-            ["flea draft show draft-1", "flea listing show draft-1"]
+            [
+                "flea tori draft show draft-1",
+                "flea tori listing show draft-1"
+            ]
         );
         assert!(recovery.destructive_actions.is_empty());
         if observation_available {
@@ -4220,7 +4235,10 @@ async fn publish_timeout_is_bounded_and_recoverable() {
     );
     assert_eq!(
         recovery.next_safe_actions,
-        ["flea draft show draft-1", "flea draft validate draft-1"]
+        [
+            "flea tori draft show draft-1",
+            "flea tori draft validate draft-1"
+        ]
     );
     assert_eq!(recovery.observation.status, ObservationStatus::Observed);
     assert_eq!(recovery.images[0].status, RecoveryStatus::Pending);
@@ -4780,8 +4798,8 @@ async fn category_mutation_errors_distinguish_taxonomy_and_composer_failures() {
         assert_eq!(
             recovery.next_safe_actions,
             [
-                format!("flea category search {requested}"),
-                "flea draft show 46000000".to_owned(),
+                format!("flea tori category search {requested}"),
+                "flea tori draft show 46000000".to_owned(),
             ]
         );
         assert_eq!(transport.requests().len(), 2);
@@ -4897,7 +4915,7 @@ async fn validate_rejects_removed_categories_with_an_exact_recovery_lookup() {
         .find(|issue| issue.field == "category")
         .unwrap();
     assert!(issue.reason.contains("absent from or inaccessible"));
-    assert_eq!(issue.command, "flea category search 258");
+    assert_eq!(issue.command, "flea tori category search 258");
 }
 
 #[tokio::test]

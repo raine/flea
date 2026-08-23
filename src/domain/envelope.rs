@@ -4,11 +4,14 @@ use serde_json::Value;
 use crate::{
     domain::observation::Observation,
     error::{AppError, ErrorBody},
+    marketplace::MarketplaceContext,
 };
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct Envelope<T = Value> {
     pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<MarketplaceContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -29,6 +32,7 @@ impl<T> Envelope<T> {
     pub fn success(data: T) -> Self {
         Self {
             ok: true,
+            context: None,
             data: Some(data),
             error: None,
             partial: None,
@@ -45,6 +49,7 @@ impl Envelope<Value> {
         let body = ErrorBody::from(&error);
         Self {
             ok: false,
+            context: None,
             data: None,
             error: Some(body),
             partial: error.partial.map(|partial| *partial),

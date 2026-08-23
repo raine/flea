@@ -230,8 +230,8 @@ pub(super) fn retry_field_action(draft_id: &str, fields: &[String]) -> String {
         _ => None,
     };
     single_flag.map_or_else(
-        || format!("flea draft update {draft_id} --input PATH_WITH_ONLY_ABSENT_FIELDS"),
-        |flag| format!("flea draft update {draft_id} {flag}"),
+        || format!("flea tori draft update {draft_id} --input PATH_WITH_ONLY_ABSENT_FIELDS"),
+        |flag| format!("flea tori draft update {draft_id} {flag}"),
     )
 }
 
@@ -248,10 +248,10 @@ pub(super) fn field_recovery(
 ) -> Recovery {
     let manual_inspection_required = force_inspection || !outcomes.indeterminate.is_empty();
     let next_safe_actions = if manual_inspection_required || outcomes.absent.is_empty() {
-        vec![format!("flea draft show {draft_id}")]
+        vec![format!("flea tori draft show {draft_id}")]
     } else {
         vec![
-            format!("flea draft show {draft_id}"),
+            format!("flea tori draft show {draft_id}"),
             retry_field_action(draft_id, &outcomes.absent),
         ]
     };
@@ -292,7 +292,7 @@ pub(super) fn schema_validation_issues(
                 field: input_field.to_owned(),
                 code: "absent_in_composer".to_owned(),
                 message: format!(
-                    "field is absent from this category's composer; inspect with `flea draft show {} --include-fields`",
+                    "field is absent from this category's composer; inspect with `flea tori draft show {} --include-fields`",
                     state.draft_id
                 ),
                 source: Some("listing_composer".to_owned()),
@@ -393,7 +393,7 @@ pub(super) fn schema_validation_issue(
                 )
             } else {
                 format!(
-                    "value is not present in the source-backed field options; inspect with `flea draft show {} --include-options {}`",
+                    "value is not present in the source-backed field options; inspect with `flea tori draft show {} --include-options {}`",
                     state.draft_id, field.key
                 )
             };

@@ -74,7 +74,7 @@ fn bare_invocation_uses_clap_help_on_stderr() {
 
     assert_eq!(output.status.code(), Some(2));
     assert!(out.is_empty());
-    assert!(err.contains("Manage Tori.fi listing workflows with Flea"));
+    assert!(err.contains("Manage marketplace workflows with Flea"));
     assert!(err.contains("Usage: flea [OPTIONS] <COMMAND>"));
     assert!(err.contains("Commands:"));
     assert_no_envelope_fields(&err);
@@ -97,18 +97,18 @@ fn top_level_help_flags_and_command_use_stdout() {
 #[test]
 fn nested_help_flags_and_commands_use_stdout() {
     for args in [
-        &["draft", "--help"][..],
-        &["draft", "-h"][..],
-        &["help", "draft"][..],
-        &["draft", "help"][..],
-        &["draft", "image", "--help"][..],
+        &["tori", "draft", "--help"][..],
+        &["tori", "draft", "-h"][..],
+        &["help", "tori", "draft"][..],
+        &["tori", "draft", "help"][..],
+        &["tori", "draft", "image", "--help"][..],
     ] {
         let output = invoke(args);
         let out = stdout(&output);
 
         assert_eq!(output.status.code(), Some(0), "args: {args:?}");
         assert!(stderr(&output).is_empty(), "args: {args:?}");
-        assert!(out.contains("Usage: flea draft"), "args: {args:?}");
+        assert!(out.contains("Usage: flea tori draft"), "args: {args:?}");
         assert_no_envelope_fields(&out);
     }
 }
@@ -116,47 +116,53 @@ fn nested_help_flags_and_commands_use_stdout() {
 #[test]
 fn help_tables_include_agent_oriented_summaries() {
     let top = stdout(&invoke(&["--help"]));
-    assert!(top.contains("auth          Manage browser authentication"));
-    assert!(top.contains("category      Discover Tori categories (authentication required)"));
-    assert!(top.contains("draft         Preview input and manage remote drafts"));
-    assert!(top.contains("item          Inspect public marketplace listings"));
-    assert!(top.contains("listing       Manage published listings"));
-    assert!(top.contains("saved-search  Manage saved searches and alerts"));
+    assert!(top.contains("capabilities  Show the marketplace capability matrix"));
+    assert!(top.contains("marketplaces  List configured marketplaces and portals"));
+    assert!(top.contains("tori          Manage Tori.fi"));
+    assert!(top.contains("vinted        Manage Vinted"));
     assert!(top.contains("skill         Print or install the coding-agent skill"));
 
-    let item = stdout(&invoke(&["item", "show", "--help"]));
-    assert!(item.contains("Usage: flea item show [OPTIONS] <LISTING_ID>"));
-    assert!(item.contains("Numeric marketplace listing ID returned by `flea search`"));
+    let tori = stdout(&invoke(&["tori", "--help"]));
+    assert!(tori.contains("auth          Manage browser authentication"));
+    assert!(tori.contains("category      Discover Tori categories (authentication required)"));
+    assert!(tori.contains("draft         Preview input and manage remote drafts"));
+    assert!(tori.contains("item          Inspect public Tori listings"));
+    assert!(tori.contains("listing       Manage published Tori listings"));
+    assert!(tori.contains("saved-search  Manage Tori saved searches and alerts"));
+
+    let item = stdout(&invoke(&["tori", "item", "show", "--help"]));
+    assert!(item.contains("Usage: flea tori item show [OPTIONS] <LISTING_ID>"));
+    assert!(item.contains("Numeric marketplace listing ID returned by `flea tori search`"));
     assert!(item.contains("--raw"));
 
-    let draft = stdout(&invoke(&["draft", "--help"]));
+    let draft = stdout(&invoke(&["tori", "draft", "--help"]));
     assert!(draft.contains("create    Create a remote draft"));
     assert!(draft.contains("preview   Preview and validate draft input locally"));
     assert!(draft.contains("image     Manage draft images"));
     assert!(draft.contains("validate  Validate publication readiness"));
     assert!(draft.contains("publish   Publish a remote draft"));
 
-    let create = stdout(&invoke(&["draft", "create", "--help"]));
+    let create = stdout(&invoke(&["tori", "draft", "create", "--help"]));
     assert!(create.contains("--from-listing <FROM_LISTING>"));
     assert!(create.contains("Authenticated seller listing ID to copy into a fresh draft"));
     assert!(create.contains("Public listings owned by another seller are not copyable"));
     assert!(create.contains("--input <PATH>"));
     assert!(create.contains("Read listing fields from a JSON object"));
 
-    let category_search = stdout(&invoke(&["category", "search", "--help"]));
+    let category_search = stdout(&invoke(&["tori", "category", "search", "--help"]));
     assert!(category_search.contains("canonical taxonomy_value"));
-    assert!(category_search.contains("`flea search --category`"));
-    assert!(category_search.contains("flea search --category 2.93.3215.8368"));
+    assert!(category_search.contains("`flea tori search --category`"));
+    assert!(category_search.contains("flea tori search --category 2.93.3215.8368"));
 
-    let search = stdout(&invoke(&["search", "--help"]));
+    let search = stdout(&invoke(&["tori", "search", "--help"]));
     assert!(search.contains("--area <PLACE,PLACE,...>"));
-    assert!(search.contains("Canonical taxonomy_value from `flea category search`"));
+    assert!(search.contains("Canonical taxonomy_value from `flea tori category search`"));
     assert!(search.contains("--explain <LIMIT>"));
     assert!(search.contains("at most LIMIT public item detail requests"));
     assert!(search.contains("Helsinki-area example:"));
     assert!(search.contains("--area Helsinki,Espoo,Vantaa"));
 
-    let auth = stdout(&invoke(&["auth", "--help"]));
+    let auth = stdout(&invoke(&["tori", "auth", "--help"]));
     assert!(auth.contains("login   Sign in through the browser"));
     assert!(auth.contains("status  Show authentication status"));
     assert!(auth.contains("logout  Clear authentication state"));
@@ -169,9 +175,9 @@ fn help_tables_include_agent_oriented_summaries() {
 #[test]
 fn category_help_explains_authentication_requirement() {
     for args in [
-        &["category", "--help"][..],
-        &["category", "search", "--help"][..],
-        &["category", "list", "--help"][..],
+        &["tori", "category", "--help"][..],
+        &["tori", "category", "search", "--help"][..],
+        &["tori", "category", "list", "--help"][..],
     ] {
         let output = invoke(args);
         let out = stdout(&output);
@@ -182,7 +188,7 @@ fn category_help_explains_authentication_requirement() {
             out.contains("Authentication is required."),
             "args: {args:?}"
         );
-        assert!(out.contains("`flea auth login`"), "args: {args:?}");
+        assert!(out.contains("`flea tori auth login`"), "args: {args:?}");
     }
 }
 
@@ -191,7 +197,7 @@ fn version_flags_use_clap_stdout_and_propagate_to_subcommands() {
     for (args, command_name) in [
         (&["--version"][..], "flea"),
         (&["-V"][..], "flea"),
-        (&["draft", "--version"][..], "flea-draft"),
+        (&["tori", "draft", "--version"][..], "flea-tori-draft"),
     ] {
         let output = invoke(args);
         let out = stdout(&output);
@@ -207,14 +213,13 @@ fn version_flags_use_clap_stdout_and_propagate_to_subcommands() {
 }
 
 #[test]
-fn invalid_parser_usage_uses_clap_stderr() {
+fn unknown_root_command_uses_a_structured_usage_error() {
     let output = invoke(&["unknown-command"]);
     let out = stdout(&output);
     let err = stderr(&output);
 
     assert_eq!(output.status.code(), Some(2));
-    assert!(out.is_empty());
-    assert!(err.contains("error: unrecognized subcommand 'unknown-command'"));
-    assert!(err.contains("Usage: flea [OPTIONS] <COMMAND>"));
-    assert_no_envelope_fields(&err);
+    assert!(err.is_empty());
+    assert!(out.contains("code: cli.invalid_usage"));
+    assert!(out.contains("command: \"unknown-command\""));
 }

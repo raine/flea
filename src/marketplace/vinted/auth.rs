@@ -3,25 +3,25 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use hmac::{Hmac, Mac};
 use reqwest::{Method, StatusCode, header::ACCEPT};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use sha2::{Digest, Sha256};
 use url::Url;
-use uuid::Uuid;
 
 use crate::{
+    api::oauth::{SecretString, pkce_challenge, random_secret, random_uuid_secret, states_equal},
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
+    marketplace::{PortalId, VINTED_FI_BINDING},
+    storage::credentials::VintedCredentialRecord,
 };
 
-const PORTAL_BASE_URL: &str = "https://www.vinted.fi";
-const CLIENT_ID: &str = "android";
+const PORTAL_BASE_URL: &str = VINTED_FI_BINDING.host;
+const CLIENT_ID: &str = VINTED_FI_BINDING.client_id;
 const SCOPE: &str = "user";
-const CALLBACK_SCHEME: &str = "vintedfr";
-const REDIRECT_URI: &str = "vintedfr://auth";
-const LOCALE: &str = "fi";
-const ISO_LOCALE: &str = "fi-FI";
+const CALLBACK_SCHEME: &str = VINTED_FI_BINDING.callback_scheme;
+const REDIRECT_URI: &str = VINTED_FI_BINDING.redirect_uri;
+const LOCALE: &str = VINTED_FI_BINDING.locale;
+const ISO_LOCALE: &str = VINTED_FI_BINDING.iso_locale;
 const APP_VERSION: &str = "26.32.0";
 const USER_AGENT: &str = "vinted-android / fr.vinted v26.32.0 (263200 B; 15; Google; Pixel 6)";
 const FLOW_LIFETIME: Duration = Duration::from_secs(10 * 60);
@@ -29,25 +29,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_CALLBACK_URL_BYTES: usize = 8 * 1024;
 const MAX_AUTHORIZATION_CODE_BYTES: usize = 4 * 1024;
-
-#[derive(Clone)]
-struct SecretString(String);
-
-impl SecretString {
-    fn new(value: String) -> Self {
-        Self(value)
-    }
-
-    fn expose(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for SecretString {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("<redacted>")
-    }
-}
 
 pub struct VintedOAuthFlow {
     expires_at_unix: u64,
@@ -93,8 +74,23 @@ pub struct VintedLoginResult {
     pub user_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub login: Option<String>,
-    pub token_expires_in_seconds: Option<u64>,
+    pub token_expires_in_seconds: u64,
     pub credential_storage: &'static str,
+}
+
+pub struct VintedAuthCompletion {
+    pub credentials: VintedCredentialRecord,
+    pub output: VintedLoginResult,
+}
+
+impl std::fmt::Debug for VintedAuthCompletion {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VintedAuthCompletion")
+            .field("credentials", &self.credentials)
+            .field("output", &self.output)
+            .finish()
+    }
 }
 
 #[derive(Clone)]
@@ -156,7 +152,7 @@ impl VintedAuthentication {
         flow: &VintedOAuthFlow,
         callback_url: &str,
         now_unix: u64,
-    ) -> Result<VintedLoginResult, AppError> {
+    ) -> Result<VintedAuthCompletion, AppError> {
         if now_unix >= flow.expires_at_unix {
             return Err(restart_error(
                 "vinted_auth.flow_expired",
@@ -166,14 +162,37 @@ impl VintedAuthentication {
         let code = validate_callback(callback_url, flow.state.expose())?;
         let tokens = self.exchange_code(flow, code.expose()).await?;
         let account = self.current_user(flow, &tokens).await?;
-        Ok(VintedLoginResult {
+        let expires_in = tokens
+            .expires_in
+            .filter(|expires_in| *expires_in > 0)
+            .ok_or_else(|| unexpected_response("token_exchange"))?;
+        let access_expires_at_unix = now_unix.checked_add(expires_in).ok_or_else(clock_error)?;
+        let output = VintedLoginResult {
             authenticated: true,
             marketplace: "vinted",
             portal: "fi",
+            user_id: account.id.clone(),
+            login: account.login.clone(),
+            token_expires_in_seconds: expires_in,
+            credential_storage: "persisted",
+        };
+        let credentials = VintedCredentialRecord {
+            portal: PortalId::Fi,
             user_id: account.id,
             login: account.login,
-            token_expires_in_seconds: tokens.expires_in,
-            credential_storage: "memory_only",
+            access_token: tokens.access_token.expose().to_owned(),
+            refresh_token: tokens.refresh_token.expose().to_owned(),
+            access_expires_at_unix,
+            device_uuid: flow.device_uuid.expose().to_owned(),
+            anonymous_id: flow.anonymous_id.expose().to_owned(),
+            user_device_token: tokens
+                .user_device_token
+                .as_ref()
+                .map(|token| token.expose().to_owned()),
+        };
+        Ok(VintedAuthCompletion {
+            credentials,
+            output,
         })
     }
 
@@ -186,7 +205,8 @@ impl VintedAuthentication {
             .native_request(
                 Method::POST,
                 format!("{}/oauth/token", self.portal_base_url),
-                flow,
+                flow.device_uuid.expose(),
+                flow.anonymous_id.expose(),
             )?
             .header("X-V-Udt", "")
             .form(&[
@@ -229,21 +249,50 @@ impl VintedAuthentication {
         flow: &VintedOAuthFlow,
         tokens: &VintedTokens,
     ) -> Result<VintedAccount, AppError> {
+        self.request_current_user(
+            flow.device_uuid.expose(),
+            flow.anonymous_id.expose(),
+            tokens.access_token.expose(),
+            tokens.user_device_token.as_ref().map(SecretString::expose),
+        )
+        .await
+    }
+
+    pub async fn validate_credentials(
+        &self,
+        credentials: &VintedCredentialRecord,
+    ) -> Result<(String, Option<String>), AppError> {
+        let account = self
+            .request_current_user(
+                &credentials.device_uuid,
+                &credentials.anonymous_id,
+                &credentials.access_token,
+                credentials.user_device_token.as_deref(),
+            )
+            .await?;
+        if account.id != credentials.user_id {
+            return Err(unexpected_response("current_user"));
+        }
+        Ok((account.id, account.login))
+    }
+
+    async fn request_current_user(
+        &self,
+        device_uuid: &str,
+        anonymous_id: &str,
+        access_token: &str,
+        user_device_token: Option<&str>,
+    ) -> Result<VintedAccount, AppError> {
         let mut request = self
             .native_request(
                 Method::GET,
                 format!("{}/api/v2/users/current", self.portal_base_url),
-                flow,
+                device_uuid,
+                anonymous_id,
             )?
-            .bearer_auth(tokens.access_token.expose());
-        request = request.header(
-            "X-V-Udt",
-            tokens
-                .user_device_token
-                .as_ref()
-                .map_or("", SecretString::expose),
-        );
-        let jwt = jwt_request_context(tokens.access_token.expose());
+            .bearer_auth(access_token)
+            .header("X-V-Udt", user_device_token.unwrap_or(""));
+        let jwt = jwt_request_context(access_token);
         if let Some(user_id) = jwt.user_id {
             request = request.header("X-V-Uid", user_id.expose());
         }
@@ -270,7 +319,8 @@ impl VintedAuthentication {
         &self,
         method: Method,
         url: String,
-        flow: &VintedOAuthFlow,
+        device_uuid: &str,
+        anonymous_id: &str,
     ) -> Result<reqwest::RequestBuilder, AppError> {
         Ok(self
             .client
@@ -279,15 +329,15 @@ impl VintedAuthentication {
             .header(ACCEPT, "application/json")
             .header("User-Agent", USER_AGENT)
             .header("X-Platform", "android")
-            .header("X-Portal", "fr")
+            .header("X-Portal", VINTED_FI_BINDING.portal_header)
             .header("X-App-Version", APP_VERSION)
             .header("X-OS-Version", "15")
             .header("X-Device-Model", "Google Pixel 6")
             .header("X-Screen-Width", "1080")
             .header("X-Screen-Height", "2400")
             .header("X-Local-Time", unix_time_millis()?.to_string())
-            .header("X-Anon-Id", flow.anonymous_id.expose())
-            .header("X-Device-UUID", flow.device_uuid.expose())
+            .header("X-Anon-Id", anonymous_id)
+            .header("X-Device-UUID", device_uuid)
             .header("Locale", ISO_LOCALE)
             .header("Accept-Language", LOCALE))
     }
@@ -362,23 +412,6 @@ fn generate_pkce_verifier() -> SecretString {
     random_secret(48)
 }
 
-fn random_secret(bytes: usize) -> SecretString {
-    let mut random = Vec::with_capacity(bytes);
-    while random.len() < bytes {
-        random.extend_from_slice(Uuid::new_v4().as_bytes());
-    }
-    random.truncate(bytes);
-    SecretString::new(URL_SAFE_NO_PAD.encode(random))
-}
-
-fn random_uuid_secret() -> SecretString {
-    SecretString::new(Uuid::new_v4().to_string())
-}
-
-fn pkce_challenge(verifier: &str) -> String {
-    URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
-}
-
 fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretString, AppError> {
     if callback_url.len() > MAX_CALLBACK_URL_BYTES {
         return Err(invalid_callback());
@@ -407,10 +440,9 @@ fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretS
             _ => return Err(invalid_callback()),
         }
     }
-    if !state
-        .as_deref()
-        .is_some_and(|actual| states_equal(actual, expected_state))
-    {
+    if !state.as_deref().is_some_and(|actual| {
+        states_equal(actual, expected_state, b"vinted-oauth-state-comparison")
+    }) {
         return Err(restart_error(
             "vinted_auth.state_mismatch",
             "the Vinted callback state is invalid",
@@ -430,18 +462,6 @@ fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretS
         })
         .ok_or_else(invalid_callback)?;
     Ok(SecretString::new(code))
-}
-
-fn states_equal(actual: &str, expected: &str) -> bool {
-    let mut expected_mac = Hmac::<Sha256>::new_from_slice(b"vinted-oauth-state-comparison")
-        .expect("the static comparison key has a valid length");
-    expected_mac.update(expected.as_bytes());
-    let expected_tag = expected_mac.finalize().into_bytes();
-
-    let mut actual_mac = Hmac::<Sha256>::new_from_slice(b"vinted-oauth-state-comparison")
-        .expect("the static comparison key has a valid length");
-    actual_mac.update(actual.as_bytes());
-    actual_mac.verify_slice(&expected_tag).is_ok()
 }
 
 fn jwt_request_context(access_token: &str) -> JwtRequestContext {
@@ -590,7 +610,7 @@ fn restart_error(code: &str, message: &str) -> AppError {
 
 fn restart_action() -> NextAction {
     NextAction {
-        command: "flea auth vinted-login-poc".to_owned(),
+        command: crate::cli::invocation::vinted_fi("auth login"),
     }
 }
 
@@ -776,10 +796,13 @@ mod tests {
         let result = auth.complete(&flow, &callback, 1_001).await.unwrap();
         worker.join().unwrap();
 
-        assert_eq!(result.user_id, "42");
-        assert_eq!(result.login.as_deref(), Some("fixture-user"));
-        assert_eq!(result.token_expires_in_seconds, Some(3600));
-        assert_eq!(result.credential_storage, "memory_only");
+        assert_eq!(result.output.user_id, "42");
+        assert_eq!(result.output.login.as_deref(), Some("fixture-user"));
+        assert_eq!(result.output.token_expires_in_seconds, 3600);
+        assert_eq!(result.output.credential_storage, "persisted");
+        assert_eq!(result.credentials.user_id, "42");
+        assert_eq!(result.credentials.access_expires_at_unix, 4_601);
+        assert_eq!(result.credentials.refresh_token, "refresh-secret");
         let requests = requests.lock().unwrap();
         assert!(requests[0].starts_with("POST /oauth/token HTTP/1.1"));
         assert!(requests[0].contains("grant_type=authorization_code"));
@@ -816,6 +839,9 @@ mod tests {
 
         assert!(error.upstream_transient);
         assert!(!error.safe_to_retry);
-        assert_eq!(error.next_actions[0].command, "flea auth vinted-login-poc");
+        assert_eq!(
+            error.next_actions[0].command,
+            "flea vinted --portal fi auth login"
+        );
     }
 }

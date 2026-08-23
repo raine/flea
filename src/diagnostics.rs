@@ -192,7 +192,7 @@ fn initialize_with_context(
 }
 
 fn state_dir() -> io::Result<PathBuf> {
-    StatePaths::discover().map(|paths| paths.root())
+    StatePaths::discover(crate::marketplace::MarketplaceContext::TORI_FI).map(|paths| paths.root())
 }
 
 fn create_private_dir(path: &Path) -> io::Result<()> {
@@ -814,13 +814,33 @@ pub fn command_name(args: &[OsString]) -> String {
         .skip(1)
         .filter_map(|argument| argument.to_str())
         .collect();
+    let marketplace = arguments
+        .iter()
+        .copied()
+        .find(|argument| matches!(*argument, "tori" | "vinted"));
     let Some(root_index) = arguments.iter().position(|argument| {
         matches!(
             *argument,
             "auth" | "category" | "draft" | "item" | "listing" | "search" | "location"
         )
     }) else {
-        return "unknown".to_owned();
+        let Some(command) = arguments
+            .iter()
+            .copied()
+            .find(|argument| matches!(*argument, "capabilities" | "marketplaces" | "skill"))
+        else {
+            return "unknown".to_owned();
+        };
+        return match marketplace {
+            Some(marketplace) if command == "capabilities" => {
+                format!("{marketplace} {command}")
+            }
+            _ => command.to_owned(),
+        };
+    };
+    let qualify = |command: String| match marketplace {
+        Some(marketplace) => format!("{marketplace} {command}"),
+        None => command,
     };
     let root = arguments[root_index];
     let leaves: &[&str] = match root {
@@ -838,19 +858,19 @@ pub fn command_name(args: &[OsString]) -> String {
         .copied()
         .find(|argument| leaves.contains(argument));
     let Some(leaf) = leaf else {
-        return root.to_owned();
+        return qualify(root.to_owned());
     };
     if root == "draft" && leaf == "image" {
         let operation = arguments[root_index + 1..]
             .iter()
             .copied()
             .find(|argument| matches!(*argument, "add" | "remove"));
-        return operation.map_or_else(
+        return qualify(operation.map_or_else(
             || "draft image".to_owned(),
             |operation| format!("draft image {operation}"),
-        );
+        ));
     }
-    format!("{root} {leaf}")
+    qualify(format!("{root} {leaf}"))
 }
 
 #[cfg(test)]
@@ -1041,31 +1061,43 @@ mod tests {
         for command in ["login", "status", "logout"] {
             let args = [
                 OsString::from("flea"),
+                OsString::from("vinted"),
                 OsString::from("auth"),
                 OsString::from(command),
             ];
-            assert_eq!(command_name(&args), format!("auth {command}"));
+            assert_eq!(command_name(&args), format!("vinted auth {command}"));
         }
 
         let item = [
             OsString::from("flea"),
+            OsString::from("tori"),
             OsString::from("item"),
             OsString::from("show"),
             OsString::from("42346404"),
         ];
-        assert_eq!(command_name(&item), "item show");
+        assert_eq!(command_name(&item), "tori item show");
+
+        let capabilities = [
+            OsString::from("flea"),
+            OsString::from("vinted"),
+            OsString::from("--portal"),
+            OsString::from("fi"),
+            OsString::from("capabilities"),
+        ];
+        assert_eq!(command_name(&capabilities), "vinted capabilities");
     }
 
     #[test]
     fn search_command_name_excludes_query_and_coordinates() {
         let args = [
             OsString::from("flea"),
+            OsString::from("tori"),
             OsString::from("search"),
             OsString::from("private query"),
             OsString::from("--latitude"),
             OsString::from("60.1699"),
         ];
-        assert_eq!(command_name(&args), "search");
+        assert_eq!(command_name(&args), "tori search");
     }
 
     #[test]

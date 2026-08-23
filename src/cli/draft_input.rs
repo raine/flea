@@ -177,7 +177,7 @@ pub fn preview(
         ],
         "unverifiable_requirements": unverifiable,
         "create": {
-            "command": "flea draft create --input listing.json",
+            "command": "flea tori draft create --input listing.json",
             "input_file_name": "listing.json",
             "input_byte_length": create_input_bytes,
             "input": create_input,
@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(output["remote_verification"]["status"], "not_requested");
         assert_eq!(
             output["create"]["command"],
-            "flea draft create --input listing.json"
+            "flea tori draft create --input listing.json"
         );
         assert!(
             !output

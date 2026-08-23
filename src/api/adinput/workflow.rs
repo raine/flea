@@ -211,7 +211,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 );
                 recovery.refresh_field_summary();
                 set_recovery_images(recovery, images, false);
-                let show = format!("flea draft show {draft_id}");
+                let show = format!("flea tori draft show {draft_id}");
                 let mut actions = vec![show.clone()];
                 if !changed {
                     actions.extend(
@@ -225,7 +225,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                         image.operation == ImageRecoveryOperation::Remove
                             && image.status == RecoveryStatus::Absent
                     }) {
-                        actions.push(format!("flea draft image remove {draft_id} IMAGE_ID..."));
+                        actions.push(format!(
+                            "flea tori draft image remove {draft_id} IMAGE_ID..."
+                        ));
                     }
                     if failed_stage == "wait_for_images"
                         && recovery.images.iter().any(|image| {
@@ -233,7 +235,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                                 && image.status == RecoveryStatus::Pending
                         })
                     {
-                        actions.push(format!("flea draft validate {draft_id}"));
+                        actions.push(format!("flea tori draft validate {draft_id}"));
                     }
                 } else {
                     recovery.destructive_actions.clear();
@@ -249,7 +251,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     RecoveryObservation::from_error(&observation_error, "draft_detail");
                 recovery.fresh_state = None;
                 recovery.destructive_actions.clear();
-                recovery.next_safe_actions = vec![format!("flea draft show {draft_id}")];
+                recovery.next_safe_actions = vec![format!("flea tori draft show {draft_id}")];
                 recovery.refresh_field_summary();
                 set_recovery_images(recovery, images, true);
             }
@@ -261,13 +263,13 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     recovery.listing_id = Some(draft_id.to_owned());
                     recovery.package_choice = Some(RecoveryStatus::Persisted);
                     recovery.publication = Some(RecoveryStatus::Persisted);
-                    recovery.next_safe_actions = vec![format!("flea listing show {draft_id}")];
+                    recovery.next_safe_actions = vec![format!("flea tori listing show {draft_id}")];
                 }
                 Err(listing_error) => {
                     recovery.observation.error_code = Some(listing_error.code);
                     recovery.next_safe_actions = vec![
-                        format!("flea draft show {draft_id}"),
-                        format!("flea listing show {draft_id}"),
+                        format!("flea tori draft show {draft_id}"),
+                        format!("flea tori listing show {draft_id}"),
                     ];
                 }
             }
@@ -293,8 +295,8 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             recovery.safe_to_retry = false;
             recovery.destructive_actions.clear();
             recovery.next_safe_actions = vec![
-                format!("flea draft show {}", draft.draft_id),
-                "flea listing list".to_owned(),
+                format!("flea tori draft show {}", draft.draft_id),
+                "flea tori listing list".to_owned(),
             ];
             set_recovery_images(recovery, intent, false);
         }
@@ -367,7 +369,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         }
         recovery.refresh_field_summary();
 
-        let show = format!("flea draft show {draft_id}");
+        let show = format!("flea tori draft show {draft_id}");
         let mut actions = vec![show];
         let mut resumable_fields = recovery.absent_fields.clone();
         resumable_fields.extend(recovery.unattempted_fields.clone());
@@ -378,7 +380,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 retry_field_action(draft_id, &resumable_fields)
             } else {
                 format!(
-                    "flea draft update {draft_id} --input PATH_WITH_ABSENT_AND_UNATTEMPTED_FIELDS"
+                    "flea tori draft update {draft_id} --input PATH_WITH_ABSENT_AND_UNATTEMPTED_FIELDS"
                 )
             };
             actions.push(action);
@@ -387,7 +389,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             image.operation == ImageRecoveryOperation::Add
                 && image.status == RecoveryStatus::Unattempted
         }) {
-            actions.push(format!("flea draft image add {draft_id} --image PATH..."));
+            actions.push(format!(
+                "flea tori draft image add {draft_id} --image PATH..."
+            ));
         }
         actions.dedup();
         recovery.next_safe_actions = actions;
@@ -487,8 +491,8 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 _ => "QUERY".to_owned(),
             };
             recovery.next_safe_actions = vec![
-                format!("flea category search {category}"),
-                format!("flea draft show {}", draft.draft_id),
+                format!("flea tori category search {category}"),
+                format!("flea tori draft show {}", draft.draft_id),
             ];
         }
         WorkflowError {
@@ -550,7 +554,8 @@ impl<A: AdInputApi> DraftWorkflow<A> {
         );
         if code == "draft.conflict" {
             recovery.observation.status = ObservationStatus::ChangedByAnotherClient;
-            recovery.next_safe_actions = vec![format!("flea draft show {}", draft_before.draft_id)];
+            recovery.next_safe_actions =
+                vec![format!("flea tori draft show {}", draft_before.draft_id)];
             recovery.destructive_actions.clear();
         }
         WorkflowError {
@@ -797,7 +802,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     recovery.absent_fields.extend(mutation.fields.clone());
                 }
                 recovery.next_safe_actions = vec![
-                    format!("flea draft show {}", draft.draft_id),
+                    format!("flea tori draft show {}", draft.draft_id),
                     retry_field_action(&draft.draft_id, &recovery.absent_fields),
                 ];
             } else if error.code == "mutation.uncertain" {
@@ -816,10 +821,10 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 recovery.manual_inspection_required = !recovery.indeterminate_fields.is_empty();
                 if recovery.manual_inspection_required || recovery.absent_fields.is_empty() {
                     recovery.next_safe_actions =
-                        vec![format!("flea draft show {}", draft.draft_id)];
+                        vec![format!("flea tori draft show {}", draft.draft_id)];
                 } else {
                     recovery.next_safe_actions = vec![
-                        format!("flea draft show {}", draft.draft_id),
+                        format!("flea tori draft show {}", draft.draft_id),
                         retry_field_action(&draft.draft_id, &recovery.absent_fields),
                     ];
                 }
@@ -1136,7 +1141,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                                 recovery.absent_fields = vec!["delivery".to_owned()];
                                 recovery.delivery = Some(RecoveryStatus::Absent);
                                 recovery.next_safe_actions = vec![
-                                    format!("flea draft show {draft_id}"),
+                                    format!("flea tori draft show {draft_id}"),
                                     retry_field_action(&draft_id, &recovery.absent_fields),
                                 ];
                             }
@@ -1206,7 +1211,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 "requested_values": [selected],
                 "observed_values": observed.state.selected.clone(),
                 "allowed_values": allowed_delivery_values(&observed.state),
-                "recovery_guidance": format!("Inspect the draft with `flea draft show {draft_id}`; do not repeat publication")
+                "recovery_guidance": format!("Inspect the draft with `flea tori draft show {draft_id}`; do not repeat publication")
             })));
             return Err(WorkflowError::for_draft(&draft_id, completed, error, false));
         }
@@ -1489,7 +1494,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                         "delivery",
                         "fetch_delivery_options",
                         &error,
-                        format!("flea draft show {draft_id}"),
+                        format!("flea tori draft show {draft_id}"),
                     ));
                     false
                 }
@@ -1499,7 +1504,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     "delivery",
                     "fetch_delivery_options",
                     &error,
-                    format!("flea draft show {draft_id}"),
+                    format!("flea tori draft show {draft_id}"),
                 ));
                 false
             }
@@ -1511,7 +1516,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     "category",
                     "fetch_category_taxonomy",
                     &error,
-                    "flea category search QUERY".to_owned(),
+                    "flea tori category search QUERY".to_owned(),
                 ));
                 None
             }
@@ -1544,7 +1549,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                         "delivery",
                         "fetch_delivery_options",
                         &error,
-                        format!("flea draft show {draft_id}"),
+                        format!("flea tori draft show {draft_id}"),
                     ));
                     false
                 }
@@ -1554,7 +1559,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     "delivery",
                     "fetch_delivery_options",
                     &error,
-                    format!("flea draft show {draft_id}"),
+                    format!("flea tori draft show {draft_id}"),
                 ));
                 false
             }
@@ -1566,7 +1571,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     "category",
                     "fetch_category_taxonomy",
                     &error,
-                    "flea category list".to_owned(),
+                    "flea tori category list".to_owned(),
                 ));
                 None
             }
@@ -1917,7 +1922,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             recovery.destructive_actions.clear();
             set_recovery_images(recovery, publication_images, false);
             recovery.next_safe_actions =
-                vec![format!("flea listing show {}", publication.listing_id)];
+                vec![format!("flea tori listing show {}", publication.listing_id)];
         }
         workflow.details = Some(json!({
             "listing_id": publication.listing_id,
@@ -1979,7 +1984,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     "delivery",
                     "fetch_delivery_options",
                     &error,
-                    format!("flea draft show {draft_id}"),
+                    format!("flea tori draft show {draft_id}"),
                 ));
                 None
             }
@@ -1995,7 +2000,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                         "delivery",
                         "fetch_delivery_options",
                         &error,
-                        format!("flea draft show {draft_id}"),
+                        format!("flea tori draft show {draft_id}"),
                     ));
                     false
                 }
@@ -2012,7 +2017,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     "category",
                     "fetch_category_taxonomy",
                     &error,
-                    "flea category list".to_owned(),
+                    "flea tori category list".to_owned(),
                 ));
                 None
             }
@@ -2189,7 +2194,7 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 "requested_values": [delivery],
                 "observed_values": observed_delivery.state.selected.clone(),
                 "allowed_values": allowed_delivery_values(&observed_delivery.state),
-                "recovery_guidance": format!("Inspect the draft with `flea draft show {draft_id}`; do not repeat publication")
+                "recovery_guidance": format!("Inspect the draft with `flea tori draft show {draft_id}`; do not repeat publication")
             })));
             let workflow = WorkflowError::for_draft(draft_id, &completed, error, false);
             return Err(self
@@ -2427,8 +2432,8 @@ pub(super) fn image_processing_timeout(
         if observation_is_current {
             recovery.observe(state, ObservationStatus::Observed);
             recovery.next_safe_actions = vec![
-                format!("flea draft show {}", state.draft_id),
-                format!("flea draft validate {}", state.draft_id),
+                format!("flea tori draft show {}", state.draft_id),
+                format!("flea tori draft validate {}", state.draft_id),
             ];
         } else {
             recovery.observed_etag =
@@ -2446,7 +2451,7 @@ pub(super) fn image_processing_timeout(
             );
             recovery.fresh_state = Some(state.clone());
             recovery.destructive_actions.clear();
-            recovery.next_safe_actions = vec![format!("flea draft show {}", state.draft_id)];
+            recovery.next_safe_actions = vec![format!("flea tori draft show {}", state.draft_id)];
         }
         set_recovery_images(recovery, &observed_image_intent(state), false);
     }

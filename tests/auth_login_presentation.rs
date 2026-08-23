@@ -11,7 +11,7 @@ impl CommandRuntime for AuthLoginRuntime {
 
 #[test]
 fn default_auth_login_reports_human_success() {
-    let result = flea::run_with_runtime(["flea", "auth", "login"], &AuthLoginRuntime);
+    let result = flea::run_with_runtime(["flea", "tori", "auth", "login"], &AuthLoginRuntime);
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.presentation, Presentation::PlainStdout);
@@ -21,7 +21,7 @@ fn default_auth_login_reports_human_success() {
 #[test]
 fn explicit_json_auth_login_keeps_the_structured_envelope() {
     let result = flea::run_with_runtime(
-        ["flea", "auth", "login", "--format", "json"],
+        ["flea", "tori", "auth", "login", "--format", "json"],
         &AuthLoginRuntime,
     );
 

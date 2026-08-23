@@ -639,7 +639,7 @@ impl<'a> Listings<'a> {
                         error
                             .next_actions
                             .push(crate::domain::envelope::NextAction {
-                                command: format!("flea listing show {listing_id}"),
+                                command: format!("flea tori listing show {listing_id}"),
                             });
                         Err(error)
                     }
@@ -751,7 +751,7 @@ impl<'a> Listings<'a> {
                 error
                     .next_actions
                     .push(crate::domain::envelope::NextAction {
-                        command: format!("flea listing show {listing_id}"),
+                        command: format!("flea tori listing show {listing_id}"),
                     });
                 Err(error)
             }
@@ -1514,9 +1514,9 @@ fn listing_error(
             .map(|observation| observation.state)
         {
             Some(crate::domain::observation::ObservationState::TemporarilyUnavailable) => {
-                format!("flea listing show {listing_id}")
+                format!("flea tori listing show {listing_id}")
             }
-            _ => "flea listing list".to_owned(),
+            _ => "flea tori listing list".to_owned(),
         };
         app_error
             .next_actions
@@ -1561,7 +1561,7 @@ fn listing_mutation_error(error: ListingsApiError, listing_id: &str, operation: 
             app_error
                 .next_actions
                 .push(crate::domain::envelope::NextAction {
-                    command: format!("flea listing show {listing_id}"),
+                    command: format!("flea tori listing show {listing_id}"),
                 });
         }
         return app_error;
@@ -1579,7 +1579,7 @@ fn listing_mutation_error(error: ListingsApiError, listing_id: &str, operation: 
     app_error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: format!("flea listing show {listing_id}"),
+            command: format!("flea tori listing show {listing_id}"),
         });
     app_error
 }

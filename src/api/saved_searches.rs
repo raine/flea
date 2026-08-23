@@ -565,12 +565,12 @@ fn api_error(error: SavedSearchApiError, id: Option<&str>, read: bool) -> AppErr
     let mut result = base_error(&error);
     if matches!(error, SavedSearchApiError::Authentication) {
         result.next_actions.push(NextAction {
-            command: "flea auth login".to_owned(),
+            command: crate::cli::invocation::tori("auth login"),
         });
     }
     if let Some(id) = id {
         result.next_actions.push(NextAction {
-            command: format!("flea saved-search show {id}"),
+            command: format!("flea tori saved-search show {id}"),
         });
     }
     if read {
@@ -601,8 +601,8 @@ fn mutation_error(
         });
     result.next_actions.push(NextAction {
         command: id.map_or_else(
-            || "flea saved-search list".to_owned(),
-            |id| format!("flea saved-search show {id}"),
+            || "flea tori saved-search list".to_owned(),
+            |id| format!("flea tori saved-search show {id}"),
         ),
     });
     result

@@ -1,7 +1,8 @@
 # flea
 
-`flea` lets coding agents search Tori.fi and create, publish, and manage
-listings from the command line.
+`flea` gives coding agents explicit command trees for Tori.fi and Vinted.
+Tori supports listing workflows, while Vinted supports persisted browser
+login, status validation, and logout.
 
 ## Why flea?
 
@@ -17,8 +18,9 @@ focused commands and structured results for the complete listing workflow:
 - Recover safely when a network request fails partway through an operation
 - Install a bundled skill that teaches agents how to use Flea
 
-The bundled skill and `flea <command> --help` provide the current usage
-guidance.
+The bundled skill and `flea <marketplace> <command> --help` provide the
+current usage guidance. Run `flea capabilities` for the offline capability
+matrix and `flea marketplaces` for available portal bindings.
 
 ## Installation
 
@@ -87,7 +89,16 @@ state.
 
 ## Capabilities
 
-Public operations require no account authentication:
+Every marketplace command names its marketplace explicitly:
+
+```sh
+flea tori auth status
+flea vinted --portal fi auth status
+flea tori capabilities
+flea vinted --portal fi capabilities
+```
+
+Tori public operations require no account authentication:
 
 - Search listings with structured filters, facets, locations, sorting, and
   bounded pagination
@@ -109,13 +120,13 @@ Authenticated operations cover:
 Run command help for current syntax, constraints, and examples:
 
 ```sh
-flea search --help
-flea favorite --help
-flea saved-search --help
-flea saved-search create --help
-flea draft --help
-flea draft create --help
-flea listing update --help
+flea tori search --help
+flea tori favorite --help
+flea tori saved-search --help
+flea tori saved-search create --help
+flea tori draft --help
+flea tori draft create --help
+flea tori listing update --help
 ```
 
 ## Structured output
@@ -124,6 +135,9 @@ Flea emits TOON by default to keep agent context compact:
 
 ```text
 ok: true
+context:
+  marketplace: tori
+  portal: fi
 data:
   query: tuoli
   results[1]:
@@ -135,18 +149,19 @@ data:
       location: "Helsinki, Uusimaa"
       url: "https://www.tori.fi/recommerce/forsale/item/42346404"
 next_actions[1]{command}:
-  "flea search 'tuoli' --page 2 --limit 20"
+  "flea tori search 'tuoli' --page 2 --limit 20"
 ```
 
 Use JSON when another tool requires it:
 
 ```sh
-flea --format json search "tuoli"
+flea --format json tori search "tuoli"
 ```
 
 Results use one envelope with these fields when applicable:
 
 - `ok`
+- `context`
 - `data`
 - `error`
 - `partial`
@@ -222,4 +237,4 @@ cargo run -- --help
 Flea is available under the [MIT License](LICENSE).
 
 Flea is an independent, unofficial tool. It is not affiliated with or endorsed
-by Tori.fi.
+by Tori.fi or Vinted.

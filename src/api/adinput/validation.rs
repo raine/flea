@@ -131,7 +131,7 @@ fn validate_publication_core(
             "delivery",
             "delivery configuration could not be verified",
             "delivery_composer",
-            format!("flea draft show {}", state.draft_id),
+            format!("flea tori draft show {}", state.draft_id),
         ));
     } else {
         match state.delivery.as_ref() {
@@ -152,13 +152,13 @@ fn validate_publication_core(
                 "delivery",
                 "the selected delivery value is unavailable or ambiguous",
                 "delivery_composer",
-                format!("flea draft show {}", state.draft_id),
+                format!("flea tori draft show {}", state.draft_id),
             )),
             None => report.unverifiable.push(publication_issue(
                 "delivery",
                 "delivery configuration could not be verified",
                 "delivery_composer",
-                format!("flea draft show {}", state.draft_id),
+                format!("flea tori draft show {}", state.draft_id),
             )),
         }
     }
@@ -177,14 +177,14 @@ fn validate_publication_category(
                 "category",
                 "a category is required for publication",
                 "publication_invariant",
-                format!("flea draft update {} --category VALUE", state.draft_id),
+                format!("flea tori draft update {} --category VALUE", state.draft_id),
             ));
         } else {
             report.invalid.push(publication_issue(
                 "category",
                 "the category must be a non-empty machine value",
                 "publication_invariant",
-                format!("flea draft update {} --category VALUE", state.draft_id),
+                format!("flea tori draft update {} --category VALUE", state.draft_id),
             ));
         }
         return;
@@ -241,19 +241,19 @@ fn validate_publication_category(
             "category",
             "category existence and selectability could not be verified",
             "category_taxonomy",
-            "flea category list".to_owned(),
+            "flea tori category list".to_owned(),
         )),
         (true, None) => report.invalid.push(publication_issue(
             "category",
             "the selected category is absent from or inaccessible in the current taxonomy",
             "category_taxonomy",
-            format!("flea category search {category_id}"),
+            format!("flea tori category search {category_id}"),
         )),
         (true, Some(category)) if !category.selectable => report.invalid.push(publication_issue(
             "category",
             "the selected category cannot contain listings",
             "category_taxonomy",
-            format!("flea category search {category_id}"),
+            format!("flea tori category search {category_id}"),
         )),
         _ => {}
     }
@@ -264,14 +264,14 @@ fn validate_publication_category(
             "category",
             "the selected category is incompatible with the current listing-composer schema",
             "listing_composer",
-            format!("flea draft show {}", state.draft_id),
+            format!("flea tori draft show {}", state.draft_id),
         )),
         None if composer_model == ComposerModelStatus::Available => {
             report.unverifiable.push(publication_issue(
                 "category",
                 "category compatibility could not be verified from the listing composer",
                 "listing_composer",
-                format!("flea draft show {}", state.draft_id),
+                format!("flea tori draft show {}", state.draft_id),
             ));
         }
         None => {}
@@ -314,7 +314,7 @@ fn validate_publication_composer(
             "composer_model",
             reason,
             "listing_composer",
-            format!("flea draft validate {}", state.draft_id),
+            format!("flea tori draft validate {}", state.draft_id),
         ));
         return;
     }
@@ -333,7 +333,7 @@ fn validate_publication_composer(
                 publication_field,
                 "the selected category requires this field",
                 "listing_composer",
-                format!("flea draft show {}", state.draft_id),
+                format!("flea tori draft show {}", state.draft_id),
             ));
             continue;
         }
@@ -347,7 +347,7 @@ fn validate_publication_composer(
                     .as_deref()
                     .unwrap_or("the listing composer rejected this value"),
                 "listing_composer",
-                format!("flea draft show {}", state.draft_id),
+                format!("flea tori draft show {}", state.draft_id),
             ));
             continue;
         }
@@ -359,7 +359,7 @@ fn validate_publication_composer(
                 publication_field,
                 "the required listing-composer field has an unknown type",
                 "listing_composer",
-                format!("flea draft show {}", state.draft_id),
+                format!("flea tori draft show {}", state.draft_id),
             ));
         }
     }
@@ -396,14 +396,14 @@ fn validate_publication_composer(
                 publication_field,
                 "the listing-composer options are truncated",
                 "listing_composer",
-                format!("flea draft show {}", state.draft_id),
+                format!("flea tori draft show {}", state.draft_id),
             ));
         } else if !valid {
             report.invalid.push(publication_issue(
                 publication_field,
                 "the value is not an option in the current listing composer",
                 "listing_composer",
-                format!("flea draft show {}", state.draft_id),
+                format!("flea tori draft show {}", state.draft_id),
             ));
         }
     }
@@ -415,7 +415,7 @@ fn validate_publication_images(state: &DraftState, report: &mut PublicationValid
             "images",
             "at least one image is required for publication",
             "publication_invariant",
-            format!("flea draft image add {} PATH", state.draft_id),
+            format!("flea tori draft image add {} PATH", state.draft_id),
         ));
         return;
     }
@@ -435,7 +435,7 @@ fn validate_publication_images(state: &DraftState, report: &mut PublicationValid
             "images",
             format!("image processing is pending: {}", pending.join(", ")),
             "image_processing",
-            format!("flea draft validate {}", state.draft_id),
+            format!("flea tori draft validate {}", state.draft_id),
         ));
     }
     let failed = images
@@ -449,7 +449,7 @@ fn validate_publication_images(state: &DraftState, report: &mut PublicationValid
             format!("image processing rejected: {}", failed.join(", ")),
             "image_processing",
             format!(
-                "flea draft image remove {} {}",
+                "flea tori draft image remove {} {}",
                 state.draft_id,
                 failed.join(" ")
             ),
@@ -573,7 +573,7 @@ fn publication_core_issue(state: &DraftState, field: &str, reason: &str) -> Publ
         field,
         reason,
         "publication_invariant",
-        format!("flea draft update {} {option}", state.draft_id),
+        format!("flea tori draft update {} {option}", state.draft_id),
     )
 }
 

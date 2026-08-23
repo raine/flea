@@ -267,7 +267,7 @@ fn resolve_location(locations: &[SearchLocation], value: &str) -> Result<SearchL
             AppError::validation("search.location_not_found", "location was not found")
                 .with_details(serde_json::json!({
                     "location": value,
-                    "suggestion": "Run `flea location search` with this name to find Tori location names and IDs"
+                    "suggestion": "Run `flea tori location search` with this name to find Tori location names and IDs"
                 })),
         ),
         1 => Ok(matches.remove(0)),

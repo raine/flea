@@ -4,6 +4,7 @@ pub mod diagnostics;
 pub mod domain;
 pub mod error;
 mod image_processing;
+pub mod marketplace;
 pub mod output;
 pub mod retry;
 pub mod storage;
@@ -51,6 +52,7 @@ where
         Err(error) => return clap_presentation(error),
     };
     let command = diagnostics::command_name(&args);
+    let context = cli.command.context();
 
     let session = match DiagnosticsSession::initialize() {
         Ok(session) => session,
@@ -60,6 +62,7 @@ where
                 Err(error.into_app_error()),
                 None,
                 PlainPresentation::Structured,
+                context,
             );
         }
     };
@@ -72,6 +75,7 @@ where
                 cli::dispatch_with_runtime(cli.command, &runtime),
                 Some(session.context()),
                 plain_presentation,
+                context,
             )
         }))
         .unwrap_or_else(|_| {
@@ -80,6 +84,7 @@ where
                 Err(AppError::unexpected("command failed unexpectedly")),
                 Some(session.context()),
                 PlainPresentation::Structured,
+                context,
             )
         });
         let exit_code = result.exit_code;
@@ -99,12 +104,14 @@ where
         Err(error) => return clap_presentation(error),
     };
     let plain_presentation = plain_presentation(cli.format, &cli.command);
+    let context = cli.command.context();
     catch_unwind(AssertUnwindSafe(|| {
         finish(
             cli.format,
             cli::dispatch_with_runtime(cli.command, runtime),
             None,
             plain_presentation,
+            context,
         )
     }))
     .unwrap_or_else(|_| {
@@ -113,6 +120,7 @@ where
             Err(AppError::unexpected("command failed unexpectedly")),
             None,
             PlainPresentation::Structured,
+            context,
         )
     })
 }
@@ -133,8 +141,18 @@ fn clap_presentation(error: clap::Error) -> RunResult {
 fn plain_presentation(format: output::OutputFormat, command: &cli::Command) -> PlainPresentation {
     match command {
         cli::Command::Skill(_) => PlainPresentation::Skill,
-        cli::Command::Auth(cli::auth::AuthArgs {
-            command: cli::auth::AuthCommand::Login,
+        cli::Command::Tori(cli::ToriArgs {
+            command:
+                cli::ToriCommand::Auth(cli::auth::AuthArgs {
+                    command: cli::auth::AuthCommand::Login,
+                }),
+        }) if format == output::OutputFormat::Toon => PlainPresentation::AuthLogin,
+        cli::Command::Vinted(cli::VintedArgs {
+            command:
+                cli::VintedCommand::Auth(cli::auth::AuthArgs {
+                    command: cli::auth::AuthCommand::Login,
+                }),
+            ..
         }) if format == output::OutputFormat::Toon => PlainPresentation::AuthLogin,
         _ => PlainPresentation::Structured,
     }
@@ -145,12 +163,13 @@ fn finish(
     result: Result<serde_json::Value, AppError>,
     diagnostics: Option<&DiagnosticsContext>,
     plain_presentation: PlainPresentation,
+    context: Option<marketplace::MarketplaceContext>,
 ) -> RunResult {
     let (envelope, exit_code) = match result {
         Ok(mut data) => {
             let plain_document = match plain_presentation {
                 PlainPresentation::Structured => None,
-                PlainPresentation::AuthLogin => Some(output::render_auth_login(&data)),
+                PlainPresentation::AuthLogin => Some(output::render_auth_login(&data, context)),
                 PlainPresentation::Skill => Some(output::render_skill(&data)),
             };
             if let Some(document) = plain_document {
@@ -165,6 +184,7 @@ fn finish(
                         Err(error),
                         diagnostics,
                         PlainPresentation::Structured,
+                        context,
                     ),
                 };
             }
@@ -178,6 +198,7 @@ fn finish(
                 .and_then(|object| object.remove("_observation"))
                 .and_then(|value| serde_json::from_value(value).ok());
             let mut envelope = Envelope::success(data);
+            envelope.context = context;
             envelope.next_actions = next_actions;
             envelope.observation = observation;
             if let Some(warnings) = envelope
@@ -230,7 +251,9 @@ fn finish(
                 error.chain = ?diagnostic_chain,
                 partial = ?diagnostic_partial
             );
-            (Envelope::failure(error), exit_code)
+            let mut envelope = Envelope::failure(error);
+            envelope.context = context;
+            (envelope, exit_code)
         }
     };
 
@@ -251,7 +274,8 @@ fn finish(
                 event = "output.failed",
                 error.chain = ?diagnostic_chain
             );
-            let fallback = Envelope::failure(render_error);
+            let mut fallback = Envelope::failure(render_error);
+            fallback.context = context;
             let document = serde_json::to_string(&fallback).unwrap_or_else(|_| {
                 "{\"ok\":false,\"error\":{\"code\":\"output.failed\",\"message\":\"failed to serialize output\",\"upstream_transient\":false,\"safe_to_retry\":false},\"warnings\":[],\"next_actions\":[]}".to_owned()
             });

@@ -26,11 +26,9 @@ pub struct AuthArgs {
 pub enum AuthCommand {
     #[command(
         about = "Sign in through the browser",
-        long_about = "Open Tori.fi sign-in in the default browser, wait for the Flea callback receiver, and store credentials."
+        long_about = "Open the selected marketplace sign-in flow in the default browser, wait for its callback receiver, and store account-scoped credentials."
     )]
     Login,
-    #[command(name = "vinted-login-poc", hide = true)]
-    VintedLoginPoc,
     #[command(hide = true)]
     Callback {
         #[arg(long, hide = true)]
@@ -40,12 +38,12 @@ pub enum AuthCommand {
     },
     #[command(
         about = "Show authentication status",
-        long_about = "Validate whether authenticated commands are usable. Bearer credentials with 30 seconds or less remaining are refreshed through the same locked atomic path used by authenticated commands."
+        long_about = "Validate whether authenticated commands are usable. The selected marketplace determines whether validation uses local expiry, an online account request, or token refresh."
     )]
     Status,
     #[command(
         about = "Clear authentication state",
-        long_about = "Remove stored Tori credentials and any incomplete OAuth flows."
+        long_about = "Remove stored credentials and incomplete OAuth state for the selected marketplace and portal."
     )]
     Logout,
 }
@@ -54,7 +52,6 @@ impl std::fmt::Debug for AuthCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Login => formatter.write_str("Login"),
-            Self::VintedLoginPoc => formatter.write_str("VintedLoginPoc"),
             Self::Callback { .. } => formatter.write_str("Callback"),
             Self::Status => formatter.write_str("Status"),
             Self::Logout => formatter.write_str("Logout"),
@@ -184,9 +181,9 @@ impl<A, S> AuthCommandHandler<A, S> {
 impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
     pub async fn dispatch(&self, command: AuthCommand) -> Result<Value, AppError> {
         match command {
-            AuthCommand::Login | AuthCommand::VintedLoginPoc | AuthCommand::Callback { .. } => Err(
-                AppError::unexpected("interactive browser login requires the production runtime"),
-            ),
+            AuthCommand::Login | AuthCommand::Callback { .. } => Err(AppError::unexpected(
+                "interactive browser login requires the production runtime",
+            )),
             AuthCommand::Status => Err(AppError::unexpected(
                 "authentication status requires the production runtime",
             )),
@@ -272,7 +269,7 @@ fn flow_not_found() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "flea auth login".to_owned(),
+            command: crate::cli::invocation::tori("auth login"),
         });
     error
 }
@@ -286,7 +283,7 @@ fn flow_expired() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: "flea auth login".to_owned(),
+            command: crate::cli::invocation::tori("auth login"),
         });
     error
 }
@@ -426,7 +423,7 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, "auth.flow_expired");
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
         assert!(handler.store.load_flow(&flow_id).unwrap().is_none());
     }
 
@@ -440,6 +437,6 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, "auth.flow_not_found");
-        assert_eq!(error.next_actions[0].command, "flea auth login");
+        assert_eq!(error.next_actions[0].command, "flea tori auth login");
     }
 }

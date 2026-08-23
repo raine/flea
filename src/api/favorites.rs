@@ -275,7 +275,7 @@ impl<'a> Favorites<'a> {
                     "Tori did not return a default favorites folder",
                 );
                 error.next_actions.push(NextAction {
-                    command: "flea favorite folders".to_owned(),
+                    command: "flea tori favorite folders".to_owned(),
                 });
                 error
             })
@@ -350,7 +350,7 @@ fn favorite_error(
 
     if authentication {
         app_error.next_actions.push(NextAction {
-            command: "flea auth login".to_owned(),
+            command: crate::cli::invocation::tori("auth login"),
         });
     }
     if read_only && observable_failure {
@@ -358,7 +358,7 @@ fn favorite_error(
     }
     if let Some((folder_id, listing_id)) = resource {
         app_error.next_actions.push(NextAction {
-            command: format!("flea favorite status {listing_id}"),
+            command: format!("flea tori favorite status {listing_id}"),
         });
         if !read_only {
             app_error = app_error.with_observation(observation, ObservationOperation::Mutation);

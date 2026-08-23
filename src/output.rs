@@ -2,7 +2,10 @@ use clap::ValueEnum;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::error::AppError;
+use crate::{
+    error::AppError,
+    marketplace::{MarketplaceContext, MarketplaceId},
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 #[value(rename_all = "lower")]
@@ -23,13 +26,25 @@ pub fn render<T: Serialize>(value: &T, format: OutputFormat) -> Result<String, A
     }
 }
 
-pub fn render_auth_login(data: &Value) -> Result<String, AppError> {
+pub fn render_auth_login(
+    data: &Value,
+    context: Option<MarketplaceContext>,
+) -> Result<String, AppError> {
     if data.get("authenticated").and_then(Value::as_bool) != Some(true) {
         return Err(AppError::output(
             "authentication login output has an invalid status",
         ));
     }
-    Ok("Signed in to Tori.\n".to_owned())
+    let name = match context.map(|context| context.marketplace) {
+        Some(MarketplaceId::Tori) => "Tori",
+        Some(MarketplaceId::Vinted) => "Vinted",
+        None => {
+            return Err(AppError::output(
+                "authentication login output is missing marketplace context",
+            ));
+        }
+    };
+    Ok(format!("Signed in to {name}.\n"))
 }
 
 pub fn render_skill(data: &Value) -> Result<String, AppError> {

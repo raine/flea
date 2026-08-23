@@ -1,4 +1,7 @@
 ok: true
+context:
+  marketplace: tori
+  portal: fi
 data:
   draft_id: "draft-1"
   etag: "etag-7"
@@ -45,4 +48,4 @@ observation:
     response_received: true
     model_parsed: true
 next_actions[1]{command}:
-  "flea draft publish draft-1 --if-revision revision-7"
+  "flea tori draft publish draft-1 --if-revision revision-7"

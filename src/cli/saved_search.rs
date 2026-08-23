@@ -31,7 +31,7 @@ pub enum SavedSearchCommand {
     },
     #[command(
         about = "Show a saved search",
-        long_about = "Show one authenticated search alert by the opaque ID returned by `flea saved-search list`."
+        long_about = "Show one authenticated search alert by the opaque ID returned by `flea tori saved-search list`."
     )]
     Show {
         /// Opaque saved search ID returned by list.

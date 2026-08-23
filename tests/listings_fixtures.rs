@@ -588,7 +588,10 @@ fn show_reports_observation_delay_when_collection_cannot_reconcile_not_found() {
         "not_found"
     );
     assert_eq!(error.details.as_ref().unwrap()["observation_attempts"], 2);
-    assert_eq!(error.next_actions[0].command, "flea listing show 46031010");
+    assert_eq!(
+        error.next_actions[0].command,
+        "flea tori listing show 46031010"
+    );
 }
 
 #[test]
@@ -680,7 +683,10 @@ fn etag_conflict_returns_fresh_state_without_retrying_the_mutation() {
     assert_eq!(error.exit_class.code(), 30);
     assert!(!error.upstream_transient);
     assert!(error.safe_to_retry);
-    assert_eq!(error.next_actions[0].command, "flea listing show 36443414");
+    assert_eq!(
+        error.next_actions[0].command,
+        "flea tori listing show 36443414"
+    );
     assert_eq!(error.details.unwrap()["current"]["price"]["amount"], 50);
     assert_eq!(api.update_calls.lock().unwrap().len(), 1);
 }
@@ -700,7 +706,10 @@ fn etag_conflict_without_fresh_observation_requires_authoritative_show() {
     assert!(!error.upstream_transient);
     assert!(!error.safe_to_retry);
     assert_eq!(error.details.unwrap()["current"], Value::Null);
-    assert_eq!(error.next_actions[0].command, "flea listing show 36443414");
+    assert_eq!(
+        error.next_actions[0].command,
+        "flea tori listing show 36443414"
+    );
 }
 
 #[test]
@@ -734,6 +743,7 @@ fn json_and_flag_duplicates_are_a_structured_usage_error() {
     std::fs::write(&input, r#"{"title":"JSON title","condition":"3"}"#).unwrap();
     let cli = Cli::parse_from([
         "flea",
+        "tori",
         "listing",
         "update",
         "36443414",
@@ -742,7 +752,10 @@ fn json_and_flag_duplicates_are_a_structured_usage_error() {
         "--input",
         input.to_str().unwrap(),
     ]);
-    let Command::Listing(args) = cli.command else {
+    let Command::Tori(tori) = cli.command else {
+        panic!("expected Tori command");
+    };
+    let flea::cli::ToriCommand::Listing(args) = tori.command else {
         panic!("expected listing command");
     };
     let ListingCommand::Update { values, .. } = args.command else {
@@ -772,7 +785,10 @@ fn ambiguous_mutation_failures_include_listing_recovery_context() {
     assert!(!error.safe_to_retry);
     assert_eq!(error.partial.as_ref().unwrap()["listing_id"], "36443414");
     assert_eq!(error.partial.as_ref().unwrap()["operation"], "update");
-    assert_eq!(error.next_actions[0].command, "flea listing show 36443414");
+    assert_eq!(
+        error.next_actions[0].command,
+        "flea tori listing show 36443414"
+    );
     assert!(!error.message.contains("upstream-secret"));
 }
 
