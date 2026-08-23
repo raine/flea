@@ -8,11 +8,18 @@ use flea::{
 use serde_json::{Value, json};
 
 fn dependencies() -> ApplicationDependencies {
-    ApplicationDependencies::production().with_tori_auth_handler(|_| async {
-        Ok(CommandOutcome::new(CommandData::Raw(
-            json!({ "authenticated": true, "user_id": "42" }),
-        )))
-    })
+    ApplicationDependencies::production()
+        .with_tori_auth_handler(|_| async {
+            Ok(CommandOutcome::new(CommandData::Raw(
+                json!({ "authenticated": true, "user_id": "42" }),
+            )))
+        })
+        .with_vinted_auth_handler(|_, _| async {
+            Ok(CommandOutcome::new(CommandData::Raw(json!({
+                "authenticated": true,
+                "user_id": "84"
+            }))))
+        })
 }
 
 #[test]
@@ -22,6 +29,27 @@ fn default_auth_login_reports_human_success() {
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.presentation, Presentation::PlainStdout);
     assert_eq!(result.document, "Signed in to Tori.\n");
+}
+
+#[test]
+fn default_vinted_auth_login_reports_marketplace_specific_human_success() {
+    let result = flea::run_with_dependencies(["flea", "vinted", "auth", "login"], &dependencies());
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.presentation, Presentation::PlainStdout);
+    assert_eq!(result.document, "Signed in to Vinted.\n");
+}
+
+#[test]
+fn default_auth_status_keeps_the_structured_envelope() {
+    let result = flea::run_with_dependencies(["flea", "tori", "auth", "status"], &dependencies());
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.presentation, Presentation::Structured);
+    assert_eq!(
+        toon_format::decode_default::<Value>(&result.document).unwrap()["data"],
+        json!({ "authenticated": true, "user_id": "42" })
+    );
 }
 
 #[test]

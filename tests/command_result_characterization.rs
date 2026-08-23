@@ -173,3 +173,15 @@ fn invalid_plain_auth_output_falls_back_to_the_exact_structured_failure() {
         "ok: false\ncontext:\n  marketplace: tori\n  portal: fi\nerror:\n  code: output.serialization_failed\n  message: authentication login output has an invalid status\n  upstream_transient: false\n  safe_to_retry: false"
     );
 }
+
+#[test]
+fn skill_output_stays_plain_when_json_is_requested() {
+    let result = run_with_dependencies(
+        ["flea", "skill", "--format", "json"],
+        &ApplicationDependencies::production(),
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.presentation, Presentation::PlainStdout);
+    assert_eq!(result.document, include_str!("../skills/flea/SKILL.md"));
+}
