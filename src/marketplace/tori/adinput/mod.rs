@@ -3,6 +3,7 @@ mod delivery;
 mod fields;
 mod http;
 mod images;
+mod input;
 mod normalization;
 mod recovery;
 mod types;
@@ -15,6 +16,9 @@ pub use http::{
     RetryPolicy,
 };
 pub use images::{PreparedImage, normalize_category, prepare_image};
+pub use input::{
+    DraftInput, DraftPreviewOutput, DraftPreviewResult, PreparedDraftInput, prepare, preview,
+};
 pub(crate) use recovery::completed_steps_have_mutation;
 pub use recovery::{
     AddImagesResult, AttachmentRecoveryStatus, CreateRecoveryContract, CreateResult, FieldRecovery,

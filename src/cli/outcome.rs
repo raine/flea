@@ -2,10 +2,11 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::marketplace::tori::adinput::{
-    AddImagesResult, CreateResult, DraftState, PublicationValidation, PublishResult, UpdateResult,
+    AddImagesResult, CreateResult, DraftPreviewOutput, DraftState, PublicationValidation,
+    PublishResult, UpdateResult,
 };
 use crate::{
-    cli::{draft::DraftInspectionOutput, draft_input::DraftPreviewOutput, skill::SkillOutput},
+    cli::{draft::DraftInspectionOutput, skill::SkillOutput},
     domain::{
         envelope::{NextAction, Warning},
         item::PublicItemDetail,

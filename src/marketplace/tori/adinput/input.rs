@@ -4,14 +4,12 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    cli::outcome::{CommandData, CommandOutcome},
     domain::envelope::Warning,
     error::{AppError, ExitClass},
-    marketplace::tori::adinput::{PreparedImage, normalize_category, prepare_image},
     marketplace::tori::listings::{ListingsApiError, TaxonomyApi, UpstreamCategory},
 };
 
-use super::draft::CollectedInput;
+use super::{PreparedImage, normalize_category, prepare_image};
 
 const TITLE_MAX_CHARS: usize = 100;
 const DESCRIPTION_MAX_CHARS: usize = 10_000;
@@ -20,6 +18,19 @@ const ATTRIBUTES_MAX_COUNT: usize = 32;
 const ATTRIBUTE_ARRAY_MAX_VALUES: usize = 32;
 const DELIVERY_MAX_VALUES: usize = 8;
 const IMAGE_MAX_COUNT: usize = 12;
+
+/// Canonical input shared by draft preview, creation, and update workflows.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DraftInput {
+    pub values: Map<String, Value>,
+    pub image_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug)]
+pub struct DraftPreviewResult {
+    pub output: DraftPreviewOutput,
+    pub warnings: Vec<Warning>,
+}
 
 #[derive(Debug, Serialize)]
 pub struct DraftPreviewOutput {
@@ -35,13 +46,13 @@ pub struct DraftPreviewOutput {
     warnings: Vec<String>,
 }
 
-pub struct NormalizedInput {
+pub struct PreparedDraftInput {
     pub values: Map<String, Value>,
     pub images: Vec<PreparedImage>,
     image_paths: Vec<PathBuf>,
 }
 
-pub fn normalize(input: CollectedInput, process_images: bool) -> Result<NormalizedInput, AppError> {
+pub fn prepare(input: DraftInput, process_images: bool) -> Result<PreparedDraftInput, AppError> {
     let values = normalize_values(input.values)?;
     if input.image_paths.len() > IMAGE_MAX_COUNT {
         return Err(validation_error(BTreeMap::from([(
@@ -55,7 +66,7 @@ pub fn normalize(input: CollectedInput, process_images: bool) -> Result<Normaliz
     } else {
         Vec::new()
     };
-    Ok(NormalizedInput {
+    Ok(PreparedDraftInput {
         values,
         images,
         image_paths: input.image_paths,
@@ -63,11 +74,11 @@ pub fn normalize(input: CollectedInput, process_images: bool) -> Result<Normaliz
 }
 
 pub async fn preview(
-    input: CollectedInput,
+    input: DraftInput,
     verify_category: bool,
     taxonomy: Option<&dyn TaxonomyApi>,
-) -> Result<CommandOutcome, AppError> {
-    let normalized = normalize(input, true)?;
+) -> Result<DraftPreviewResult, AppError> {
+    let normalized = prepare(input, true)?;
     let category_machine_value = category_machine_value(normalized.values.get("category"));
     if verify_category && category_machine_value.is_none() {
         return Err(validation_error(BTreeMap::from([(
@@ -204,7 +215,10 @@ pub async fn preview(
             .map(|warning| warning.message.clone())
             .collect(),
     };
-    Ok(CommandOutcome::new(CommandData::DraftPreview(data)).with_warnings(warnings))
+    Ok(DraftPreviewResult {
+        output: data,
+        warnings,
+    })
 }
 
 fn normalize_values(mut values: Map<String, Value>) -> Result<Map<String, Value>, AppError> {
@@ -755,7 +769,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let image_path = temporary.path().join("tuoli.png");
         DynamicImage::new_rgb8(40, 60).save(&image_path).unwrap();
-        let input = CollectedInput {
+        let input = DraftInput {
             values: serde_json::from_value(json!({
                 "category": "258",
                 "title": "  Koivutuoli  ",
@@ -771,7 +785,7 @@ mod tests {
         };
 
         let output = preview(input, false, None).await.unwrap();
-        let output = serde_json::to_value(output.data).unwrap();
+        let output = serde_json::to_value(output.output).unwrap();
 
         assert_eq!(output["mode"], "local_draft_preview");
         assert_eq!(output["remote_mutation"], "none");
@@ -802,7 +816,7 @@ mod tests {
 
     #[tokio::test]
     async fn discovered_shipping_package_is_a_valid_delivery_machine_value() {
-        let input = CollectedInput {
+        let input = DraftInput {
             values: serde_json::from_value(json!({
                 "delivery": ["shipping:small"]
             }))
@@ -810,14 +824,14 @@ mod tests {
             image_paths: Vec::new(),
         };
 
-        let normalized = normalize(input, false).unwrap();
+        let normalized = prepare(input, false).unwrap();
 
         assert_eq!(normalized.values["delivery"], json!(["shipping:small"]));
     }
 
     #[tokio::test]
     async fn invalid_fields_are_reported_together() {
-        let input = CollectedInput {
+        let input = DraftInput {
             values: serde_json::from_value(json!({
                 "title": " ",
                 "description": "bad\u{0000}",
@@ -848,7 +862,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_images_fail_before_any_remote_work() {
-        let input = CollectedInput {
+        let input = DraftInput {
             values: Map::new(),
             image_paths: vec![PathBuf::from("missing-preview-image.jpg")],
         };

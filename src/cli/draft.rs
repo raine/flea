@@ -13,10 +13,7 @@ use serde::{
 use serde_json::{Map, Value, json};
 
 use crate::{
-    cli::{
-        draft_input,
-        outcome::{CommandData, CommandOutcome, DraftDeleteOutput},
-    },
+    cli::outcome::{CommandData, CommandOutcome, DraftDeleteOutput},
     domain::{
         envelope::{NextAction, Warning},
         field::{Field, FieldStatus},
@@ -25,9 +22,9 @@ use crate::{
     error::{AppError, ExitClass},
     marketplace::tori::adinput::{
         AdInputApi, CategoryPrediction, CategoryValidation, DeliveryOption, DraftDelivery,
-        DraftImage, DraftState, DraftWorkflow, FieldOption, PublicationRequirement,
+        DraftImage, DraftInput, DraftState, DraftWorkflow, FieldOption, PublicationRequirement,
         PublicationValidation, ValidationEvidenceFailure, WorkflowConfig, WorkflowError,
-        WorkflowWarning, completed_steps_have_mutation,
+        WorkflowWarning, completed_steps_have_mutation, prepare, preview,
     },
     marketplace::tori::listings::TaxonomyApi,
 };
@@ -295,13 +292,7 @@ impl ImageCommand {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct CollectedInput {
-    pub values: Map<String, Value>,
-    pub image_paths: Vec<PathBuf>,
-}
-
-pub fn collect_input(args: ListingInputArgs) -> Result<CollectedInput, AppError> {
+pub fn collect_input(args: ListingInputArgs) -> Result<DraftInput, AppError> {
     let mut stdin = io::stdin().lock();
     collect_input_with_reader(args, &mut stdin)
 }
@@ -309,7 +300,7 @@ pub fn collect_input(args: ListingInputArgs) -> Result<CollectedInput, AppError>
 pub fn collect_input_with_reader(
     args: ListingInputArgs,
     stdin: &mut impl Read,
-) -> Result<CollectedInput, AppError> {
+) -> Result<DraftInput, AppError> {
     let mut values = match args.input.as_deref() {
         Some(path) => read_json_object(path, stdin)?,
         None => Map::new(),
@@ -364,7 +355,7 @@ pub fn collect_input_with_reader(
         image_paths = args.image;
     }
 
-    Ok(CollectedInput {
+    Ok(DraftInput {
         values,
         image_paths,
     })
@@ -730,7 +721,13 @@ pub async fn execute_preview(
     else {
         return Err(AppError::unexpected("expected a draft preview command"));
     };
-    draft_input::preview(collect_input(values)?, verify_category, taxonomy).await
+    {
+        let result = preview(collect_input(values)?, verify_category, taxonomy).await?;
+        Ok(
+            CommandOutcome::new(CommandData::DraftPreview(result.output))
+                .with_warnings(result.warnings),
+        )
+    }
 }
 
 pub async fn execute<A: AdInputApi>(
@@ -770,7 +767,7 @@ pub async fn execute<A: AdInputApi>(
             from_listing: None,
             values,
         } => {
-            let input = draft_input::normalize(collect_input(values)?, true)?;
+            let input = prepare(collect_input(values)?, true)?;
             let mut result = workflow
                 .create_prepared(input.values, input.images)
                 .await
@@ -812,7 +809,7 @@ pub async fn execute<A: AdInputApi>(
                     "draft update does not accept images; use `draft image add`",
                 ));
             }
-            let input = draft_input::normalize(input, false)?;
+            let input = prepare(input, false)?;
             let mut result = workflow
                 .update(&draft_id, &input.values)
                 .await
