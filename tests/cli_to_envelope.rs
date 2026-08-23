@@ -128,11 +128,11 @@ impl CommandRuntime for TestRuntime {
                     ToriCommand::SavedSearch(args) => {
                         let api = HttpSavedSearchesApi::new(Arc::new(self.client.clone()));
                         let search_api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                        saved_search::dispatch_with_apis(*args, &api, &search_api)
+                        saved_search::dispatch_with_apis(*args, &api, &search_api).await
                     }
                     ToriCommand::Location(args) => {
                         let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                        location::dispatch_with_api(args, &api)
+                        location::dispatch_with_api(args, &api).await
                     }
                 },
                 Command::Skill(args) => flea::cli::skill::dispatch(args),

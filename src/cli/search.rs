@@ -216,12 +216,13 @@ pub async fn dispatch_with_apis(
     api: &dyn PublicSearchApi,
     item_api: Option<&dyn PublicItemApi>,
 ) -> Result<Value, AppError> {
-    let prepared = prepare(args, api)?;
+    let prepared = prepare(args, api).await?;
     let input = prepared.input;
     let request = prepared.request;
     let search = PublicSearch::new(api);
-    let (mut result, raw) =
-        search.execute_with_area(&request, prepared.resolved_location, prepared.resolved_area)?;
+    let (mut result, raw) = search
+        .execute_with_area(&request, prepared.resolved_location, prepared.resolved_area)
+        .await?;
     if input.raw {
         return Ok(raw);
     }
@@ -313,7 +314,7 @@ struct PreparedSearch {
     resolved_area: Option<crate::domain::search::SearchArea>,
 }
 
-fn prepare(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<PreparedSearch, AppError> {
+async fn prepare(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<PreparedSearch, AppError> {
     let input = collect_input(args)?;
     validate(&input)?;
     let search = PublicSearch::new(api);
@@ -372,7 +373,7 @@ fn prepare(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<PreparedSearch
             .collect(),
     )?;
     let resolved_location = if let Some(location) = input.location.as_deref() {
-        let resolved = search.resolve_location(location)?;
+        let resolved = search.resolve_location(location).await?;
         insert_parameter(&mut parameters, "location", vec![resolved.id.clone()])?;
         Some(resolved)
     } else {
@@ -381,7 +382,7 @@ fn prepare(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<PreparedSearch
     let resolved_area = if input.area.is_empty() {
         None
     } else {
-        let resolved = search.resolve_area(&input.area)?;
+        let resolved = search.resolve_area(&input.area).await?;
         insert_parameter(
             &mut parameters,
             "location",
@@ -419,11 +420,11 @@ fn prepare(args: SearchArgs, api: &dyn PublicSearchApi) -> Result<PreparedSearch
     })
 }
 
-pub fn saved_search_parameters(
+pub async fn saved_search_parameters(
     args: SearchArgs,
     api: &dyn PublicSearchApi,
 ) -> Result<BTreeMap<String, Vec<String>>, AppError> {
-    let prepared = prepare(args, api)?;
+    let prepared = prepare(args, api).await?;
     let input = &prepared.input;
     if input.page.is_some()
         || input.limit.is_some()

@@ -24,10 +24,15 @@ pub enum LocationCommand {
     },
 }
 
-pub fn dispatch_with_api(args: LocationArgs, api: &dyn PublicSearchApi) -> Result<Value, AppError> {
+pub async fn dispatch_with_api(
+    args: LocationArgs,
+    api: &dyn PublicSearchApi,
+) -> Result<Value, AppError> {
     let search = PublicSearch::new(api);
     let result = match args.command {
-        LocationCommand::Search { query } => search.locations(query.as_deref().unwrap_or(""))?,
+        LocationCommand::Search { query } => {
+            search.locations(query.as_deref().unwrap_or("")).await?
+        }
     };
     serde_json::to_value(result)
         .map_err(|error| AppError::output("failed to serialize location output").with_source(error))

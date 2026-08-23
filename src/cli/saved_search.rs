@@ -106,7 +106,7 @@ pub enum NotificationState {
     Off,
 }
 
-pub fn dispatch_with_apis(
+pub async fn dispatch_with_apis(
     args: SavedSearchArgs,
     api: &dyn SavedSearchesApi,
     search_api: &dyn PublicSearchApi,
@@ -152,7 +152,7 @@ pub fn dispatch_with_apis(
                     "choose --email, --push, --notification-center, or --no-notifications",
                 ));
             }
-            let parameters = saved_search_parameters(search, search_api)?;
+            let parameters = saved_search_parameters(search, search_api).await?;
             let notifications = notification_list(email, push, notification_center);
             mutation_value(
                 saved.create(CreateSavedSearch {

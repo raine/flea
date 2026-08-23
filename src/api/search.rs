@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{collections::BTreeMap, fmt, future::Future, pin::Pin, sync::Arc};
 
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value};
@@ -29,8 +29,13 @@ const SEARCH_PATH: &str = "/search/SEARCH_ID_BAP_COMMON";
 const SEARCH_CLIENT: &str = "android";
 
 pub trait PublicSearchApi: Send + Sync {
-    fn search(&self, request: &UpstreamSearchRequest) -> Result<Value, SearchApiError>;
-    fn location_metadata(&self) -> Result<Value, SearchApiError>;
+    fn search<'a>(
+        &'a self,
+        request: &'a UpstreamSearchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, SearchApiError>> + Send + 'a>>;
+    fn location_metadata(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, SearchApiError>> + Send + '_>>;
 }
 
 pub struct HttpPublicSearchApi {
@@ -42,22 +47,13 @@ impl HttpPublicSearchApi {
         Self { client }
     }
 
-    fn get(&self, path: String) -> Result<Value, SearchApiError> {
+    async fn get(&self, path: String) -> Result<Value, SearchApiError> {
         let request = RequestSpec::new(Method::GET, path, compatibility::SERVICE_SEARCH);
-        let client = Arc::clone(&self.client);
-        let response = std::thread::scope(|scope| {
-            scope
-                .spawn(move || {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|_| SearchApiError::Unexpected("HTTP runtime failed".to_owned()))?
-                        .block_on(client.execute(request))
-                        .map_err(search_http_error)
-                })
-                .join()
-                .map_err(|_| SearchApiError::Unexpected("HTTP worker failed".to_owned()))?
-        })?;
+        let response = self
+            .client
+            .execute(request)
+            .await
+            .map_err(search_http_error)?;
         if !response.status.is_success() {
             return Err(match response.status {
                 StatusCode::BAD_REQUEST => SearchApiError::Rejected,
@@ -70,19 +66,26 @@ impl HttpPublicSearchApi {
 }
 
 impl PublicSearchApi for HttpPublicSearchApi {
-    fn search(&self, request: &UpstreamSearchRequest) -> Result<Value, SearchApiError> {
-        self.get(request.path_and_query())
+    fn search<'a>(
+        &'a self,
+        request: &'a UpstreamSearchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, SearchApiError>> + Send + 'a>> {
+        Box::pin(self.get(request.path_and_query()))
     }
 
-    fn location_metadata(&self) -> Result<Value, SearchApiError> {
-        self.get(
-            UpstreamSearchRequest {
-                page: 1,
-                limit: 0,
-                include_filters: true,
-                ..UpstreamSearchRequest::default()
-            }
-            .path_and_query(),
+    fn location_metadata(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, SearchApiError>> + Send + '_>> {
+        Box::pin(
+            self.get(
+                UpstreamSearchRequest {
+                    page: 1,
+                    limit: 0,
+                    include_filters: true,
+                    ..UpstreamSearchRequest::default()
+                }
+                .path_and_query(),
+            ),
         )
     }
 }
@@ -167,27 +170,28 @@ impl<'a> PublicSearch<'a> {
         Self { api }
     }
 
-    pub fn execute(
+    pub async fn execute(
         &self,
         request: &UpstreamSearchRequest,
         resolved_location: Option<SearchLocation>,
     ) -> Result<(SearchCollection, Value), AppError> {
         self.execute_with_area(request, resolved_location, None)
+            .await
     }
 
-    pub fn execute_with_area(
+    pub async fn execute_with_area(
         &self,
         request: &UpstreamSearchRequest,
         resolved_location: Option<SearchLocation>,
         resolved_area: Option<SearchArea>,
     ) -> Result<(SearchCollection, Value), AppError> {
-        let raw = self.api.search(request).map_err(search_error)?;
+        let raw = self.api.search(request).await.map_err(search_error)?;
         let normalized = normalize_search(&raw, request, resolved_location, resolved_area)?;
         Ok((normalized, raw))
     }
 
-    pub fn locations(&self, query: &str) -> Result<LocationCollection, AppError> {
-        let raw = self.api.location_metadata().map_err(search_error)?;
+    pub async fn locations(&self, query: &str) -> Result<LocationCollection, AppError> {
+        let raw = self.api.location_metadata().await.map_err(search_error)?;
         let mut locations = extract_locations(&raw)?;
         let needle = normalize_name(query);
         if !needle.is_empty() {
@@ -211,13 +215,13 @@ impl<'a> PublicSearch<'a> {
         })
     }
 
-    pub fn resolve_location(&self, value: &str) -> Result<SearchLocation, AppError> {
-        let raw = self.api.location_metadata().map_err(search_error)?;
+    pub async fn resolve_location(&self, value: &str) -> Result<SearchLocation, AppError> {
+        let raw = self.api.location_metadata().await.map_err(search_error)?;
         resolve_location(&extract_locations(&raw)?, value)
     }
 
-    pub fn resolve_area(&self, values: &[String]) -> Result<SearchArea, AppError> {
-        let raw = self.api.location_metadata().map_err(search_error)?;
+    pub async fn resolve_area(&self, values: &[String]) -> Result<SearchArea, AppError> {
+        let raw = self.api.location_metadata().await.map_err(search_error)?;
         let locations = extract_locations(&raw)?;
         let mut resolved = Vec::with_capacity(values.len());
         for value in values {

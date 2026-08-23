@@ -37,13 +37,20 @@ impl FixtureApi {
 }
 
 impl PublicSearchApi for FixtureApi {
-    fn search(&self, request: &UpstreamSearchRequest) -> Result<Value, SearchApiError> {
+    fn search<'a>(
+        &'a self,
+        request: &'a UpstreamSearchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, SearchApiError>> + Send + 'a>> {
         self.requests.lock().unwrap().push(request.clone());
-        Ok(self.search_response.clone())
+        let response = self.search_response.clone();
+        Box::pin(async move { Ok(response) })
     }
 
-    fn location_metadata(&self) -> Result<Value, SearchApiError> {
-        Ok(self.location_response.clone())
+    fn location_metadata(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, SearchApiError>> + Send + '_>> {
+        let response = self.location_response.clone();
+        Box::pin(async move { Ok(response) })
     }
 }
 
@@ -97,7 +104,7 @@ async fn saved_search_creation_reuses_public_search_argument_mapping() {
         panic!("create command")
     };
 
-    let parameters = search::saved_search_parameters(args, &api).unwrap();
+    let parameters = search::saved_search_parameters(args, &api).await.unwrap();
 
     assert_eq!(parameters["q"], ["chair"]);
     assert_eq!(parameters["product_category"], ["2.93.3215.8368"]);
@@ -190,6 +197,7 @@ async fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
                 depth: 1,
             }),
         )
+        .await
         .unwrap();
 
     let listing = &result.results[0];
@@ -272,11 +280,11 @@ async fn normalizes_source_observed_docs_metadata_facets_and_privacy_fields() {
 async fn resolves_unambiguous_location_names_case_insensitively() {
     let api = FixtureApi::new(empty_fixture());
     let search = PublicSearch::new(&api);
-    let location = search.resolve_location("  HELSINKI ").unwrap();
+    let location = search.resolve_location("  HELSINKI ").await.unwrap();
     assert_eq!(location.id, "1.100018.110091");
     assert_eq!(location.parent.as_deref(), Some("Uusimaa"));
 
-    let matches = search.locations("sink").unwrap();
+    let matches = search.locations("sink").await.unwrap();
     assert_eq!(matches.returned, 1);
     assert_eq!(matches.total, 1);
     assert_eq!(matches.locations[0].name, "Helsinki");
@@ -322,6 +330,7 @@ async fn unknown_and_ambiguous_place_names_return_actionable_structured_errors()
 
     let ambiguous = PublicSearch::new(&api)
         .resolve_location("Kauniainen")
+        .await
         .unwrap_err();
     assert_eq!(ambiguous.code, "search.location_ambiguous");
     assert_eq!(
@@ -335,6 +344,7 @@ async fn unknown_and_ambiguous_place_names_return_actionable_structured_errors()
 
     let unknown = PublicSearch::new(&api)
         .resolve_location("Atlantis")
+        .await
         .unwrap_err();
     assert_eq!(unknown.code, "search.location_not_found");
     assert!(unknown.details.as_ref().unwrap()["suggestion"].is_string());
@@ -354,7 +364,10 @@ async fn omits_upstream_placeholder_zero_distance() {
         limit: 1,
         ..Default::default()
     };
-    let (result, _) = PublicSearch::new(&api).execute(&request, None).unwrap();
+    let (result, _) = PublicSearch::new(&api)
+        .execute(&request, None)
+        .await
+        .unwrap();
 
     assert_eq!(result.results[0].distance, None);
 }
@@ -530,12 +543,20 @@ async fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_local
 async fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
     struct ErrorApi;
     impl PublicSearchApi for ErrorApi {
-        fn search(&self, _request: &UpstreamSearchRequest) -> Result<Value, SearchApiError> {
-            Err(SearchApiError::Transport(
-                "private query cookie -> secret stack trace".to_owned(),
-            ))
+        fn search<'a>(
+            &'a self,
+            _request: &'a UpstreamSearchRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, SearchApiError>> + Send + 'a>> {
+            Box::pin(async {
+                Err(SearchApiError::Transport(
+                    "private query cookie -> secret stack trace".to_owned(),
+                ))
+            })
         }
-        fn location_metadata(&self) -> Result<Value, SearchApiError> {
+
+        fn location_metadata(
+            &self,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, SearchApiError>> + Send + '_>> {
             unreachable!()
         }
     }

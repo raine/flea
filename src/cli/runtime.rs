@@ -99,11 +99,11 @@ async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
                 Arc::new(tori_session::authenticated_client().await?);
             let api = HttpSavedSearchesApi::new(Arc::clone(&client));
             let search_api = HttpPublicSearchApi::new(client);
-            saved_search::dispatch_with_apis(*args, &api, &search_api)
+            saved_search::dispatch_with_apis(*args, &api, &search_api).await
         }
         ToriCommand::Location(args) => {
             let api = HttpPublicSearchApi::new(Arc::new(public_client()));
-            super::location::dispatch_with_api(args, &api)
+            super::location::dispatch_with_api(args, &api).await
         }
     }
 }
