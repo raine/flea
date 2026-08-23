@@ -41,13 +41,13 @@ pub enum VintedDraftCommand {
     },
     #[command(
         about = "Publish a Vinted draft from a complete listing input",
-        long_about = "Sanitize and upload the complete image set, then complete a Vinted draft using a complete runtime-discovered JSON payload."
+        long_about = "Reuse the draft's verified remote photos by default, or replace the complete photo set when --image is passed, then complete the draft using a complete runtime-discovered JSON payload."
     )]
     Publish {
         /// Numeric Vinted draft identifier.
         draft_id: String,
         #[command(flatten)]
-        values: PublicationInputArgs,
+        values: DraftCompletionInputArgs,
     },
     #[command(
         about = "Delete a Vinted draft",
@@ -80,6 +80,16 @@ pub struct PublicationInputArgs {
     pub image: Vec<PathBuf>,
 }
 
+#[derive(Debug, Args)]
+pub struct DraftCompletionInputArgs {
+    /// Complete Vinted listing JSON, or `-` for stdin.
+    #[arg(long, value_name = "PATH")]
+    pub input: PathBuf,
+    /// Replace all remote photos with these images in final display order.
+    #[arg(long, value_name = "PATH")]
+    pub image: Vec<PathBuf>,
+}
+
 pub async fn execute_direct(
     portal: PortalId,
     args: PublicationInputArgs,
@@ -109,7 +119,10 @@ pub async fn execute_draft(
         }
         VintedDraftCommand::Publish { draft_id, values } => (
             PublicationOperation::CompleteDraft { draft_id },
-            Some(values),
+            Some(PublicationInputArgs {
+                input: values.input,
+                image: values.image,
+            }),
         ),
         VintedDraftCommand::Delete { draft_id } => {
             (PublicationOperation::DeleteDraft { draft_id }, None)

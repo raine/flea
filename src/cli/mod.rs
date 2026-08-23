@@ -505,6 +505,21 @@ mod tests {
     }
 
     #[test]
+    fn vinted_draft_publish_accepts_remote_photo_reuse_without_images() {
+        let result = Cli::try_parse_from([
+            "flea",
+            "vinted",
+            "draft",
+            "publish",
+            "123",
+            "--input",
+            "listing.json",
+        ]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn vinted_auth_rejects_the_tori_callback_command() {
         let result = Cli::try_parse_from([
             "flea",

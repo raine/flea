@@ -133,11 +133,13 @@ information. It is not a catalog location filter and does not guarantee the
 item's physical location. `--raw` returns the exact upstream JSON value inside
 the standard envelope.
 
-Vinted publication accepts a complete JSON listing payload and one or more
-images. Flea strips image metadata, converts supported HEIC/HEIF input, uploads
-images in argument order, and uses Vinted's draft or direct-publication
-endpoint. Category IDs, dynamic attributes, currency, price bounds, and package
-IDs are runtime portal values.
+Vinted publication accepts a complete JSON listing payload. Creating, updating,
+and directly publishing a listing requires images. Draft completion fetches and
+verifies the remote photo IDs in display order, then reuses them without
+uploading bytes. Passing `--image` while completing a draft performs a verified
+replace-all operation. Flea strips image metadata and converts supported
+HEIC/HEIF input before upload. Category IDs, dynamic attributes, currency, price
+bounds, and package IDs are runtime portal values.
 
 ```sh
 flea vinted category list
@@ -145,10 +147,14 @@ flea vinted category attributes --input selections.json
 flea vinted category package-sizes CATEGORY_ID
 flea vinted draft create --input listing.json --image front.heic
 flea vinted draft update DRAFT_ID --input listing.json --image front.jpg
-flea vinted draft publish DRAFT_ID --input listing.json --image front.jpg
+flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
 flea vinted publish --input listing.json --image front.jpg
 ```
+
+Pass one or more `--image` values to `draft publish` only when replacing the
+complete remote photo set. Output reports the photo action, assigned photo IDs,
+and upload count.
 
 A minimal complete input has this shape:
 

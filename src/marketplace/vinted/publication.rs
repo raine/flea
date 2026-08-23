@@ -117,12 +117,22 @@ pub struct PublicationResult {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after_upload_actions: Vec<String>,
     pub uploaded_images: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photo_action: Option<&'static str>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assigned_photo_ids: Vec<u64>,
 }
 
 pub trait VintedPublicationApi: Send + Sync {
     fn configuration<'a>(
         &'a self,
         credentials: &'a VintedCredentialRecord,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>>;
+
+    fn fetch_draft<'a>(
+        &'a self,
+        credentials: &'a VintedCredentialRecord,
+        draft_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>>;
 
     fn upload_photo<'a>(
@@ -175,6 +185,8 @@ impl<'a> VintedPublication<'a> {
                 item_id: None,
                 after_upload_actions: Vec::new(),
                 uploaded_images: 0,
+                photo_action: None,
+                assigned_photo_ids: Vec::new(),
             });
         }
 
@@ -186,6 +198,22 @@ impl<'a> VintedPublication<'a> {
         }
         let input = input.expect("validated publication input");
         let temp_uuid = Uuid::new_v4().to_string();
+        let remote_before = if let PublicationOperation::CompleteDraft { draft_id } = &operation {
+            let photos = self
+                .fetch_assigned_photos(&credentials, draft_id, &operation)
+                .await?;
+            if photos.is_empty() && prepared_images.is_empty() {
+                return Err(publication_error(
+                    empty_draft_photos(draft_id),
+                    &operation,
+                    &[],
+                    MutationStatus::NotAttempted,
+                ));
+            }
+            Some(photos)
+        } else {
+            None
+        };
 
         for discovery in 0..MAX_SESSION_DISCOVERIES {
             let configuration = self
@@ -228,15 +256,73 @@ impl<'a> VintedPublication<'a> {
                 continue;
             }
 
+            let (assigned_photos, uploaded_images, photo_action) =
+                if let PublicationOperation::CompleteDraft { draft_id } = &operation {
+                    if prepared_images.is_empty() {
+                        (
+                            remote_before.clone().expect("completion photos fetched"),
+                            0,
+                            "reused",
+                        )
+                    } else {
+                        let replacement = PublicationOperation::UpdateDraft {
+                            draft_id: draft_id.clone(),
+                        };
+                        let body = publication_body(
+                            &replacement,
+                            input.clone(),
+                            &photos,
+                            upload_session_id,
+                            &temp_uuid,
+                        );
+                        match self
+                            .api
+                            .mutate(&credentials, &replacement, Some(body))
+                            .await
+                        {
+                            Ok(_) => {}
+                            Err(error)
+                                if discovery + 1 < MAX_SESSION_DISCOVERIES
+                                    && is_upload_session_rejection(&error) =>
+                            {
+                                continue;
+                            }
+                            Err(error) => {
+                                return Err(classify_replacement_error(
+                                    error,
+                                    &replacement,
+                                    remote_before.as_deref().unwrap_or_default(),
+                                    &photos,
+                                ));
+                            }
+                        }
+                        let verified = self
+                            .fetch_assigned_photos(&credentials, draft_id, &operation)
+                            .await?;
+                        verify_replacement(draft_id, &photos, &verified)?;
+                        (verified, photos.len(), "replaced")
+                    }
+                } else {
+                    (photos, prepared_images.len(), "uploaded")
+                };
+
             let body = publication_body(
                 &operation,
                 input.clone(),
-                &photos,
+                &assigned_photos,
                 upload_session_id,
                 &temp_uuid,
             );
             match self.api.mutate(&credentials, &operation, Some(body)).await {
-                Ok(response) => return normalize_result(&operation, photos.len(), &response),
+                Ok(response) => {
+                    return normalize_result(
+                        &operation,
+                        uploaded_images,
+                        Some(photo_action),
+                        &assigned_photos,
+                        &response,
+                    );
+                }
                 Err(error)
                     if discovery + 1 < MAX_SESSION_DISCOVERIES
                         && is_upload_session_rejection(&error) =>
@@ -244,15 +330,27 @@ impl<'a> VintedPublication<'a> {
                     continue;
                 }
                 Err(error) if is_upload_session_rejection(&error) => {
-                    return Err(publication_error(
+                    let error = publication_error(
                         error,
                         &operation,
-                        &photos,
+                        &assigned_photos,
                         MutationStatus::ConfirmedRejected,
+                    );
+                    return Err(enrich_completion_error(
+                        error,
+                        &operation,
+                        photo_action,
+                        uploaded_images,
                     ));
                 }
                 Err(error) => {
-                    return Err(classify_mutation_error(error, &operation, &photos));
+                    let error = classify_mutation_error(error, &operation, &assigned_photos);
+                    return Err(enrich_completion_error(
+                        error,
+                        &operation,
+                        photo_action,
+                        uploaded_images,
+                    ));
                 }
             }
         }
@@ -262,6 +360,23 @@ impl<'a> VintedPublication<'a> {
             &[],
             MutationStatus::ConfirmedRejected,
         ))
+    }
+
+    async fn fetch_assigned_photos(
+        &self,
+        credentials: &VintedCredentialRecord,
+        draft_id: &str,
+        operation: &PublicationOperation,
+    ) -> Result<Vec<UploadedPhoto>, AppError> {
+        let response = self
+            .api
+            .fetch_draft(credentials, draft_id)
+            .await
+            .map_err(|error| {
+                publication_error(error, operation, &[], MutationStatus::NotAttempted)
+            })?;
+        decode_draft_photos(draft_id, &response)
+            .map_err(|error| publication_error(error, operation, &[], MutationStatus::NotAttempted))
     }
 }
 
@@ -317,6 +432,28 @@ impl HttpVintedPublicationApi {
         } else {
             Err(upstream_error(status, &value, "configuration"))
         }
+    }
+
+    async fn fetch_draft_request(
+        &self,
+        credentials: &VintedCredentialRecord,
+        draft_id: &str,
+    ) -> Result<Value, AppError> {
+        let url = self.endpoint(&format!("item_upload/items/{draft_id}"))?;
+        let request = self.auth.authenticated_request(
+            Method::GET,
+            url.to_string(),
+            credentials,
+            MAX_RESPONSE_BYTES,
+            transport_error,
+        )?;
+        let response = self
+            .auth
+            .executor()
+            .execute(request)
+            .await
+            .map_err(execution_error)?;
+        decode_draft_response(response)
     }
 
     async fn upload_photo_request(
@@ -402,6 +539,14 @@ impl VintedPublicationApi for HttpVintedPublicationApi {
         Box::pin(self.configuration_request(credentials))
     }
 
+    fn fetch_draft<'a>(
+        &'a self,
+        credentials: &'a VintedCredentialRecord,
+        draft_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(self.fetch_draft_request(credentials, draft_id))
+    }
+
     fn upload_photo<'a>(
         &'a self,
         credentials: &'a VintedCredentialRecord,
@@ -471,7 +616,7 @@ fn validate_operation(
     if let Some(id) = draft_id(operation) {
         validate_draft_id(id)?;
     }
-    if image_paths.is_empty() {
+    if image_paths.is_empty() && !matches!(operation, PublicationOperation::CompleteDraft { .. }) {
         return Err(AppError::validation(
             "vinted.images_required",
             "At least one image is required",
@@ -664,6 +809,111 @@ fn draft_id(operation: &PublicationOperation) -> Option<&str> {
     }
 }
 
+fn decode_draft_response(response: TransportResponse) -> Result<Value, AppError> {
+    let status = response.status;
+    let value = bounded_json(response)?;
+    if status.is_success() {
+        Ok(value)
+    } else {
+        Err(upstream_error(status, &value, "draft inspection"))
+    }
+}
+
+fn decode_draft_photos(draft_id: &str, response: &Value) -> Result<Vec<UploadedPhoto>, AppError> {
+    let item = response
+        .get("item")
+        .and_then(Value::as_object)
+        .ok_or_else(|| invalid_response("draft inspection"))?;
+    let returned_id = item.get("id").and_then(value_as_id);
+    if returned_id.as_deref() != Some(draft_id) {
+        return Err(AppError::conflict(
+            "vinted.draft_identity_mismatch",
+            format!("Vinted returned a different item while inspecting draft {draft_id}"),
+        ));
+    }
+    if item.get("is_draft").and_then(Value::as_bool) == Some(false) {
+        return Err(AppError::conflict(
+            "vinted.not_a_draft",
+            format!("Vinted item {draft_id} is not an editable draft"),
+        ));
+    }
+    let values = item
+        .get("photos")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_response("draft photo assignment"))?;
+    let mut photos = Vec::with_capacity(values.len());
+    let mut main_index = None;
+    for (index, value) in values.iter().enumerate() {
+        let id = value
+            .get("id")
+            .and_then(value_as_id)
+            .and_then(|id| id.parse::<u64>().ok())
+            .filter(|id| *id != 0)
+            .ok_or_else(|| invalid_response("draft photo assignment"))?;
+        if photos.iter().any(|photo: &UploadedPhoto| photo.id == id) {
+            return Err(invalid_response("draft photo assignment"));
+        }
+        if value.get("is_main").and_then(Value::as_bool) == Some(true)
+            && main_index.replace(index).is_some()
+        {
+            return Err(invalid_response("draft photo order"));
+        }
+        let width = value
+            .get("width")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0);
+        let height = value
+            .get("height")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(0);
+        photos.push(UploadedPhoto {
+            id,
+            orientation: 0,
+            width,
+            height,
+        });
+    }
+    if main_index.is_some_and(|index| index != 0) {
+        return Err(invalid_response("draft photo order"));
+    }
+    Ok(photos)
+}
+
+fn verify_replacement(
+    draft_id: &str,
+    intended: &[UploadedPhoto],
+    remote: &[UploadedPhoto],
+) -> Result<(), AppError> {
+    let intended_ids = intended.iter().map(|photo| photo.id).collect::<Vec<_>>();
+    let remote_ids = remote.iter().map(|photo| photo.id).collect::<Vec<_>>();
+    if intended_ids == remote_ids {
+        return Ok(());
+    }
+    Err(AppError::partial(
+        "vinted.photo_replacement_unverified",
+        format!(
+            "Vinted draft {draft_id} did not retain the complete replacement photo set in the requested order; inspect the draft before publishing"
+        ),
+        json!({
+            "draft_id": draft_id,
+            "intended_photo_ids": intended_ids,
+            "remote_photo_ids": remote_ids,
+            "final_mutation": "unattempted"
+        }),
+    ))
+}
+
+fn empty_draft_photos(draft_id: &str) -> AppError {
+    AppError::validation(
+        "vinted.draft_photos_required",
+        format!(
+            "Vinted draft {draft_id} has no assigned photos; pass one or more --image values to replace the complete photo set"
+        ),
+    )
+}
+
 fn decode_photo_response(response: TransportResponse) -> Result<UploadedPhoto, AppError> {
     let status = response.status;
     let value = bounded_json(response)?;
@@ -722,6 +972,8 @@ fn bounded_json(response: TransportResponse) -> Result<Value, AppError> {
 fn normalize_result(
     operation: &PublicationOperation,
     uploaded_images: usize,
+    photo_action: Option<&'static str>,
+    photos: &[UploadedPhoto],
     response: &Value,
 ) -> Result<PublicationResult, AppError> {
     let draft_id = response
@@ -743,13 +995,7 @@ fn normalize_result(
                 .collect()
         })
         .unwrap_or_default();
-    let operation_name = match operation {
-        PublicationOperation::CreateDraft => "create_draft",
-        PublicationOperation::UpdateDraft { .. } => "update_draft",
-        PublicationOperation::CompleteDraft { .. } => "complete_draft",
-        PublicationOperation::Publish => "publish",
-        PublicationOperation::DeleteDraft { .. } => "delete_draft",
-    };
+    let operation_name = operation_name(operation);
     if matches!(operation, PublicationOperation::CreateDraft) && draft_id.is_none() {
         return Err(invalid_response("draft creation"));
     }
@@ -766,7 +1012,19 @@ fn normalize_result(
         item_id,
         after_upload_actions,
         uploaded_images,
+        photo_action,
+        assigned_photo_ids: photos.iter().map(|photo| photo.id).collect(),
     })
+}
+
+const fn operation_name(operation: &PublicationOperation) -> &'static str {
+    match operation {
+        PublicationOperation::CreateDraft => "create_draft",
+        PublicationOperation::UpdateDraft { .. } => "update_draft",
+        PublicationOperation::CompleteDraft { .. } => "complete_draft",
+        PublicationOperation::Publish => "publish",
+        PublicationOperation::DeleteDraft { .. } => "delete_draft",
+    }
 }
 
 fn value_as_id(value: &Value) -> Option<String> {
@@ -882,6 +1140,57 @@ fn classify_mutation_error(
         MutationStatus::Unknown
     };
     publication_error(error, operation, photos, mutation_status)
+}
+
+fn classify_replacement_error(
+    error: AppError,
+    operation: &PublicationOperation,
+    previous_photos: &[UploadedPhoto],
+    intended_photos: &[UploadedPhoto],
+) -> AppError {
+    let mut error = classify_mutation_error(error, operation, intended_photos);
+    if let Some(partial) = error.partial.as_deref_mut().and_then(Value::as_object_mut) {
+        partial.insert("draft_id".to_owned(), json!(draft_id(operation)));
+        partial.insert(
+            "previous_photo_ids".to_owned(),
+            json!(
+                previous_photos
+                    .iter()
+                    .map(|photo| photo.id)
+                    .collect::<Vec<_>>()
+            ),
+        );
+        partial.insert(
+            "intended_photo_ids".to_owned(),
+            json!(
+                intended_photos
+                    .iter()
+                    .map(|photo| photo.id)
+                    .collect::<Vec<_>>()
+            ),
+        );
+        partial.insert("mutation".to_owned(), json!(operation_name(operation)));
+    }
+    error
+}
+
+fn enrich_completion_error(
+    mut error: AppError,
+    operation: &PublicationOperation,
+    photo_action: &'static str,
+    uploaded_images: usize,
+) -> AppError {
+    if matches!(operation, PublicationOperation::CompleteDraft { .. })
+        && let Some(partial) = error.partial.as_deref_mut().and_then(Value::as_object_mut)
+    {
+        partial.insert("photo_action".to_owned(), json!(photo_action));
+        partial.insert(
+            "photo_assignment_status".to_owned(),
+            json!("verified_remote"),
+        );
+        partial.insert("uploaded_images".to_owned(), json!(uploaded_images));
+    }
+    error
 }
 
 fn publication_error(
@@ -1059,6 +1368,22 @@ mod tests {
             })
         }
 
+        fn fetch_draft<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            draft_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(json!({
+                    "item": {
+                        "id": draft_id,
+                        "is_draft": true,
+                        "photos": [{ "id": "9", "is_main": true }]
+                    }
+                }))
+            })
+        }
+
         fn upload_photo<'a>(
             &'a self,
             _credentials: &'a VintedCredentialRecord,
@@ -1107,6 +1432,137 @@ mod tests {
                     Ok(json!({"item": {"id": 71}}))
                 }
             })
+        }
+    }
+
+    struct CompletionApi {
+        photos: Mutex<Vec<UploadedPhoto>>,
+        uploads: AtomicUsize,
+        updates: AtomicUsize,
+        completions: AtomicUsize,
+        rejected_completions: usize,
+        reject_update: bool,
+    }
+
+    impl CompletionApi {
+        fn new(photos: Vec<UploadedPhoto>, rejected_completions: usize) -> Self {
+            Self {
+                photos: Mutex::new(photos),
+                uploads: AtomicUsize::new(0),
+                updates: AtomicUsize::new(0),
+                completions: AtomicUsize::new(0),
+                rejected_completions,
+                reject_update: false,
+            }
+        }
+
+        fn rejecting_update(mut self) -> Self {
+            self.reject_update = true;
+            self
+        }
+    }
+
+    impl VintedPublicationApi for CompletionApi {
+        fn configuration<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async { Ok(json!({"upload_session_id": "server-session"})) })
+        }
+
+        fn fetch_draft<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            draft_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async move {
+                let photos = self.photos.lock().unwrap();
+                Ok(json!({
+                    "item": {
+                        "id": draft_id,
+                        "is_draft": true,
+                        "photos": photos.iter().enumerate().map(|(index, photo)| json!({
+                            "id": photo.id.to_string(),
+                            "width": photo.width,
+                            "height": photo.height,
+                            "is_main": index == 0
+                        })).collect::<Vec<_>>()
+                    }
+                }))
+            })
+        }
+
+        fn upload_photo<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            _upload_session_id: &'a str,
+            _image: PreparedImage,
+        ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>> {
+            Box::pin(async move {
+                let index = self.uploads.fetch_add(1, Ordering::SeqCst);
+                Ok(photo(100 + index as u64))
+            })
+        }
+
+        fn mutate<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            operation: &'a PublicationOperation,
+            body: Option<Value>,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async move {
+                match operation {
+                    PublicationOperation::UpdateDraft { draft_id } => {
+                        self.updates.fetch_add(1, Ordering::SeqCst);
+                        if self.reject_update {
+                            return Err(AppError::upstream(
+                                "vinted.transport_failed",
+                                "replacement outcome is uncertain",
+                            ));
+                        }
+                        let photos = body
+                            .as_ref()
+                            .unwrap()
+                            .pointer("/draft/assigned_photos")
+                            .unwrap()
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|value| photo(value["id"].as_u64().unwrap()))
+                            .collect();
+                        *self.photos.lock().unwrap() = photos;
+                        Ok(json!({ "draft": { "id": draft_id } }))
+                    }
+                    PublicationOperation::CompleteDraft { .. } => {
+                        let attempt = self.completions.fetch_add(1, Ordering::SeqCst);
+                        if attempt < self.rejected_completions {
+                            Err(AppError::validation(
+                                "vinted.publication_validation_failed",
+                                "brand and color require correction",
+                            )
+                            .with_details(json!({"http_status": 422})))
+                        } else {
+                            Ok(json!({ "item": { "id": "900" } }))
+                        }
+                    }
+                    _ => Ok(json!({ "item": { "id": "900" } })),
+                }
+            })
+        }
+    }
+
+    fn photo(id: u64) -> UploadedPhoto {
+        UploadedPhoto {
+            id,
+            orientation: 0,
+            width: 10,
+            height: 20,
+        }
+    }
+
+    fn completion() -> PublicationOperation {
+        PublicationOperation::CompleteDraft {
+            draft_id: "42".to_owned(),
         }
     }
 
@@ -1341,10 +1797,112 @@ mod tests {
     }
 
     #[test]
-    fn rejects_publication_without_images() {
+    fn rejects_direct_publication_without_images_but_allows_draft_reuse() {
         let error =
             validate_operation(&PublicationOperation::Publish, Some(&input()), &[]).unwrap_err();
         assert_eq!(error.code, "vinted.images_required");
+        validate_operation(&completion(), Some(&input()), &[]).unwrap();
+    }
+
+    #[test]
+    fn draft_photo_decoder_preserves_verified_remote_order() {
+        let photos = decode_draft_photos(
+            "42",
+            &json!({
+                "item": {
+                    "id": "42",
+                    "is_draft": true,
+                    "photos": [
+                        { "id": "19", "is_main": true },
+                        { "id": 7, "is_main": false }
+                    ]
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            photos.iter().map(|photo| photo.id).collect::<Vec<_>>(),
+            [19, 7]
+        );
+    }
+
+    #[tokio::test]
+    async fn corrected_validation_attempt_reuses_persisted_replacement_without_uploading_again() {
+        let api = CompletionApi::new(vec![photo(9)], 1);
+        let session = |_| Ok(credentials());
+        let workflow = VintedPublication::new(&session, &api);
+        let (_directory, path) = image_path();
+
+        let first = workflow
+            .execute(PortalId::Fi, completion(), Some(input()), vec![path])
+            .await
+            .unwrap_err();
+        assert_eq!(first.code, "vinted.publication_validation_failed");
+        assert_eq!(first.partial.as_ref().unwrap()["photo_action"], "replaced");
+        assert_eq!(
+            first.partial.as_ref().unwrap()["photo_assignment_status"],
+            "verified_remote"
+        );
+        assert_eq!(first.partial.as_ref().unwrap()["uploaded_images"], 1);
+        assert_eq!(api.uploads.load(Ordering::SeqCst), 1);
+        assert_eq!(api.updates.load(Ordering::SeqCst), 1);
+
+        let result = workflow
+            .execute(PortalId::Fi, completion(), Some(input()), Vec::new())
+            .await
+            .unwrap();
+        assert_eq!(result.photo_action, Some("reused"));
+        assert_eq!(result.uploaded_images, 0);
+        assert_eq!(result.assigned_photo_ids, [100]);
+        assert_eq!(api.uploads.load(Ordering::SeqCst), 1);
+        assert_eq!(api.completions.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn explicit_images_are_reported_as_verified_replace_all() {
+        let api = CompletionApi::new(vec![photo(9), photo(8)], 0);
+        let session = |_| Ok(credentials());
+        let (_directory, path) = image_path();
+        let result = VintedPublication::new(&session, &api)
+            .execute(PortalId::Fi, completion(), Some(input()), vec![path])
+            .await
+            .unwrap();
+
+        assert_eq!(result.photo_action, Some("replaced"));
+        assert_eq!(result.uploaded_images, 1);
+        assert_eq!(result.assigned_photo_ids, [100]);
+    }
+
+    #[tokio::test]
+    async fn empty_remote_draft_stops_before_final_mutation() {
+        let api = CompletionApi::new(Vec::new(), 0);
+        let session = |_| Ok(credentials());
+        let error = VintedPublication::new(&session, &api)
+            .execute(PortalId::Fi, completion(), Some(input()), Vec::new())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "vinted.draft_photos_required");
+        assert!(error.message.contains("--image"));
+        assert_eq!(api.completions.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn uncertain_replacement_preserves_old_and_intended_assignments() {
+        let api = CompletionApi::new(vec![photo(9)], 0).rejecting_update();
+        let session = |_| Ok(credentials());
+        let (_directory, path) = image_path();
+        let error = VintedPublication::new(&session, &api)
+            .execute(PortalId::Fi, completion(), Some(input()), vec![path])
+            .await
+            .unwrap_err();
+        let partial = error.partial.unwrap();
+
+        assert_eq!(partial["previous_photo_ids"], json!([9]));
+        assert_eq!(partial["intended_photo_ids"], json!([100]));
+        assert_eq!(partial["mutation"], "update_draft");
+        assert_eq!(partial["mutation_status"], "unknown");
+        assert_eq!(api.completions.load(Ordering::SeqCst), 0);
     }
 
     #[test]

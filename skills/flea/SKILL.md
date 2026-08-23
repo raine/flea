@@ -40,20 +40,21 @@ infer it from presentation text. `--raw` preserves upstream JSON.
 
 ## Publish Vinted listings
 
-Use runtime portal values for category, attributes, currency, price, and package.
-Never guess product facts. Pass complete JSON and every image in display order:
+Use runtime values for category, attributes, currency, price, and package.
+Never guess facts. Pass complete JSON and ordered images when creating or
+directly publishing:
 
 ```sh
 flea vinted category list
 flea vinted category attributes --input selections.json
 flea vinted draft create --input listing.json --image front.heic
-flea vinted draft publish DRAFT_ID --input listing.json --image front.jpg
+flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
 flea vinted publish --input listing.json --image front.jpg
 ```
 
-Images are sanitized locally. Draft mutations replace the image assignment.
-Inspect remote state before retrying failures.
+Completion reuses verified ordered remote photos. `--image` replaces and
+verifies all photos. Inspect partial state before retrying uncertainty.
 
 ## Find Tori listings
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reuse verified remote photos when publishing Vinted drafts, with explicit
+  replace-all image uploads and inspectable partial replacement state
 - Add authenticated Vinted item inspection with exact raw output and
   exposure-aware seller-disclosed location fields
 
