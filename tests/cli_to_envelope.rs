@@ -91,25 +91,22 @@ impl CommandRuntime for TestRuntime {
                         command @ flea::cli::draft::DraftCommand::Preview {
                             verify_category: false,
                             ..
-                        } => draft::execute_preview(command, None)
-                            .await
-                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value),
+                        } => draft::execute_preview(command, None).await,
                         command @ flea::cli::draft::DraftCommand::Preview {
                             verify_category: true,
                             ..
                         } => {
                             let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                            draft::execute_preview(command, Some(&api))
-                                .await
-                                .map(flea::cli::outcome::CommandOutcome::from_legacy_value)
+                            draft::execute_preview(command, Some(&api)).await
                         }
-                        command => draft::execute(
-                            command,
-                            HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
-                            WorkflowConfig::default(),
-                        )
-                        .await
-                        .map(flea::cli::outcome::CommandOutcome::from_legacy_value),
+                        command => {
+                            draft::execute(
+                                command,
+                                HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
+                                WorkflowConfig::default(),
+                            )
+                            .await
+                        }
                     },
                     ToriCommand::Favorite(args) => {
                         let api = HttpFavoritesApi::new(Arc::new(self.client.clone()));

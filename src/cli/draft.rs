@@ -14,9 +14,9 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     api::listings::ListingsApi,
-    cli::draft_input,
+    cli::{draft_input, outcome::CommandOutcome},
     domain::{
-        envelope::NextAction,
+        envelope::{NextAction, Warning},
         field::{Field, FieldStatus},
         observation::Observation,
     },
@@ -25,7 +25,7 @@ use crate::{
         AdInputApi, CategoryPrediction, CategoryValidation, DeliveryOption, DraftDelivery,
         DraftImage, DraftState, DraftWorkflow, FieldOption, PublicationRequirement,
         PublicationValidation, ValidationEvidenceFailure, WorkflowConfig, WorkflowError,
-        completed_steps_have_mutation,
+        WorkflowWarning, completed_steps_have_mutation,
     },
 };
 
@@ -207,7 +207,7 @@ struct DraftInspectionOutput {
     fields: Option<Vec<Field>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     options: Option<Vec<FieldOption>>,
-    #[serde(rename = "_next_actions", skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip)]
     next_actions: Vec<NextAction>,
 }
 
@@ -695,7 +695,7 @@ fn selected_delivery(delivery: &DraftDelivery) -> SelectedDelivery {
 pub async fn execute_preview(
     command: DraftCommand,
     taxonomy: Option<&dyn ListingsApi>,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     let DraftCommand::Preview {
         verify_category,
         values,
@@ -705,9 +705,9 @@ pub async fn execute_preview(
     };
     draft_input::preview(collect_input(values)?, verify_category, taxonomy)
         .await
-        .map(|mut value| {
-            crate::domain::commerce::normalize_values_output(&mut value);
-            value
+        .map(|mut outcome| {
+            crate::domain::commerce::normalize_values_output(&mut outcome.data);
+            outcome
         })
 }
 
@@ -715,7 +715,7 @@ pub async fn execute<A: AdInputApi>(
     command: DraftCommand,
     api: A,
     config: WorkflowConfig,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     if matches!(&command, DraftCommand::Preview { .. }) {
         return execute_preview(command, None).await;
     }
@@ -735,25 +735,23 @@ pub async fn execute<A: AdInputApi>(
         DraftCommand::Create {
             from_listing: Some(listing_id),
             ..
-        } => serde_json::to_value(
-            workflow
+        } => {
+            let result = workflow
                 .create_from_listing(&listing_id)
                 .await
-                .map_err(workflow_error)?,
-        )
-        .map_err(|error| AppError::output(error.to_string())),
+                .map_err(workflow_error)?;
+            serialize_workflow_result(&result, &result.warnings)
+        }
         DraftCommand::Create {
             from_listing: None,
             values,
         } => {
             let input = draft_input::normalize(collect_input(values)?, true)?;
-            serde_json::to_value(
-                workflow
-                    .create_prepared(input.values, input.images)
-                    .await
-                    .map_err(workflow_error)?,
-            )
-            .map_err(|error| AppError::output(error.to_string()))
+            let result = workflow
+                .create_prepared(input.values, input.images)
+                .await
+                .map_err(workflow_error)?;
+            serialize_workflow_result(&result, &result.warnings)
         }
         DraftCommand::Preview { .. } => {
             unreachable!("preview returns before authenticated workflow construction")
@@ -767,13 +765,16 @@ pub async fn execute<A: AdInputApi>(
                 .inspect(&draft_id, include_options.is_some())
                 .await
                 .map_err(workflow_error)?;
-            serde_json::to_value(draft_inspection(
+            let mut inspection = draft_inspection(
                 state,
                 validation,
                 include_fields,
                 include_options.as_deref(),
-            )?)
-            .map_err(|error| AppError::output(error.to_string()))
+            )?;
+            let next_actions = std::mem::take(&mut inspection.next_actions);
+            serde_json::to_value(inspection)
+                .map(|value| (value, Vec::new(), next_actions))
+                .map_err(|error| AppError::output(error.to_string()))
         }
         DraftCommand::Update { draft_id, values } => {
             let input = collect_input(values)?;
@@ -783,90 +784,102 @@ pub async fn execute<A: AdInputApi>(
                 ));
             }
             let input = draft_input::normalize(input, false)?;
-            serde_json::to_value(
-                workflow
-                    .update(&draft_id, &input.values)
-                    .await
-                    .map_err(workflow_error)?,
-            )
-            .map_err(|error| AppError::output(error.to_string()))
+            let result = workflow
+                .update(&draft_id, &input.values)
+                .await
+                .map_err(workflow_error)?;
+            serialize_workflow_result(&result, &result.warnings)
         }
         DraftCommand::Image(ImageArgs {
             command: ImageCommand::Add { draft_id, paths },
-        }) => serde_json::to_value(
-            workflow
+        }) => {
+            let result = workflow
                 .add_images(&draft_id, &paths)
                 .await
-                .map_err(workflow_error)?,
-        )
-        .map_err(|error| AppError::output(error.to_string())),
+                .map_err(workflow_error)?;
+            serialize_workflow_result(&result, &result.warnings)
+        }
         DraftCommand::Image(ImageArgs {
             command:
                 ImageCommand::Remove {
                     draft_id,
                     image_ids,
                 },
-        }) => serde_json::to_value(
-            workflow
+        }) => {
+            let result = workflow
                 .remove_images(&draft_id, &image_ids)
                 .await
-                .map_err(workflow_error)?,
-        )
-        .map_err(|error| AppError::output(error.to_string())),
+                .map_err(workflow_error)?;
+            serialize_workflow_result(&result, &[])
+        }
         DraftCommand::Validate { draft_id } => {
             serde_json::to_value(workflow.validate(&draft_id).await.map_err(workflow_error)?)
+                .map(|value| (value, Vec::new(), Vec::new()))
                 .map_err(|error| AppError::output(error.to_string()))
         }
         DraftCommand::Publish {
             draft_id,
             if_revision,
-        } => serde_json::to_value(
-            workflow
+        } => {
+            let result = workflow
                 .publish(&draft_id, &if_revision)
                 .await
-                .map_err(workflow_error)?,
-        )
-        .map_err(|error| AppError::output(error.to_string())),
+                .map_err(workflow_error)?;
+            serialize_workflow_result(&result, &result.warnings)
+        }
         DraftCommand::Delete { draft_id } => {
             workflow.delete(&draft_id).await.map_err(workflow_error)?;
-            Ok(json!({ "draft_id": draft_id, "deleted": true }))
+            Ok((
+                json!({ "draft_id": draft_id, "deleted": true }),
+                Vec::new(),
+                Vec::new(),
+            ))
         }
     };
-    result.map(|mut value| {
+    result.map(|(mut value, warnings, next_actions)| {
         crate::domain::commerce::normalize_values_output(&mut value);
         normalize_observed_listing_output(&mut value);
-        if let Some(object) = value.as_object_mut() {
-            let reconciled = object
-                .get("warnings")
-                .and_then(Value::as_array)
-                .is_some_and(|warnings| {
-                    warnings.iter().any(|warning| {
-                        warning.as_str().is_some_and(|warning| {
-                            warning.contains("authoritative observation confirmed persisted state")
-                        })
-                    })
-                });
-            let observation_source = if reconciled
-                && matches!(
-                    observation_source,
-                    "draft_creation_response" | "draft_update_response"
-                ) {
-                "draft_detail"
-            } else {
-                observation_source
-            };
-            object.insert(
-                "_observation".to_owned(),
-                serde_json::to_value(if confirms_absence {
-                    Observation::confirmed_absent(observation_source, None)
-                } else {
-                    Observation::confirmed_present(observation_source, None)
-                })
-                .expect("observation is serializable"),
-            );
-        }
-        value
+        let reconciled = warnings.iter().any(|warning| {
+            matches!(
+                warning.code.as_str(),
+                "mutation.response_model_drift" | "mutation.observed_success"
+            )
+        });
+        let observation_source = if reconciled
+            && matches!(
+                observation_source,
+                "draft_creation_response" | "draft_update_response"
+            ) {
+            "draft_detail"
+        } else {
+            observation_source
+        };
+        let observation = if confirms_absence {
+            Observation::confirmed_absent(observation_source, None)
+        } else {
+            Observation::confirmed_present(observation_source, None)
+        };
+        CommandOutcome::new(value)
+            .with_warnings(warnings)
+            .with_next_actions(next_actions)
+            .with_observation(observation)
     })
+}
+
+fn serialize_workflow_result(
+    result: &impl Serialize,
+    warnings: &[WorkflowWarning],
+) -> Result<(Value, Vec<Warning>, Vec<NextAction>), AppError> {
+    let warnings = warnings
+        .iter()
+        .map(|warning| Warning {
+            code: warning.code.to_owned(),
+            message: warning.message.clone(),
+        })
+        .collect();
+    serde_json::to_value(result)
+        .map(|value| (value, warnings, Vec::new()))
+        .map_err(|error| AppError::output(error.to_string()))
 }
 
 fn normalize_observed_listing_output(value: &mut Value) {

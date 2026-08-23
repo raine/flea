@@ -60,25 +60,19 @@ async fn execute_tori(command: ToriCommand) -> Result<super::outcome::CommandOut
             command @ super::draft::DraftCommand::Preview {
                 verify_category: false,
                 ..
-            } => draft::execute_preview(command, None)
-                .await
-                .map(super::outcome::CommandOutcome::from_legacy_value),
+            } => draft::execute_preview(command, None).await,
             command @ super::draft::DraftCommand::Preview {
                 verify_category: true,
                 ..
             } => {
                 let client = tori_session::authenticated_client().await?;
                 let api = HttpListingsApi::new(Arc::new(client));
-                draft::execute_preview(command, Some(&api))
-                    .await
-                    .map(super::outcome::CommandOutcome::from_legacy_value)
+                draft::execute_preview(command, Some(&api)).await
             }
             command => {
                 let client = tori_session::authenticated_client().await?;
                 let api = HttpAdInputApi::new(ClientTransport::new(client));
-                draft::execute(command, api, WorkflowConfig::default())
-                    .await
-                    .map(super::outcome::CommandOutcome::from_legacy_value)
+                draft::execute(command, api, WorkflowConfig::default()).await
             }
         },
         ToriCommand::Favorite(args) => {

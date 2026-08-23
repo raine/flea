@@ -832,6 +832,67 @@ pub struct ListingCopyReport {
     pub image_handling: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorkflowWarning {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl WorkflowWarning {
+    pub fn best_effort(message: impl Into<String>) -> Self {
+        Self {
+            code: "workflow.best_effort_failed",
+            message: message.into(),
+        }
+    }
+
+    pub fn response_model_drift(message: impl Into<String>) -> Self {
+        Self {
+            code: "mutation.response_model_drift",
+            message: message.into(),
+        }
+    }
+
+    pub fn observed_success(message: impl Into<String>) -> Self {
+        Self {
+            code: "mutation.observed_success",
+            message: message.into(),
+        }
+    }
+}
+
+impl Serialize for WorkflowWarning {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.message)
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkflowWarning {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::best_effort)
+    }
+}
+
+impl std::ops::Deref for WorkflowWarning {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.message
+    }
+}
+
+impl PartialEq<&str> for WorkflowWarning {
+    fn eq(&self, other: &&str) -> bool {
+        self.message == *other
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CreateResult {
     pub draft: DraftState,
@@ -841,7 +902,7 @@ pub struct CreateResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listing_copy: Option<ListingCopyReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<WorkflowWarning>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -850,7 +911,7 @@ pub struct AddImagesResult {
     pub draft: DraftState,
     pub image_processing: Vec<ImageProcessingReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<WorkflowWarning>,
 }
 
 impl std::ops::Deref for AddImagesResult {
@@ -872,7 +933,7 @@ pub struct UpdateResult {
     pub etag_changed: bool,
     pub completed_steps: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<WorkflowWarning>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -886,6 +947,6 @@ pub struct PublishResult {
     pub public_url: String,
     pub completed_steps: Vec<String>,
     #[serde(default)]
-    pub warnings: Vec<String>,
+    pub warnings: Vec<WorkflowWarning>,
     pub observed_listing: Value,
 }

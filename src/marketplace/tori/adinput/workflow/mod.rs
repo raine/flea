@@ -1,6 +1,6 @@
 use super::{
     http::ApiError,
-    recovery::WorkflowConfig,
+    recovery::{WorkflowConfig, WorkflowWarning},
     types::{DraftState, model_error},
 };
 use crate::diagnostics;
@@ -13,16 +13,21 @@ mod publish;
 mod recovery;
 mod update;
 
-fn reconciled_mutation_warning(fields: &[String], response_model_drift: bool) -> String {
+fn reconciled_mutation_warning(fields: &[String], response_model_drift: bool) -> WorkflowWarning {
     let response = if response_model_drift {
         "an unrecognized successful mutation response"
     } else {
         "an ambiguous mutation response"
     };
-    format!(
+    let message = format!(
         "Tori returned {response}; authoritative observation confirmed persisted state for {}",
         fields.join(", ")
-    )
+    );
+    if response_model_drift {
+        WorkflowWarning::response_model_drift(message)
+    } else {
+        WorkflowWarning::observed_success(message)
+    }
 }
 
 fn record_mutation_response_drift(context: &diagnostics::WorkflowContext<'_>, error: &ApiError) {

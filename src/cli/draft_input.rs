@@ -4,6 +4,8 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     api::listings::{ListingsApi, ListingsApiError, UpstreamCategory},
+    cli::outcome::CommandOutcome,
+    domain::envelope::Warning,
     error::{AppError, ExitClass},
     marketplace::tori::adinput::{PreparedImage, normalize_category, prepare_image},
 };
@@ -49,7 +51,7 @@ pub async fn preview(
     input: CollectedInput,
     verify_category: bool,
     taxonomy: Option<&dyn ListingsApi>,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     let normalized = normalize(input, true)?;
     let category_machine_value = category_machine_value(normalized.values.get("category"));
     if verify_category && category_machine_value.is_none() {
@@ -139,7 +141,7 @@ pub async fn preview(
         })
     });
 
-    Ok(json!({
+    let data = json!({
         "mode": "local_draft_preview",
         "remote_mutation": "none",
         "local_validation": {
@@ -182,8 +184,9 @@ pub async fn preview(
             "input": create_input,
             "path_policy": "image paths contain file names only; replace them if the images are stored elsewhere",
         },
-        "warnings": warnings,
-    }))
+        "warnings": warnings.iter().map(|warning| &warning.message).collect::<Vec<_>>(),
+    });
+    Ok(CommandOutcome::new(data).with_warnings(warnings))
 }
 
 fn normalize_values(mut values: Map<String, Value>) -> Result<Map<String, Value>, AppError> {
@@ -566,7 +569,7 @@ async fn verify_remote_category(
     taxonomy: Option<&dyn ListingsApi>,
     category: Option<&str>,
     unverifiable: &mut Vec<String>,
-    warnings: &mut Vec<String>,
+    warnings: &mut Vec<Warning>,
 ) -> Result<Value, AppError> {
     if !requested {
         return Ok(json!({
@@ -578,7 +581,10 @@ async fn verify_remote_category(
     }
     let Some(taxonomy) = taxonomy else {
         unverifiable.push("category taxonomy could not be queried".to_owned());
-        warnings.push("authenticated category verification was unavailable".to_owned());
+        warnings.push(Warning {
+            code: "workflow.best_effort_failed".to_owned(),
+            message: "authenticated category verification was unavailable".to_owned(),
+        });
         return Ok(json!({
             "requested": true,
             "status": "unavailable",
@@ -590,7 +596,10 @@ async fn verify_remote_category(
         Ok(categories) => categories,
         Err(error) => {
             unverifiable.push("category taxonomy could not be queried".to_owned());
-            warnings.push("authenticated category verification was unavailable".to_owned());
+            warnings.push(Warning {
+                code: "workflow.best_effort_failed".to_owned(),
+                message: "authenticated category verification was unavailable".to_owned(),
+            });
             return Ok(json!({
                 "requested": true,
                 "status": "unavailable",
@@ -621,8 +630,10 @@ async fn verify_remote_category(
     } else {
         unverifiable
             .push("category selectability was absent from the authenticated taxonomy".to_owned());
-        warnings
-            .push("category existence was verified but selectability was unavailable".to_owned());
+        warnings.push(Warning {
+            code: "workflow.best_effort_failed".to_owned(),
+            message: "category existence was verified but selectability was unavailable".to_owned(),
+        });
         ("partially_verified", json!(["category_exists"]))
     };
     Ok(json!({

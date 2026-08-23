@@ -9,7 +9,7 @@ use crate::marketplace::tori::adinput::{
     normalization::attach_delivery_model,
     recovery::{
         ObservationStatus, PublishResult, RecoveryObservation, RecoveryStatus, WorkflowError,
-        bounded_recovery_text, recovery_scalar,
+        WorkflowWarning, bounded_recovery_text, recovery_scalar,
     },
     types::{DraftState, ImageState, Publication, model_error},
     validation::evaluate_publication,
@@ -94,7 +94,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                 mutations_performed: false,
                 public_url: format!("https://www.tori.fi/recommerce/forsale/item/{draft_id}"),
                 completed_steps: completed,
-                warnings: vec!["listing is already active; no mutation was performed".to_owned()],
+                warnings: vec![WorkflowWarning::best_effort(
+                    "listing is already active; no mutation was performed",
+                )],
                 observed_listing,
             });
         }
@@ -393,12 +395,18 @@ impl<A: AdInputApi> DraftWorkflow<A> {
             Ok(confirmation) => {
                 completed.push("fetch_confirmation".to_owned());
                 if let Err(error) = self.api.track_confirmation(&confirmation).await {
-                    warnings.push(format!("confirmation tracking failed: {}", error.message));
+                    warnings.push(WorkflowWarning::best_effort(format!(
+                        "confirmation tracking failed: {}",
+                        error.message
+                    )));
                 } else {
                     completed.push("track_confirmation".to_owned());
                 }
             }
-            Err(error) => warnings.push(format!("confirmation fetch failed: {}", error.message)),
+            Err(error) => warnings.push(WorkflowWarning::best_effort(format!(
+                "confirmation fetch failed: {}",
+                error.message
+            ))),
         }
 
         let observation_started = tokio::time::Instant::now();

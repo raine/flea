@@ -5,7 +5,7 @@ use super::normalization::values_semantically_equal;
 use super::recovery::{
     AttachmentRecoveryStatus, ImageRecovery, ImageRecoveryOperation, ObservationStatus,
     ProcessingRecoveryStatus, RECOVERY_IMAGE_LIMIT, Recovery, RecoveryStatus, UploadRecoveryStatus,
-    bounded_recovery_text, recovery_priority,
+    WorkflowWarning, bounded_recovery_text, recovery_priority,
 };
 use super::types::{DraftState, ImageState, PublicationCategory};
 use super::validation::delivery_values;
@@ -49,7 +49,7 @@ pub(super) struct FieldProgress {
 pub(super) struct AppliedFieldMutations {
     pub(super) draft: DraftState,
     pub(super) progress: FieldProgress,
-    pub(super) warnings: Vec<String>,
+    pub(super) warnings: Vec<WorkflowWarning>,
 }
 
 pub(super) struct FieldBoundary<'a> {

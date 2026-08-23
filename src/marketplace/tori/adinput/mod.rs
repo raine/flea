@@ -20,7 +20,7 @@ pub use recovery::{
     AddImagesResult, AttachmentRecoveryStatus, CreateRecoveryContract, CreateResult, FieldRecovery,
     ImageRecovery, ImageRecoveryOperation, ListingCopyReport, ObservationStatus,
     ProcessingRecoveryStatus, PublishResult, Recovery, RecoveryObservation, RecoveryStatus,
-    UpdateResult, UploadRecoveryStatus, WorkflowConfig, WorkflowError,
+    UpdateResult, UploadRecoveryStatus, WorkflowConfig, WorkflowError, WorkflowWarning,
 };
 pub use types::{
     CategoryPrediction, CategoryValidation, ComposerModelStatus, Confirmation, DeliveryComposer,
