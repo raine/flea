@@ -155,19 +155,19 @@ impl<'a> VintedListings<'a> {
 
 pub struct HttpVintedListingApi {
     auth: VintedAuthentication,
-    api_base_url: String,
+    portal_api_base_url: String,
 }
 
 impl HttpVintedListingApi {
     pub fn new() -> Self {
         Self {
             auth: VintedAuthentication::new(),
-            api_base_url: VINTED_FI_BINDING.api_host.to_owned(),
+            portal_api_base_url: VINTED_FI_BINDING.portal_api_host.to_owned(),
         }
     }
 
     fn endpoint(&self, path: &str) -> Result<Url, AppError> {
-        let mut url = Url::parse(&self.api_base_url).map_err(|error| {
+        let mut url = Url::parse(&self.portal_api_base_url).map_err(|error| {
             AppError::unexpected("Vinted API binding is invalid").with_source(error)
         })?;
         url.set_path(path);

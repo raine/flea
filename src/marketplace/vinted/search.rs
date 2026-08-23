@@ -123,14 +123,14 @@ impl<'a> VintedSearch<'a> {
 
 pub struct HttpVintedSearchApi {
     auth: VintedAuthentication,
-    api_base_url: String,
+    native_api_base_url: String,
 }
 
 impl HttpVintedSearchApi {
     pub fn new() -> Self {
         Self {
             auth: VintedAuthentication::new(),
-            api_base_url: VINTED_FI_BINDING.api_host.to_owned(),
+            native_api_base_url: VINTED_FI_BINDING.native_api_host.to_owned(),
         }
     }
 
@@ -139,7 +139,7 @@ impl HttpVintedSearchApi {
         credentials: &VintedCredentialRecord,
         request: &CatalogueSearchRequest,
     ) -> Result<Value, AppError> {
-        let url = request_url(&self.api_base_url, request)?;
+        let url = request_url(&self.native_api_base_url, request)?;
         let transport_request = self.auth.authenticated_request(
             Method::GET,
             url.to_string(),
@@ -160,8 +160,8 @@ impl HttpVintedSearchApi {
     }
 
     #[cfg(test)]
-    fn with_api_base_url(mut self, api_base_url: String) -> Self {
-        self.api_base_url = api_base_url;
+    fn with_native_api_base_url(mut self, native_api_base_url: String) -> Self {
+        self.native_api_base_url = native_api_base_url;
         self
     }
 }
@@ -662,7 +662,8 @@ mod tests {
 
     #[test]
     fn test_client_can_override_the_central_api_host() {
-        let api = HttpVintedSearchApi::new().with_api_base_url("http://127.0.0.1:1".to_owned());
-        assert_eq!(api.api_base_url, "http://127.0.0.1:1");
+        let api =
+            HttpVintedSearchApi::new().with_native_api_base_url("http://127.0.0.1:1".to_owned());
+        assert_eq!(api.native_api_base_url, "http://127.0.0.1:1");
     }
 }

@@ -90,14 +90,14 @@ impl<'a> VintedItems<'a> {
 
 pub struct HttpVintedItemApi {
     auth: VintedAuthentication,
-    api_base_url: String,
+    native_api_base_url: String,
 }
 
 impl HttpVintedItemApi {
     pub fn new() -> Self {
         Self {
             auth: VintedAuthentication::new(),
-            api_base_url: VINTED_FI_BINDING.api_host.to_owned(),
+            native_api_base_url: VINTED_FI_BINDING.native_api_host.to_owned(),
         }
     }
 
@@ -106,7 +106,7 @@ impl HttpVintedItemApi {
         credentials: &VintedCredentialRecord,
         item_id: &str,
     ) -> Result<Value, AppError> {
-        let url = item_url(&self.api_base_url, item_id)?;
+        let url = item_url(&self.native_api_base_url, item_id)?;
         let request = self.auth.authenticated_request(
             Method::GET,
             url.to_string(),
@@ -127,8 +127,8 @@ impl HttpVintedItemApi {
     }
 
     #[cfg(test)]
-    fn with_api_base_url(mut self, api_base_url: String) -> Self {
-        self.api_base_url = api_base_url;
+    fn with_native_api_base_url(mut self, native_api_base_url: String) -> Self {
+        self.native_api_base_url = native_api_base_url;
         self
     }
 }
@@ -459,7 +459,8 @@ mod tests {
 
     #[test]
     fn test_client_can_override_the_api_host() {
-        let api = HttpVintedItemApi::new().with_api_base_url("http://127.0.0.1:1".to_owned());
-        assert_eq!(api.api_base_url, "http://127.0.0.1:1");
+        let api =
+            HttpVintedItemApi::new().with_native_api_base_url("http://127.0.0.1:1".to_owned());
+        assert_eq!(api.native_api_base_url, "http://127.0.0.1:1");
     }
 }

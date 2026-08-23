@@ -40,14 +40,14 @@ pub trait VintedPublicationDiscoveryApi: Send + Sync {
 
 pub struct HttpVintedPublicationDiscoveryApi {
     auth: VintedAuthentication,
-    api_base_url: String,
+    portal_api_base_url: String,
 }
 
 impl HttpVintedPublicationDiscoveryApi {
     pub fn new() -> Self {
         Self {
             auth: VintedAuthentication::new(),
-            api_base_url: VINTED_FI_BINDING.host.to_owned(),
+            portal_api_base_url: VINTED_FI_BINDING.portal_api_host.to_owned(),
         }
     }
 
@@ -119,8 +119,8 @@ impl HttpVintedPublicationDiscoveryApi {
 
     fn url(&self, request: &DiscoveryRequest, path: &str) -> Result<Url, AppError> {
         let base_url = match request {
-            DiscoveryRequest::PackageSizes { .. } => VINTED_FI_BINDING.shipping_host,
-            _ => &self.api_base_url,
+            DiscoveryRequest::PackageSizes { .. } => VINTED_FI_BINDING.shipping_api_host,
+            _ => &self.portal_api_base_url,
         };
         let mut url = Url::parse(base_url).map_err(|error| {
             AppError::unexpected("Vinted API binding is invalid").with_source(error)
@@ -134,8 +134,8 @@ impl HttpVintedPublicationDiscoveryApi {
     }
 
     #[cfg(test)]
-    fn with_api_base_url(mut self, api_base_url: String) -> Self {
-        self.api_base_url = api_base_url;
+    fn with_portal_api_base_url(mut self, portal_api_base_url: String) -> Self {
+        self.portal_api_base_url = portal_api_base_url;
         self
     }
 }
@@ -307,9 +307,9 @@ mod tests {
     }
 
     #[test]
-    fn test_api_base_url_can_be_rebound() {
+    fn test_portal_api_base_url_can_be_rebound() {
         let api = HttpVintedPublicationDiscoveryApi::new()
-            .with_api_base_url("http://127.0.0.1:9".to_owned());
+            .with_portal_api_base_url("http://127.0.0.1:9".to_owned());
         assert_eq!(
             api.url(&DiscoveryRequest::Catalogs, "item_upload/catalogs")
                 .unwrap()

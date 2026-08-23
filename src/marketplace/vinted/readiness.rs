@@ -88,25 +88,25 @@ pub trait VintedReadinessApi: Send + Sync {
 
 pub struct HttpVintedReadinessApi {
     auth: VintedAuthentication,
-    api_base_url: String,
+    portal_api_base_url: String,
 }
 
 impl HttpVintedReadinessApi {
     pub fn new() -> Self {
         Self {
             auth: VintedAuthentication::new(),
-            api_base_url: VINTED_FI_BINDING.api_host.to_owned(),
+            portal_api_base_url: VINTED_FI_BINDING.portal_api_host.to_owned(),
         }
     }
 
     #[cfg(test)]
-    fn with_api_base_url(mut self, api_base_url: String) -> Self {
-        self.api_base_url = api_base_url;
+    fn with_portal_api_base_url(mut self, portal_api_base_url: String) -> Self {
+        self.portal_api_base_url = portal_api_base_url;
         self
     }
 
     fn endpoint(&self, path: &str) -> Result<Url, AppError> {
-        let mut url = Url::parse(&self.api_base_url).map_err(|error| {
+        let mut url = Url::parse(&self.portal_api_base_url).map_err(|error| {
             AppError::unexpected("Vinted API binding is invalid").with_source(error)
         })?;
         url.set_path(&format!("{API_V2_PATH}{path}"));
@@ -838,7 +838,8 @@ mod tests {
 
     #[test]
     fn endpoint_can_be_rebound_for_fixture_servers() {
-        let api = HttpVintedReadinessApi::new().with_api_base_url("http://127.0.0.1:9".to_owned());
+        let api =
+            HttpVintedReadinessApi::new().with_portal_api_base_url("http://127.0.0.1:9".to_owned());
         assert_eq!(
             api.endpoint("users/current").unwrap().as_str(),
             "http://127.0.0.1:9/api/v2/users/current"

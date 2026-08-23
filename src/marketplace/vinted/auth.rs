@@ -106,7 +106,7 @@ impl StoredCredential for VintedCredentialRecord {
     }
 }
 
-const PORTAL_BASE_URL: &str = VINTED_FI_BINDING.host;
+const PORTAL_BASE_URL: &str = VINTED_FI_BINDING.portal_api_host;
 const CLIENT_ID: &str = VINTED_FI_BINDING.client_id;
 const SCOPE: &str = "user";
 const CALLBACK_SCHEME: &str = VINTED_FI_BINDING.callback_scheme;
