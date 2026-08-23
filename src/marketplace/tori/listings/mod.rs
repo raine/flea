@@ -10,8 +10,8 @@ pub use gateway::{
     UpstreamStatistics, UpstreamSummaryData,
 };
 pub use taxonomy::{
-    CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions, Taxonomy,
-    TaxonomyApi, UpstreamCategory, UpstreamCategoryTaxonomy,
+    CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategoryRequest, CategoryResult,
+    CategorySearchOptions, Taxonomy, TaxonomyApi, UpstreamCategory, UpstreamCategoryTaxonomy,
 };
 
 use std::{

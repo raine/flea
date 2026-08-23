@@ -3,11 +3,10 @@ use serde::Serialize;
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
-    domain::envelope::NextAction,
     error::AppError,
     marketplace::tori::listings::{
-        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions, Taxonomy,
-        TaxonomyApi,
+        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategoryRequest, CategoryResult,
+        Taxonomy, TaxonomyApi,
     },
 };
 
@@ -73,45 +72,29 @@ pub async fn dispatch(
     command: CategoryArgs,
     api: &dyn TaxonomyApi,
 ) -> Result<CommandOutcome, AppError> {
-    let taxonomy = Taxonomy::new(api);
-    match command.command {
+    let request = match command.command {
         CategoryCommand::Search {
             query,
             parent,
             path,
             limit,
             offset,
-        } => {
-            let result = taxonomy
-                .search_categories_with_options(
-                    &query,
-                    CategorySearchOptions {
-                        parent: parent.as_deref(),
-                        path: path.as_deref(),
-                        offset,
-                        limit,
-                    },
-                )
-                .await?;
-            let next_actions = result
-                .truncated
-                .then(|| NextAction {
-                    command: next_page_command(
-                        &query,
-                        parent.as_deref(),
-                        path.as_deref(),
-                        offset.saturating_add(result.returned),
-                        limit,
-                    ),
-                })
-                .into_iter()
-                .collect();
-            Ok(CommandOutcome::new(CommandData::CategorySearch(result))
-                .with_next_actions(next_actions))
-        }
-        CategoryCommand::List { parent } => Ok(CommandOutcome::new(CommandData::CategoryList(
-            taxonomy.categories(parent.as_deref()).await?,
-        ))),
+        } => CategoryRequest::Search {
+            query,
+            parent,
+            path,
+            offset,
+            limit,
+        },
+        CategoryCommand::List { parent } => CategoryRequest::List { parent },
+    };
+    match Taxonomy::new(api).execute(request).await? {
+        CategoryResult::Search {
+            result,
+            next_actions,
+        } => Ok(CommandOutcome::new(CommandData::CategorySearch(result))
+            .with_next_actions(next_actions)),
+        CategoryResult::List(result) => Ok(CommandOutcome::new(CommandData::CategoryList(result))),
     }
 }
 
@@ -123,27 +106,4 @@ fn parse_category_search_limit(value: &str) -> Result<usize, String> {
         .contains(&limit)
         .then_some(limit)
         .ok_or_else(|| format!("limit must be between 1 and {CATEGORY_SEARCH_LIMIT_MAX}"))
-}
-
-fn next_page_command(
-    query: &str,
-    parent: Option<&str>,
-    path: Option<&str>,
-    offset: usize,
-    limit: usize,
-) -> String {
-    let mut parts = vec!["flea tori category search".to_owned(), shell_quote(query)];
-    if let Some(parent) = parent {
-        parts.push(format!("--parent {}", shell_quote(parent)));
-    }
-    if let Some(path) = path {
-        parts.push(format!("--path {}", shell_quote(path)));
-    }
-    parts.push(format!("--offset {offset}"));
-    parts.push(format!("--limit {limit}"));
-    parts.join(" ")
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }

@@ -10,8 +10,11 @@ use unicode_normalization::UnicodeNormalization;
 
 use super::{ListingsApiError, resource_not_found, upstream_error};
 use crate::{
-    domain::listing::{Category, CategoryList, CategorySearchContext, CategorySearchResult},
     domain::observation::{Observation, ObservationOperation},
+    domain::{
+        envelope::NextAction,
+        listing::{Category, CategoryList, CategorySearchContext, CategorySearchResult},
+    },
     error::AppError,
     retry::{OperationMethod, RetryContext},
 };
@@ -25,6 +28,29 @@ pub trait TaxonomyApi: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<UpstreamCategory>, ListingsApiError>> + Send + '_>>;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CategoryRequest {
+    Search {
+        query: String,
+        parent: Option<String>,
+        path: Option<String>,
+        offset: usize,
+        limit: usize,
+    },
+    List {
+        parent: Option<String>,
+    },
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CategoryResult {
+    Search {
+        result: CategorySearchResult,
+        next_actions: Vec<NextAction>,
+    },
+    List(CategoryList),
+}
+
 pub struct Taxonomy<'a> {
     api: &'a dyn TaxonomyApi,
 }
@@ -32,6 +58,51 @@ pub struct Taxonomy<'a> {
 impl<'a> Taxonomy<'a> {
     pub fn new(api: &'a dyn TaxonomyApi) -> Self {
         Self { api }
+    }
+
+    pub async fn execute(&self, request: CategoryRequest) -> Result<CategoryResult, AppError> {
+        match request {
+            CategoryRequest::Search {
+                query,
+                parent,
+                path,
+                offset,
+                limit,
+            } => {
+                let result = self
+                    .search_categories_with_options(
+                        &query,
+                        CategorySearchOptions {
+                            parent: parent.as_deref(),
+                            path: path.as_deref(),
+                            offset,
+                            limit,
+                        },
+                    )
+                    .await?;
+                let next_actions = result
+                    .truncated
+                    .then(|| NextAction {
+                        command: next_page_command(
+                            &query,
+                            parent.as_deref(),
+                            path.as_deref(),
+                            offset.saturating_add(result.returned),
+                            limit,
+                        ),
+                    })
+                    .into_iter()
+                    .collect();
+                Ok(CategoryResult::Search {
+                    result,
+                    next_actions,
+                })
+            }
+            CategoryRequest::List { parent } => self
+                .categories(parent.as_deref())
+                .await
+                .map(CategoryResult::List),
+        }
     }
 
     pub async fn categories(&self, parent: Option<&str>) -> Result<CategoryList, AppError> {
@@ -473,6 +544,29 @@ fn flatten_categories(roots: &[UpstreamCategory]) -> Result<Vec<Category>, Strin
     let mut output = Vec::new();
     visit(roots, None, "", &[], &mut HashSet::new(), &mut output)?;
     Ok(output)
+}
+
+fn next_page_command(
+    query: &str,
+    parent: Option<&str>,
+    path: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> String {
+    let mut parts = vec!["flea tori category search".to_owned(), shell_quote(query)];
+    if let Some(parent) = parent {
+        parts.push(format!("--parent {}", shell_quote(parent)));
+    }
+    if let Some(path) = path {
+        parts.push(format!("--path {}", shell_quote(path)));
+    }
+    parts.push(format!("--offset {offset}"));
+    parts.push(format!("--limit {limit}"));
+    parts.join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn category_error(error: ListingsApiError) -> AppError {
