@@ -5,4 +5,7 @@ pub mod item;
 pub mod listings;
 pub mod saved_searches;
 pub mod search;
-pub mod signing;
+/// Compatibility path for Tori gateway signing primitives.
+pub mod signing {
+    pub use crate::marketplace::tori::signing::*;
+}

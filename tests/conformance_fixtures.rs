@@ -1,6 +1,6 @@
 use flea::{
-    api::signing::{SigningContext, sign},
     domain::draft::{CategorySchema, DraftValues},
+    marketplace::tori::signing::{SigningContext, sign},
 };
 use serde::Deserialize;
 use serde_json::Value;

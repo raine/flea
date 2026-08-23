@@ -17,7 +17,7 @@ use url::Position;
 
 use crate::retry::{FailureKind, OperationMethod, RetryContext, classify};
 
-use super::signing::{SigningContext, sign};
+use crate::marketplace::tori::signing::{SigningContext, sign};
 
 pub mod compatibility {
     pub const GATEWAY_BASE_URL: &str = "https://apps-gw-poc.svc.tori.fi";
