@@ -3,7 +3,10 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use reqwest::{Method, StatusCode, header::ACCEPT};
+use reqwest::{
+    Method, StatusCode,
+    header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue},
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
 
@@ -13,6 +16,10 @@ use crate::{
     marketplace::{PortalId, vinted::binding::VINTED_FI_BINDING},
     oauth::{SecretString, pkce_challenge, random_secret, random_uuid_secret, states_equal},
     storage::credentials::{CredentialStoreError, StoredCredential},
+    transport::{
+        RequestBody, ReqwestTransport, Transport, TransportError, TransportErrorKind,
+        TransportErrorPhase, TransportRequest, TransportResponse,
+    },
 };
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -178,24 +185,28 @@ impl std::fmt::Debug for VintedAuthCompletion {
 }
 
 #[derive(Clone)]
-pub struct VintedAuthentication {
+pub struct VintedAuthentication<T = ReqwestTransport> {
+    transport: T,
     client: reqwest::Client,
     portal_base_url: String,
 }
 
-impl VintedAuthentication {
+impl VintedAuthentication<ReqwestTransport> {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
             .build()
-            .expect("static Vinted authentication client configuration is valid");
+            .expect("static Vinted search client configuration is valid");
         Self {
+            transport: ReqwestTransport::default(),
             client,
             portal_base_url: PORTAL_BASE_URL.to_owned(),
         }
     }
+}
 
+impl<T: Transport> VintedAuthentication<T> {
     pub fn start(&self, now_unix: u64) -> Result<(VintedOAuthFlow, VintedAuthStart), AppError> {
         let verifier = generate_pkce_verifier();
         let challenge = pkce_challenge(verifier.expose());
@@ -285,34 +296,38 @@ impl VintedAuthentication {
         flow: &VintedOAuthFlow,
         code: &str,
     ) -> Result<VintedTokens, AppError> {
-        let request = self
-            .native_request(
-                Method::POST,
-                format!("{}/oauth/token", self.portal_base_url),
-                flow.device_uuid.expose(),
-                flow.anonymous_id.expose(),
-            )?
-            .header("X-V-Udt", "")
-            .form(&[
+        let mut headers = native_headers(
+            flow.device_uuid.expose(),
+            flow.anonymous_id.expose(),
+            token_execution_error,
+        )?;
+        insert_header(&mut headers, "x-v-udt", "").map_err(token_execution_error)?;
+        let request = transport_request(
+            Method::POST,
+            format!("{}/oauth/token", self.portal_base_url),
+            headers,
+            form_body(&[
                 ("client_id", CLIENT_ID),
                 ("grant_type", "authorization_code"),
                 ("scope", SCOPE),
                 ("code", code),
                 ("redirect_uri", REDIRECT_URI),
                 ("code_verifier", flow.pkce_verifier.expose()),
-            ]);
-        let response = request
-            .send()
+            ]),
+        );
+        let response = self
+            .transport
+            .execute(request)
             .await
-            .map_err(|error| token_transport_error().with_source(error))?;
-        ensure_token_success(response.status())?;
+            .map_err(token_execution_error)?;
+        ensure_token_success(response.status)?;
         let user_device_token = response
-            .headers()
+            .headers
             .get("x-v-udt")
             .and_then(|value| value.to_str().ok())
             .filter(|value| !value.is_empty())
             .map(|value| SecretString::new(value.to_owned()));
-        let decoded: TokenResponse = bounded_json(response, "token_exchange").await?;
+        let decoded: TokenResponse = decode_json(response, "token_exchange")?;
         if decoded.access_token.is_empty()
             || decoded.refresh_token.is_empty()
             || !decoded.token_type.eq_ignore_ascii_case("bearer")
@@ -395,28 +410,37 @@ impl VintedAuthentication {
         access_token: &str,
         user_device_token: Option<&str>,
     ) -> Result<VintedAccount, AppError> {
-        let mut request = self
-            .native_request(
-                Method::GET,
-                format!("{}/api/v2/users/current", self.portal_base_url),
-                device_uuid,
-                anonymous_id,
-            )?
-            .bearer_auth(access_token)
-            .header("X-V-Udt", user_device_token.unwrap_or(""));
+        let mut headers = native_headers(device_uuid, anonymous_id, validation_execution_error)?;
+        insert_header(
+            &mut headers,
+            "authorization",
+            &format!("Bearer {access_token}"),
+        )
+        .map_err(validation_execution_error)?;
+        insert_header(&mut headers, "x-v-udt", user_device_token.unwrap_or(""))
+            .map_err(validation_execution_error)?;
         let jwt = jwt_request_context(access_token);
         if let Some(user_id) = jwt.user_id {
-            request = request.header("X-V-Uid", user_id.expose());
+            insert_header(&mut headers, "x-v-uid", user_id.expose())
+                .map_err(validation_execution_error)?;
         }
         if let Some(session_id) = jwt.session_id {
-            request = request.header("X-V-Sid", session_id.expose());
+            insert_header(&mut headers, "x-v-sid", session_id.expose())
+                .map_err(validation_execution_error)?;
         }
-        let response = request
-            .send()
+        let request = transport_request(
+            Method::GET,
+            format!("{}/api/v2/users/current", self.portal_base_url),
+            headers,
+            RequestBody::Empty,
+        );
+        let response = self
+            .transport
+            .execute(request)
             .await
-            .map_err(|error| validation_transport_error().with_source(error))?;
-        ensure_validation_success(response.status())?;
-        let decoded: CurrentUserResponse = bounded_json(response, "current_user").await?;
+            .map_err(validation_execution_error)?;
+        ensure_validation_success(response.status)?;
+        let decoded: CurrentUserResponse = decode_json(response, "current_user")?;
         let id = identifier(decoded.user.id).ok_or_else(|| unexpected_response("current_user"))?;
         if decoded.user.login.as_deref() == Some("") {
             return Err(unexpected_response("current_user"));
@@ -461,7 +485,7 @@ impl VintedAuthentication {
     }
 }
 
-impl Default for VintedAuthentication {
+impl Default for VintedAuthentication<ReqwestTransport> {
     fn default() -> Self {
         Self::new()
     }
@@ -608,28 +632,94 @@ fn identifier(value: serde_json::Value) -> Option<String> {
     }
 }
 
-async fn bounded_json<T: DeserializeOwned>(
-    mut response: reqwest::Response,
+fn native_headers(
+    device_uuid: &str,
+    anonymous_id: &str,
+    invalid_header: fn(TransportError) -> AppError,
+) -> Result<HeaderMap, AppError> {
+    let local_time = unix_time_millis()?.to_string();
+    let mut headers = HeaderMap::new();
+    for (name, value) in [
+        ("accept", "application/json"),
+        ("user-agent", USER_AGENT),
+        ("x-platform", "android"),
+        ("x-portal", VINTED_FI_BINDING.portal_header),
+        ("x-app-version", APP_VERSION),
+        ("x-os-version", "15"),
+        ("x-device-model", "Google Pixel 6"),
+        ("x-screen-width", "1080"),
+        ("x-screen-height", "2400"),
+        ("x-local-time", &local_time),
+        ("x-anon-id", anonymous_id),
+        ("x-device-uuid", device_uuid),
+        ("locale", ISO_LOCALE),
+        ("accept-language", LOCALE),
+    ] {
+        insert_header(&mut headers, name, value).map_err(invalid_header)?;
+    }
+    Ok(headers)
+}
+
+fn insert_header(
+    headers: &mut HeaderMap,
+    name: &'static str,
+    value: &str,
+) -> Result<(), TransportError> {
+    let value = HeaderValue::from_str(value)
+        .map_err(|_| TransportError::request(TransportErrorKind::Other))?;
+    headers.insert(HeaderName::from_static(name), value);
+    Ok(())
+}
+
+fn form_body(values: &[(&str, &str)]) -> RequestBody {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.extend_pairs(values.iter().copied());
+    RequestBody::Bytes(serializer.finish().into_bytes())
+}
+
+fn transport_request(
+    method: Method,
+    url: String,
+    mut headers: HeaderMap,
+    body: RequestBody,
+) -> TransportRequest {
+    if matches!(body, RequestBody::Bytes(_)) {
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded"),
+        );
+    }
+    TransportRequest {
+        method,
+        url,
+        headers,
+        body,
+        deadline: REQUEST_TIMEOUT,
+        max_response_bytes: MAX_RESPONSE_BYTES,
+    }
+}
+
+fn token_execution_error(error: TransportError) -> AppError {
+    if error.phase == TransportErrorPhase::Response {
+        unexpected_response("token_exchange").with_source(error)
+    } else {
+        token_transport_error().with_source(error)
+    }
+}
+
+fn validation_execution_error(error: TransportError) -> AppError {
+    if error.phase == TransportErrorPhase::Response {
+        unexpected_response("current_user").with_source(error)
+    } else {
+        validation_transport_error().with_source(error)
+    }
+}
+
+fn decode_json<T: DeserializeOwned>(
+    response: TransportResponse,
     stage: &'static str,
 ) -> Result<T, AppError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-    {
-        return Err(unexpected_response(stage));
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| unexpected_response(stage).with_source(error))?
-    {
-        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-            return Err(unexpected_response(stage));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&body).map_err(|_| unexpected_response(stage))
+    serde_json::from_slice(&response.body).map_err(|_| unexpected_response(stage))
 }
 
 fn ensure_token_success(status: StatusCode) -> Result<(), AppError> {
