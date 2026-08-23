@@ -94,6 +94,21 @@ pub enum PublicItemApiError {
     Unexpected(Sensitive<String>),
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShowItemRequest {
+    pub listing_id: String,
+    pub raw: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ShowItemResult {
+    Detail {
+        item: PublicItemDetail,
+        observation: Observation,
+    },
+    Raw(Value),
+}
+
 pub struct PublicItems<'a> {
     api: &'a dyn PublicItemApi,
 }
@@ -101,6 +116,18 @@ pub struct PublicItems<'a> {
 impl<'a> PublicItems<'a> {
     pub fn new(api: &'a dyn PublicItemApi) -> Self {
         Self { api }
+    }
+
+    pub async fn execute(&self, request: ShowItemRequest) -> Result<ShowItemResult, AppError> {
+        let (item, raw) = self.show(&request.listing_id).await?;
+        if request.raw {
+            Ok(ShowItemResult::Raw(raw))
+        } else {
+            Ok(ShowItemResult::Detail {
+                item,
+                observation: Observation::confirmed_present("public_listing_detail", None),
+            })
+        }
     }
 
     pub async fn show(&self, listing_id: &str) -> Result<(PublicItemDetail, Value), AppError> {

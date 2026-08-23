@@ -2,9 +2,8 @@ use clap::{Args, Subcommand};
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
-    domain::observation::Observation,
     error::AppError,
-    marketplace::tori::item::{PublicItemApi, PublicItems},
+    marketplace::tori::item::{PublicItemApi, PublicItems, ShowItemRequest, ShowItemResult},
 };
 
 #[derive(Debug, Args)]
@@ -38,17 +37,13 @@ impl ItemCommand {
 }
 
 pub async fn dispatch(args: ItemArgs, api: &dyn PublicItemApi) -> Result<CommandOutcome, AppError> {
-    match args.command {
-        ItemCommand::Show { listing_id, raw } => {
-            let (detail, upstream) = PublicItems::new(api).show(&listing_id).await?;
-            if raw {
-                return Ok(CommandOutcome::new(CommandData::Raw(upstream)));
-            }
-            Ok(
-                CommandOutcome::new(CommandData::Item(detail)).with_observation(
-                    Observation::confirmed_present("public_listing_detail", None),
-                ),
-            )
+    let request = match args.command {
+        ItemCommand::Show { listing_id, raw } => ShowItemRequest { listing_id, raw },
+    };
+    match PublicItems::new(api).execute(request).await? {
+        ShowItemResult::Detail { item, observation } => {
+            Ok(CommandOutcome::new(CommandData::Item(item)).with_observation(observation))
         }
+        ShowItemResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
     }
 }
