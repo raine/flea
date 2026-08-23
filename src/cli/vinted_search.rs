@@ -1,14 +1,7 @@
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    cli::outcome::CommandData,
-    error::AppError,
-    marketplace::vinted::{
-        auth::VintedCredentialRecord,
-        search::{SEARCH_LIMIT_DEFAULT, SearchRequest, SearchSort, VintedSearchApi},
-    },
-};
+use crate::marketplace::vinted::search::{SearchRequest, SearchSort};
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
@@ -61,22 +54,16 @@ pub struct VintedSearchArgs {
     pub raw: bool,
 }
 
-pub async fn dispatch(
-    args: VintedSearchArgs,
-    credentials: &VintedCredentialRecord,
-    api: &dyn VintedSearchApi,
-) -> Result<CommandData, AppError> {
-    let request = SearchRequest {
-        query: args.query.unwrap_or_default(),
-        price_from: args.price_from,
-        price_to: args.price_to,
-        sort: args.sort.unwrap_or(VintedSearchSort::Relevance).into(),
-        page: args.page.unwrap_or(1),
-        limit: args.limit.unwrap_or(SEARCH_LIMIT_DEFAULT),
-    };
-    let (normalized, raw) = api.execute(credentials, &request).await?;
-    if args.raw {
-        return Ok(CommandData::Raw(raw));
+impl From<VintedSearchArgs> for SearchRequest {
+    fn from(args: VintedSearchArgs) -> Self {
+        Self {
+            query: args.query,
+            price_from: args.price_from,
+            price_to: args.price_to,
+            sort: args.sort.map(Into::into),
+            page: args.page,
+            limit: args.limit,
+            raw: args.raw,
+        }
     }
-    Ok(CommandData::Search(normalized))
 }

@@ -10,9 +10,12 @@ use crate::{
         search::{SearchCollection, SearchListing, SearchPagination, SearchPrice},
     },
     error::{AppError, ExitClass},
-    marketplace::vinted::{
-        auth::{VintedAuthentication, VintedCredentialRecord},
-        binding::VINTED_FI_BINDING,
+    marketplace::{
+        PortalId,
+        vinted::{
+            auth::{VintedAuthentication, VintedCredentialRecord},
+            binding::VINTED_FI_BINDING,
+        },
     },
 };
 
@@ -41,8 +44,19 @@ impl SearchSort {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SearchRequest {
+    pub query: Option<String>,
+    pub price_from: Option<u64>,
+    pub price_to: Option<u64>,
+    pub sort: Option<SearchSort>,
+    pub page: Option<usize>,
+    pub limit: Option<usize>,
+    pub raw: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CatalogueSearchRequest {
     pub query: String,
     pub price_from: Option<u64>,
     pub price_to: Option<u64>,
@@ -51,20 +65,67 @@ pub struct SearchRequest {
     pub limit: usize,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum SearchResult {
+    Search(SearchCollection),
+    Raw(Value),
+}
+
+pub trait VintedSearchSession: Send + Sync {
+    fn credentials(&self, portal: PortalId) -> Result<VintedCredentialRecord, AppError>;
+}
+
+impl<F> VintedSearchSession for F
+where
+    F: Fn(PortalId) -> Result<VintedCredentialRecord, AppError> + Send + Sync,
+{
+    fn credentials(&self, portal: PortalId) -> Result<VintedCredentialRecord, AppError> {
+        self(portal)
+    }
+}
+
 pub trait VintedSearchApi: Send + Sync {
     fn execute<'a>(
         &'a self,
         credentials: &'a VintedCredentialRecord,
-        request: &'a SearchRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<(SearchCollection, Value), AppError>> + Send + 'a>>;
+        request: &'a CatalogueSearchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>>;
 }
 
-pub struct VintedSearch {
+pub struct VintedSearch<'a> {
+    session: &'a dyn VintedSearchSession,
+    api: &'a dyn VintedSearchApi,
+}
+
+impl<'a> VintedSearch<'a> {
+    pub fn new(session: &'a dyn VintedSearchSession, api: &'a dyn VintedSearchApi) -> Self {
+        Self { session, api }
+    }
+
+    pub async fn execute(
+        &self,
+        portal: PortalId,
+        input: SearchRequest,
+    ) -> Result<SearchResult, AppError> {
+        let credentials = self.session.credentials(portal)?;
+        let raw_output = input.raw;
+        let request = prepare_request(input)?;
+        let raw = self.api.execute(&credentials, &request).await?;
+        let normalized = normalize_search(&raw, &request)?;
+        if raw_output {
+            Ok(SearchResult::Raw(raw))
+        } else {
+            Ok(SearchResult::Search(normalized))
+        }
+    }
+}
+
+pub struct HttpVintedSearchApi {
     auth: VintedAuthentication,
     api_base_url: String,
 }
 
-impl VintedSearch {
+impl HttpVintedSearchApi {
     pub fn new() -> Self {
         Self {
             auth: VintedAuthentication::new(),
@@ -75,9 +136,8 @@ impl VintedSearch {
     async fn execute_request(
         &self,
         credentials: &VintedCredentialRecord,
-        request: &SearchRequest,
-    ) -> Result<(SearchCollection, Value), AppError> {
-        validate_request(request)?;
+        request: &CatalogueSearchRequest,
+    ) -> Result<Value, AppError> {
         let url = request_url(&self.api_base_url, request)?;
         let response = self
             .auth
@@ -89,9 +149,7 @@ impl VintedSearch {
         if !status.is_success() {
             return Err(status_error(status));
         }
-        let raw = bounded_json(response).await?;
-        let normalized = normalize_search(&raw, request)?;
-        Ok((normalized, raw))
+        bounded_json(response).await
     }
 
     #[cfg(test)]
@@ -101,24 +159,36 @@ impl VintedSearch {
     }
 }
 
-impl VintedSearchApi for VintedSearch {
+impl VintedSearchApi for HttpVintedSearchApi {
     fn execute<'a>(
         &'a self,
         credentials: &'a VintedCredentialRecord,
-        request: &'a SearchRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<(SearchCollection, Value), AppError>> + Send + 'a>>
-    {
+        request: &'a CatalogueSearchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
         Box::pin(self.execute_request(credentials, request))
     }
 }
 
-impl Default for VintedSearch {
+impl Default for HttpVintedSearchApi {
     fn default() -> Self {
         Self::new()
     }
 }
 
-fn validate_request(request: &SearchRequest) -> Result<(), AppError> {
+fn prepare_request(input: SearchRequest) -> Result<CatalogueSearchRequest, AppError> {
+    let request = CatalogueSearchRequest {
+        query: input.query.unwrap_or_default(),
+        price_from: input.price_from,
+        price_to: input.price_to,
+        sort: input.sort.unwrap_or(SearchSort::Relevance),
+        page: input.page.unwrap_or(1),
+        limit: input.limit.unwrap_or(SEARCH_LIMIT_DEFAULT),
+    };
+    validate_request(&request)?;
+    Ok(request)
+}
+
+fn validate_request(request: &CatalogueSearchRequest) -> Result<(), AppError> {
     if request.query.len() > 256 {
         return Err(AppError::usage("search query must be at most 256 bytes"));
     }
@@ -144,7 +214,7 @@ fn validate_request(request: &SearchRequest) -> Result<(), AppError> {
     Ok(())
 }
 
-fn request_url(base_url: &str, request: &SearchRequest) -> Result<Url, AppError> {
+fn request_url(base_url: &str, request: &CatalogueSearchRequest) -> Result<Url, AppError> {
     let mut url = Url::parse(base_url).map_err(|error| {
         AppError::unexpected("Vinted API binding is invalid").with_source(error)
     })?;
@@ -189,7 +259,10 @@ async fn bounded_json(mut response: reqwest::Response) -> Result<Value, AppError
     serde_json::from_slice(&body).map_err(|_| unexpected_response("response was not valid JSON"))
 }
 
-fn normalize_search(raw: &Value, request: &SearchRequest) -> Result<SearchCollection, AppError> {
+fn normalize_search(
+    raw: &Value,
+    request: &CatalogueSearchRequest,
+) -> Result<SearchCollection, AppError> {
     let body = raw.get("data").unwrap_or(raw);
     let items = body
         .get("items")
@@ -308,7 +381,7 @@ fn absolute_item_url(value: &str, listing_id: &str) -> String {
     }
 }
 
-fn applied_filters(request: &SearchRequest) -> Vec<crate::domain::search::AppliedFilter> {
+fn applied_filters(request: &CatalogueSearchRequest) -> Vec<crate::domain::search::AppliedFilter> {
     let mut filters = Vec::new();
     if let Some(value) = request.price_from {
         filters.push(crate::domain::search::AppliedFilter {
@@ -390,10 +463,67 @@ fn unexpected_response(reason: &str) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
 
-    fn request() -> SearchRequest {
-        SearchRequest {
+    struct FixtureApi {
+        response: Value,
+        requests: Mutex<Vec<CatalogueSearchRequest>>,
+    }
+
+    impl FixtureApi {
+        fn new(response: Value) -> Self {
+            Self {
+                response,
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl VintedSearchApi for FixtureApi {
+        fn execute<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            request: &'a CatalogueSearchRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            self.requests.lock().unwrap().push(request.clone());
+            Box::pin(async { Ok(self.response.clone()) })
+        }
+    }
+
+    fn credentials() -> VintedCredentialRecord {
+        VintedCredentialRecord {
+            portal: PortalId::Fi,
+            user_id: "user-1".to_owned(),
+            login: Some("fixture".to_owned()),
+            access_token: "access".to_owned(),
+            refresh_token: "refresh".to_owned(),
+            access_expires_at_unix: u64::MAX,
+            device_uuid: "device".to_owned(),
+            anonymous_id: "anonymous".to_owned(),
+            user_device_token: None,
+        }
+    }
+
+    fn response() -> Value {
+        serde_json::json!({
+            "items": [{
+                "id": 123,
+                "title": "Villakangastakki",
+                "price": { "amount": "25.50", "currency_code": "EUR" }
+            }],
+            "pagination": {
+                "current_page": 1,
+                "per_page": 20,
+                "total_entries": 1,
+                "total_pages": 1
+            }
+        })
+    }
+
+    fn request() -> CatalogueSearchRequest {
+        CatalogueSearchRequest {
             query: "takki".to_owned(),
             price_from: Some(10),
             price_to: Some(50),
@@ -401,6 +531,63 @@ mod tests {
             page: 2,
             limit: 20,
         }
+    }
+
+    #[tokio::test]
+    async fn service_prepares_defaults_and_shapes_normalized_output() {
+        let api = FixtureApi::new(response());
+        let session = |portal| {
+            assert_eq!(portal, PortalId::Fi);
+            Ok(credentials())
+        };
+
+        let output = VintedSearch::new(&session, &api)
+            .execute(
+                PortalId::Fi,
+                SearchRequest {
+                    query: Some("takki".to_owned()),
+                    ..SearchRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let SearchResult::Search(collection) = output else {
+            panic!("expected normalized search output");
+        };
+        assert_eq!(collection.query, "takki");
+        assert_eq!(collection.results[0].listing_id, "123");
+        assert_eq!(
+            api.requests.lock().unwrap().as_slice(),
+            &[CatalogueSearchRequest {
+                query: "takki".to_owned(),
+                price_from: None,
+                price_to: None,
+                sort: SearchSort::Relevance,
+                page: 1,
+                limit: SEARCH_LIMIT_DEFAULT,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn service_returns_the_exact_raw_document_after_normalization() {
+        let response = response();
+        let api = FixtureApi::new(response.clone());
+        let session = |_| Ok(credentials());
+
+        let output = VintedSearch::new(&session, &api)
+            .execute(
+                PortalId::Fi,
+                SearchRequest {
+                    raw: true,
+                    ..SearchRequest::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(output, SearchResult::Raw(response));
     }
 
     #[test]
@@ -461,7 +648,7 @@ mod tests {
 
     #[test]
     fn test_client_can_override_the_central_api_host() {
-        let search = VintedSearch::new().with_api_base_url("http://127.0.0.1:1".to_owned());
-        assert_eq!(search.api_base_url, "http://127.0.0.1:1");
+        let api = HttpVintedSearchApi::new().with_api_base_url("http://127.0.0.1:1".to_owned());
+        assert_eq!(api.api_base_url, "http://127.0.0.1:1");
     }
 }

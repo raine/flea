@@ -4,7 +4,7 @@ use crate::{
     cli::{
         Command, ToriCommand, VintedCommand,
         auth::{ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand},
-        category, draft, favorite, listing, saved_search, vinted_search,
+        category, draft, favorite, listing, saved_search,
     },
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
@@ -25,7 +25,10 @@ use crate::{
         },
         vinted::{
             auth::VintedCredentialRecord,
-            search::{VintedSearch, VintedSearchApi},
+            search::{
+                HttpVintedSearchApi, SearchResult as VintedSearchResult, VintedSearch,
+                VintedSearchApi, VintedSearchSession,
+            },
             session as vinted_session,
         },
     },
@@ -41,15 +44,13 @@ type OutcomeFuture = Pin<Box<dyn Future<Output = Result<CommandOutcome, AppError
 type ToriClientFuture = Pin<Box<dyn Future<Output = Result<Arc<dyn ToriClient>, AppError>>>>;
 type ToriAuthHandler = dyn Fn(ToriAuthArgs) -> OutcomeFuture + Send + Sync;
 type VintedAuthHandler = dyn Fn(PortalId, VintedAuthArgs) -> OutcomeFuture + Send + Sync;
-type VintedCredentialsProvider =
-    dyn Fn(PortalId) -> Result<VintedCredentialRecord, AppError> + Send + Sync;
 
 pub struct ApplicationDependencies {
     public_tori_client: Arc<dyn ToriClient>,
     authenticated_tori_client: Arc<dyn Fn() -> ToriClientFuture + Send + Sync>,
     tori_auth: Arc<ToriAuthHandler>,
     vinted_auth: Arc<VintedAuthHandler>,
-    vinted_credentials: Arc<VintedCredentialsProvider>,
+    vinted_search_session: Arc<dyn VintedSearchSession>,
     vinted_search: Arc<dyn VintedSearchApi>,
 }
 
@@ -66,8 +67,8 @@ impl ApplicationDependencies {
             }),
             tori_auth: Arc::new(|args| Box::pin(execute_tori_auth(args))),
             vinted_auth: Arc::new(|portal, args| Box::pin(execute_vinted_auth(portal, args))),
-            vinted_credentials: Arc::new(vinted_session::credentials),
-            vinted_search: Arc::new(VintedSearch::new()),
+            vinted_search_session: Arc::new(vinted_session::credentials),
+            vinted_search: Arc::new(HttpVintedSearchApi::new()),
         }
     }
 
@@ -102,7 +103,7 @@ impl ApplicationDependencies {
     where
         F: Fn(PortalId) -> Result<VintedCredentialRecord, AppError> + Send + Sync + 'static,
     {
-        self.vinted_credentials = Arc::new(provider);
+        self.vinted_search_session = Arc::new(provider);
         self
     }
 
@@ -226,12 +227,18 @@ async fn execute_vinted(
         VintedCommand::Capabilities => Ok(CommandOutcome::new(
             CommandData::MarketplaceCapabilities(marketplace_capabilities(MarketplaceId::Vinted)),
         )),
-        VintedCommand::Search(args) => {
-            let credentials = (dependencies.vinted_credentials)(portal)?;
-            vinted_search::dispatch(args, &credentials, dependencies.vinted_search.as_ref())
-                .await
-                .map(CommandOutcome::new)
-        }
+        VintedCommand::Search(args) => match VintedSearch::new(
+            dependencies.vinted_search_session.as_ref(),
+            dependencies.vinted_search.as_ref(),
+        )
+        .execute(portal, args.into())
+        .await?
+        {
+            VintedSearchResult::Search(collection) => {
+                Ok(CommandOutcome::new(CommandData::Search(collection)))
+            }
+            VintedSearchResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
+        },
         VintedCommand::Unsupported(parts) => Err(capability_unavailable(
             MarketplaceContext::VINTED_FI,
             first_external_command(&parts),
