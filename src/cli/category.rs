@@ -1,12 +1,13 @@
 use clap::{Args, Subcommand};
 use serde::Serialize;
-use serde_json::{Value, json};
 
 use crate::{
     api::listings::{
         CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions, Listings,
         ListingsApi,
     },
+    cli::outcome::CommandOutcome,
+    domain::envelope::NextAction,
     error::AppError,
 };
 
@@ -62,7 +63,7 @@ pub enum CategoryCommand {
 pub async fn dispatch_with_api(
     command: CategoryArgs,
     api: &dyn ListingsApi,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     let listings = Listings::new(api);
     match command.command {
         CategoryCommand::Search {
@@ -83,25 +84,26 @@ pub async fn dispatch_with_api(
                     },
                 )
                 .await?;
-            let mut value = serde_json::to_value(&result)
+            let value = serde_json::to_value(&result)
                 .map_err(|error| AppError::output(error.to_string()))?;
-            if result.truncated {
-                let command = next_page_command(
-                    &query,
-                    parent.as_deref(),
-                    path.as_deref(),
-                    offset.saturating_add(result.returned),
-                    limit,
-                );
-                value
-                    .as_object_mut()
-                    .expect("category search output is an object")
-                    .insert("_next_actions".to_owned(), json!([{ "command": command }]));
-            }
-            Ok(value)
+            let next_actions = result
+                .truncated
+                .then(|| NextAction {
+                    command: next_page_command(
+                        &query,
+                        parent.as_deref(),
+                        path.as_deref(),
+                        offset.saturating_add(result.returned),
+                        limit,
+                    ),
+                })
+                .into_iter()
+                .collect();
+            Ok(CommandOutcome::new(value).with_next_actions(next_actions))
         }
         CategoryCommand::List { parent } => {
             serde_json::to_value(listings.categories(parent.as_deref()).await?)
+                .map(CommandOutcome::new)
                 .map_err(|error| AppError::output(error.to_string()))
         }
     }

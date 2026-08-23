@@ -18,8 +18,12 @@ use crate::{
             SEARCH_RADIUS_MAX_KM, UpstreamSearchRequest,
         },
     },
-    domain::search::{
-        SearchCollection, SearchExplainFailure, SearchExplainSummary, SearchMatchExplanation,
+    cli::outcome::CommandOutcome,
+    domain::{
+        envelope::NextAction,
+        search::{
+            SearchCollection, SearchExplainFailure, SearchExplainSummary, SearchMatchExplanation,
+        },
     },
     error::AppError,
 };
@@ -207,7 +211,7 @@ struct SearchInput {
 pub async fn dispatch_with_api(
     args: SearchArgs,
     api: &dyn PublicSearchApi,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     dispatch_with_apis(args, api, None).await
 }
 
@@ -215,7 +219,7 @@ pub async fn dispatch_with_apis(
     args: SearchArgs,
     api: &dyn PublicSearchApi,
     item_api: Option<&dyn PublicItemApi>,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     let prepared = prepare(args, api).await?;
     let input = prepared.input;
     let request = prepared.request;
@@ -224,7 +228,7 @@ pub async fn dispatch_with_apis(
         .execute_with_area(&request, prepared.resolved_location, prepared.resolved_area)
         .await?;
     if input.raw {
-        return Ok(raw);
+        return Ok(raw.into());
     }
     if let Some(request_limit) = input.explain {
         let item_api = item_api.ok_or_else(|| {
@@ -232,30 +236,30 @@ pub async fn dispatch_with_apis(
         })?;
         explain_matches(&mut result, item_api, request_limit).await;
     }
-    let mut value = serde_json::to_value(&result).map_err(|error| {
+    let value = serde_json::to_value(&result).map_err(|error| {
         AppError::output("failed to serialize search output").with_source(error)
     })?;
     let mut actions = Vec::new();
     if let Some(next_page) = result.pagination.next_page {
-        actions.push(json!({
-            "command": next_page_command(
+        actions.push(NextAction {
+            command: next_page_command(
                 &request,
                 next_page,
                 result.resolved_area.as_ref(),
                 input.explain,
-            )
-        }));
+            ),
+        });
     } else if result.pagination.capped {
         let mut refinement = request.clone();
         refinement.include_filters = true;
-        actions.push(json!({
-            "command": next_page_command(
+        actions.push(NextAction {
+            command: next_page_command(
                 &refinement,
                 1,
                 result.resolved_area.as_ref(),
                 input.explain,
-            )
-        }));
+            ),
+        });
     }
     if let Some(option_count) = result
         .facets
@@ -274,37 +278,24 @@ pub async fn dispatch_with_apis(
                     .min(SEARCH_FACET_OPTION_LIMIT_MAX)
                     .max(current_limit + 1),
             );
-            actions.push(json!({
-                "command": next_page_command(
+            actions.push(NextAction {
+                command: next_page_command(
                     &broader,
                     request.page,
                     result.resolved_area.as_ref(),
                     input.explain,
                 ),
-                "reason": "facet_options_truncated"
-            }));
+            });
         } else {
-            actions.push(json!({
-                "command": format!(
+            actions.push(NextAction {
+                command: format!(
                     "{} --raw",
-                    next_page_command(
-                        &request,
-                        request.page,
-                        result.resolved_area.as_ref(),
-                        None,
-                    )
+                    next_page_command(&request, request.page, result.resolved_area.as_ref(), None,)
                 ),
-                "reason": "facet_options_truncated"
-            }));
+            });
         }
     }
-    if !actions.is_empty() {
-        value
-            .as_object_mut()
-            .expect("search output is an object")
-            .insert("_next_actions".to_owned(), Value::Array(actions));
-    }
-    Ok(value)
+    Ok(CommandOutcome::new(value).with_next_actions(actions))
 }
 
 struct PreparedSearch {

@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+
 use serde_json::Value;
 
 use crate::domain::{
@@ -71,6 +73,26 @@ impl CommandOutcome {
 impl From<Value> for CommandOutcome {
     fn from(data: Value) -> Self {
         Self::new(data)
+    }
+}
+
+impl Deref for CommandOutcome {
+    type Target = Value;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl DerefMut for CommandOutcome {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
+    }
+}
+
+impl PartialEq<Value> for CommandOutcome {
+    fn eq(&self, other: &Value) -> bool {
+        self.data == *other
     }
 }
 

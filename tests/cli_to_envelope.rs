@@ -69,17 +69,16 @@ struct TestRuntime {
 impl CommandRuntime for TestRuntime {
     fn execute(&self, command: Command) -> CommandFuture<'_> {
         Box::pin(async move {
-            let result = match command {
+            match command {
                 Command::Tori(args) => match args.command {
                     ToriCommand::Auth(args) => match args.command {
                         flea::cli::auth::AuthCommand::Login => {
-                            Ok(json!({ "authenticated": true, "user_id": "user-1" }))
+                            Ok(json!({ "authenticated": true, "user_id": "user-1" }).into())
                         }
-                        command => {
-                            AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
-                                .dispatch(command)
-                                .await
-                        }
+                        command => AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
+                            .dispatch(command)
+                            .await
+                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value),
                     },
                     ToriCommand::Capabilities => {
                         unreachable!("capabilities use the production runtime")
@@ -92,34 +91,43 @@ impl CommandRuntime for TestRuntime {
                         command @ flea::cli::draft::DraftCommand::Preview {
                             verify_category: false,
                             ..
-                        } => draft::execute_preview(command, None).await,
+                        } => draft::execute_preview(command, None)
+                            .await
+                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value),
                         command @ flea::cli::draft::DraftCommand::Preview {
                             verify_category: true,
                             ..
                         } => {
                             let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                            draft::execute_preview(command, Some(&api)).await
+                            draft::execute_preview(command, Some(&api))
+                                .await
+                                .map(flea::cli::outcome::CommandOutcome::from_legacy_value)
                         }
-                        command => {
-                            draft::execute(
-                                command,
-                                HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
-                                WorkflowConfig::default(),
-                            )
-                            .await
-                        }
+                        command => draft::execute(
+                            command,
+                            HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
+                            WorkflowConfig::default(),
+                        )
+                        .await
+                        .map(flea::cli::outcome::CommandOutcome::from_legacy_value),
                     },
                     ToriCommand::Favorite(args) => {
                         let api = HttpFavoritesApi::new(Arc::new(self.client.clone()));
-                        favorite::dispatch_with_api(args, &api).await
+                        favorite::dispatch_with_api(args, &api)
+                            .await
+                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value)
                     }
                     ToriCommand::Item(args) => {
                         let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
-                        item::dispatch_with_api(args, &api).await
+                        item::dispatch_with_api(args, &api)
+                            .await
+                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value)
                     }
                     ToriCommand::Listing(args) => {
                         let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                        listing::dispatch_with_api(args, &api).await
+                        listing::dispatch_with_api(args, &api)
+                            .await
+                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value)
                     }
                     ToriCommand::Search(args) => {
                         let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
@@ -128,20 +136,23 @@ impl CommandRuntime for TestRuntime {
                     ToriCommand::SavedSearch(args) => {
                         let api = HttpSavedSearchesApi::new(Arc::new(self.client.clone()));
                         let search_api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                        saved_search::dispatch_with_apis(*args, &api, &search_api).await
+                        saved_search::dispatch_with_apis(*args, &api, &search_api)
+                            .await
+                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value)
                     }
                     ToriCommand::Location(args) => {
                         let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                        location::dispatch_with_api(args, &api).await
+                        location::dispatch_with_api(args, &api)
+                            .await
+                            .map(Into::into)
                     }
                 },
-                Command::Skill(args) => flea::cli::skill::dispatch(args),
+                Command::Skill(args) => flea::cli::skill::dispatch(args).map(Into::into),
                 Command::Capabilities
                 | Command::Marketplaces
                 | Command::Vinted(_)
                 | Command::Unsupported(_) => unreachable!("command uses the production runtime"),
-            };
-            result.map(flea::cli::outcome::CommandOutcome::from_legacy_value)
+            }
         })
     }
 }

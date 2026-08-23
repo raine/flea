@@ -315,7 +315,7 @@ async fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
     assert_eq!(output["resolved_area"]["locations"][0]["name"], "Helsinki");
     assert_eq!(output["resolved_area"]["locations"][2]["name"], "Vantaa");
     assert_eq!(
-        output["_next_actions"][0]["command"],
+        output.next_actions[0].command,
         "flea tori search 'tuoli' --area '1.100018.110091,1.100018.110049,1.100018.110092' --page 2 --limit 20"
     );
 }
@@ -424,11 +424,8 @@ async fn bounds_and_prioritizes_large_category_and_location_facets() {
         assert_eq!(facet["options"][1]["hits"], 7);
     }
     assert_eq!(
-        output["_next_actions"][0],
-        json!({
-            "command": "flea tori search 'GPU' --include-facets --facet-option-limit 103 --page 1 --limit 20",
-            "reason": "facet_options_truncated"
-        })
+        output.next_actions[0].command,
+        "flea tori search 'GPU' --include-facets --facet-option-limit 103 --page 1 --limit 20"
     );
 
     let cli = Cli::parse_from([
@@ -451,7 +448,7 @@ async fn bounds_and_prioritizes_large_category_and_location_facets() {
         );
         assert_eq!(facet["truncated"], false);
     }
-    assert!(broader.get("_next_actions").is_none());
+    assert!(broader.next_actions.is_empty());
 }
 
 #[tokio::test]
@@ -599,7 +596,7 @@ async fn page_cap_action_requests_facets_for_executable_refinement() {
     let output = search::dispatch_with_api(*args, &api).await.unwrap();
 
     assert_eq!(
-        output["_next_actions"][0]["command"],
+        output.next_actions[0].command,
         "flea tori search 'tuoli' --include-facets --page 1 --limit 20"
     );
 }

@@ -35,23 +35,26 @@ pub struct ProductionRuntime;
 impl CommandRuntime for ProductionRuntime {
     fn execute(&self, command: Command) -> CommandFuture<'_> {
         Box::pin(async move {
-            let result = match command {
-                Command::Capabilities => capabilities_output(),
-                Command::Marketplaces => marketplaces_output(),
+            match command {
+                Command::Capabilities => capabilities_output().map(Into::into),
+                Command::Marketplaces => marketplaces_output().map(Into::into),
                 Command::Tori(args) => execute_tori(args.command).await,
-                Command::Vinted(args) => execute_vinted(args.portal, args.command).await,
-                Command::Skill(args) => super::skill::dispatch(args),
+                Command::Vinted(args) => execute_vinted(args.portal, args.command)
+                    .await
+                    .map(super::outcome::CommandOutcome::from_legacy_value),
+                Command::Skill(args) => super::skill::dispatch(args).map(Into::into),
                 Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
-            };
-            result.map(super::outcome::CommandOutcome::from_legacy_value)
+            }
         })
     }
 }
 
-async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
+async fn execute_tori(command: ToriCommand) -> Result<super::outcome::CommandOutcome, AppError> {
     match command {
-        ToriCommand::Auth(args) => execute_tori_auth(args).await,
-        ToriCommand::Capabilities => marketplace_capabilities(MarketplaceId::Tori),
+        ToriCommand::Auth(args) => execute_tori_auth(args)
+            .await
+            .map(super::outcome::CommandOutcome::from_legacy_value),
+        ToriCommand::Capabilities => marketplace_capabilities(MarketplaceId::Tori).map(Into::into),
         ToriCommand::Category(args) => {
             let client = tori_session::authenticated_client().await?;
             let api = HttpListingsApi::new(Arc::new(client));
@@ -61,34 +64,46 @@ async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
             command @ super::draft::DraftCommand::Preview {
                 verify_category: false,
                 ..
-            } => draft::execute_preview(command, None).await,
+            } => draft::execute_preview(command, None)
+                .await
+                .map(super::outcome::CommandOutcome::from_legacy_value),
             command @ super::draft::DraftCommand::Preview {
                 verify_category: true,
                 ..
             } => {
                 let client = tori_session::authenticated_client().await?;
                 let api = HttpListingsApi::new(Arc::new(client));
-                draft::execute_preview(command, Some(&api)).await
+                draft::execute_preview(command, Some(&api))
+                    .await
+                    .map(super::outcome::CommandOutcome::from_legacy_value)
             }
             command => {
                 let client = tori_session::authenticated_client().await?;
                 let api = HttpAdInputApi::new(ClientTransport::new(client));
-                draft::execute(command, api, WorkflowConfig::default()).await
+                draft::execute(command, api, WorkflowConfig::default())
+                    .await
+                    .map(super::outcome::CommandOutcome::from_legacy_value)
             }
         },
         ToriCommand::Favorite(args) => {
             let client = tori_session::authenticated_client().await?;
             let api = HttpFavoritesApi::new(Arc::new(client));
-            favorite::dispatch_with_api(args, &api).await
+            favorite::dispatch_with_api(args, &api)
+                .await
+                .map(super::outcome::CommandOutcome::from_legacy_value)
         }
         ToriCommand::Item(args) => {
             let api = HttpPublicItemApi::new(Arc::new(public_client()));
-            super::item::dispatch_with_api(args, &api).await
+            super::item::dispatch_with_api(args, &api)
+                .await
+                .map(super::outcome::CommandOutcome::from_legacy_value)
         }
         ToriCommand::Listing(args) => {
             let client = tori_session::authenticated_client().await?;
             let api = HttpListingsApi::new(Arc::new(client));
-            listing::dispatch_with_api(args, &api).await
+            listing::dispatch_with_api(args, &api)
+                .await
+                .map(super::outcome::CommandOutcome::from_legacy_value)
         }
         ToriCommand::Search(args) => {
             let search_api = HttpPublicSearchApi::new(Arc::new(public_client()));
@@ -100,11 +115,15 @@ async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
                 Arc::new(tori_session::authenticated_client().await?);
             let api = HttpSavedSearchesApi::new(Arc::clone(&client));
             let search_api = HttpPublicSearchApi::new(client);
-            saved_search::dispatch_with_apis(*args, &api, &search_api).await
+            saved_search::dispatch_with_apis(*args, &api, &search_api)
+                .await
+                .map(super::outcome::CommandOutcome::from_legacy_value)
         }
         ToriCommand::Location(args) => {
             let api = HttpPublicSearchApi::new(Arc::new(public_client()));
-            super::location::dispatch_with_api(args, &api).await
+            super::location::dispatch_with_api(args, &api)
+                .await
+                .map(Into::into)
         }
     }
 }
