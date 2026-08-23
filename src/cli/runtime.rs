@@ -78,7 +78,7 @@ async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
         ToriCommand::Favorite(args) => {
             let client = tori_session::authenticated_client().await?;
             let api = HttpFavoritesApi::new(Arc::new(client));
-            favorite::dispatch_with_api(args, &api)
+            favorite::dispatch_with_api(args, &api).await
         }
         ToriCommand::Item(args) => {
             let api = HttpPublicItemApi::new(Arc::new(public_client()));

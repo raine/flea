@@ -111,7 +111,7 @@ impl CommandRuntime for TestRuntime {
                     },
                     ToriCommand::Favorite(args) => {
                         let api = HttpFavoritesApi::new(Arc::new(self.client.clone()));
-                        favorite::dispatch_with_api(args, &api)
+                        favorite::dispatch_with_api(args, &api).await
                     }
                     ToriCommand::Item(args) => {
                         let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
@@ -364,12 +364,12 @@ fn invalid_create_and_update_inputs_fail_before_transport_access() {
     assert!(client.requests.lock().unwrap().is_empty());
 }
 
-#[test]
-fn favorite_mutations_send_an_explicit_empty_body() {
+#[tokio::test]
+async fn favorite_mutations_send_an_explicit_empty_body() {
     let client = MockClient::with_responses([response(StatusCode::NO_CONTENT, Value::Null)]);
     let api = HttpFavoritesApi::new(Arc::new(client.clone()));
 
-    api.add(1131149, 25085448).unwrap();
+    api.add(1131149, 25085448).await.unwrap();
 
     let requests = client.requests.lock().unwrap();
     assert_eq!(requests.len(), 1);

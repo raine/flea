@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::{fmt, future::Future, pin::Pin, sync::Arc};
 
 use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -15,10 +15,23 @@ use crate::{
 const AD_ITEM_TYPE: &str = "Ad";
 
 pub trait FavoritesApi: Send + Sync {
-    fn folders(&self) -> Result<Vec<FavoriteFolder>, FavoritesApiError>;
-    fn favorite_folders(&self, listing_id: u64) -> Result<Vec<u64>, FavoritesApiError>;
-    fn add(&self, folder_id: u64, listing_id: u64) -> Result<(), FavoritesApiError>;
-    fn remove(&self, folder_id: u64, listing_id: u64) -> Result<(), FavoritesApiError>;
+    fn folders(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<FavoriteFolder>, FavoritesApiError>> + Send + '_>>;
+    fn favorite_folders(
+        &self,
+        listing_id: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u64>, FavoritesApiError>> + Send + '_>>;
+    fn add(
+        &self,
+        folder_id: u64,
+        listing_id: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FavoritesApiError>> + Send + '_>>;
+    fn remove(
+        &self,
+        folder_id: u64,
+        listing_id: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FavoritesApiError>> + Send + '_>>;
 }
 
 pub struct HttpFavoritesApi {
@@ -30,74 +43,92 @@ impl HttpFavoritesApi {
         Self { client }
     }
 
-    fn execute(
+    async fn execute(
         &self,
         request: RequestSpec,
     ) -> Result<crate::api::client::HttpResponse, FavoritesApiError> {
-        let client = Arc::clone(&self.client);
-        std::thread::scope(|scope| {
-            scope
-                .spawn(move || {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|_| FavoritesApiError::Unexpected)?
-                        .block_on(client.execute(request))
-                        .map_err(favorites_http_error)
-                })
-                .join()
-                .map_err(|_| FavoritesApiError::Unexpected)?
-        })
+        self.client
+            .execute(request)
+            .await
+            .map_err(favorites_http_error)
     }
 
-    fn mutate(&self, method: Method, path: String) -> Result<(), FavoritesApiError> {
-        let response = self.execute(
-            RequestSpec::new(method, path, compatibility::SERVICE_FAVORITES).empty_body(),
-        )?;
+    async fn mutate(&self, method: Method, path: String) -> Result<(), FavoritesApiError> {
+        let response = self
+            .execute(RequestSpec::new(method, path, compatibility::SERVICE_FAVORITES).empty_body())
+            .await?;
         ensure_success(response.status)
     }
 }
 
 impl FavoritesApi for HttpFavoritesApi {
-    fn folders(&self) -> Result<Vec<FavoriteFolder>, FavoritesApiError> {
-        let response = self.execute(RequestSpec::new(
-            Method::GET,
-            "/favorites/".to_owned(),
-            compatibility::SERVICE_FAVORITES,
-        ))?;
-        ensure_success(response.status)?;
-        serde_json::from_slice(&response.body).map_err(|_| FavoritesApiError::Unexpected)
+    fn folders(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<FavoriteFolder>, FavoritesApiError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            let response = self
+                .execute(RequestSpec::new(
+                    Method::GET,
+                    "/favorites/".to_owned(),
+                    compatibility::SERVICE_FAVORITES,
+                ))
+                .await?;
+            ensure_success(response.status)?;
+            serde_json::from_slice(&response.body).map_err(|_| FavoritesApiError::Unexpected)
+        })
     }
 
-    fn favorite_folders(&self, listing_id: u64) -> Result<Vec<u64>, FavoritesApiError> {
-        let response = self.execute(RequestSpec::new(
-            Method::GET,
-            "/favorites/v2/minimal".to_owned(),
-            compatibility::SERVICE_FAVORITES,
-        ))?;
-        ensure_success(response.status)?;
-        let response: FavoritesMinimal =
-            serde_json::from_slice(&response.body).map_err(|_| FavoritesApiError::Unexpected)?;
-        Ok(response
-            .items
-            .into_iter()
-            .find(|item| item.item_id == listing_id && item.item_type == AD_ITEM_TYPE)
-            .map(|item| item.folders)
-            .unwrap_or_default())
+    fn favorite_folders(
+        &self,
+        listing_id: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<u64>, FavoritesApiError>> + Send + '_>> {
+        Box::pin(async move {
+            let response = self
+                .execute(RequestSpec::new(
+                    Method::GET,
+                    "/favorites/v2/minimal".to_owned(),
+                    compatibility::SERVICE_FAVORITES,
+                ))
+                .await?;
+            ensure_success(response.status)?;
+            let response: FavoritesMinimal = serde_json::from_slice(&response.body)
+                .map_err(|_| FavoritesApiError::Unexpected)?;
+            Ok(response
+                .items
+                .into_iter()
+                .find(|item| item.item_id == listing_id && item.item_type == AD_ITEM_TYPE)
+                .map(|item| item.folders)
+                .unwrap_or_default())
+        })
     }
 
-    fn add(&self, folder_id: u64, listing_id: u64) -> Result<(), FavoritesApiError> {
-        self.mutate(
-            Method::PUT,
-            format!("/favorites/{folder_id}/{AD_ITEM_TYPE}/{listing_id}"),
-        )
+    fn add(
+        &self,
+        folder_id: u64,
+        listing_id: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FavoritesApiError>> + Send + '_>> {
+        Box::pin(async move {
+            self.mutate(
+                Method::PUT,
+                format!("/favorites/{folder_id}/{AD_ITEM_TYPE}/{listing_id}"),
+            )
+            .await
+        })
     }
 
-    fn remove(&self, folder_id: u64, listing_id: u64) -> Result<(), FavoritesApiError> {
-        self.mutate(
-            Method::DELETE,
-            format!("/favorites/{folder_id}/{AD_ITEM_TYPE}/{listing_id}"),
-        )
+    fn remove(
+        &self,
+        folder_id: u64,
+        listing_id: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), FavoritesApiError>> + Send + '_>> {
+        Box::pin(async move {
+            self.mutate(
+                Method::DELETE,
+                format!("/favorites/{folder_id}/{AD_ITEM_TYPE}/{listing_id}"),
+            )
+            .await
+        })
     }
 }
 
@@ -205,17 +236,19 @@ impl<'a> Favorites<'a> {
         Self { api }
     }
 
-    pub fn folders(&self) -> Result<Vec<FavoriteFolder>, AppError> {
+    pub async fn folders(&self) -> Result<Vec<FavoriteFolder>, AppError> {
         self.api
             .folders()
+            .await
             .map_err(|error| favorite_error(error, None, true))
     }
 
-    pub fn status(&self, listing_id: &str) -> Result<FavoriteStatus, AppError> {
+    pub async fn status(&self, listing_id: &str) -> Result<FavoriteStatus, AppError> {
         let listing_id = parse_listing_id(listing_id)?;
         let folder_ids = self
             .api
             .favorite_folders(listing_id)
+            .await
             .map_err(|error| favorite_error(error, None, true))?;
         Ok(FavoriteStatus {
             listing_id,
@@ -224,15 +257,16 @@ impl<'a> Favorites<'a> {
         })
     }
 
-    pub fn add(
+    pub async fn add(
         &self,
         listing_id: &str,
         folder_id: Option<u64>,
     ) -> Result<FavoriteMutation, AppError> {
         let listing_id = parse_listing_id(listing_id)?;
-        let folder_id = self.resolve_folder(folder_id)?;
+        let folder_id = self.resolve_folder(folder_id).await?;
         self.api
             .add(folder_id, listing_id)
+            .await
             .map_err(|error| favorite_error(error, Some((folder_id, listing_id)), false))?;
         Ok(FavoriteMutation {
             listing_id,
@@ -241,15 +275,16 @@ impl<'a> Favorites<'a> {
         })
     }
 
-    pub fn remove(
+    pub async fn remove(
         &self,
         listing_id: &str,
         folder_id: Option<u64>,
     ) -> Result<FavoriteMutation, AppError> {
         let listing_id = parse_listing_id(listing_id)?;
-        let folder_id = self.resolve_folder(folder_id)?;
+        let folder_id = self.resolve_folder(folder_id).await?;
         self.api
             .remove(folder_id, listing_id)
+            .await
             .map_err(|error| favorite_error(error, Some((folder_id, listing_id)), false))?;
         Ok(FavoriteMutation {
             listing_id,
@@ -258,11 +293,11 @@ impl<'a> Favorites<'a> {
         })
     }
 
-    fn resolve_folder(&self, folder_id: Option<u64>) -> Result<u64, AppError> {
+    async fn resolve_folder(&self, folder_id: Option<u64>) -> Result<u64, AppError> {
         if let Some(folder_id) = folder_id {
             return Ok(folder_id);
         }
-        let folders = self.folders()?;
+        let folders = self.folders().await?;
         folders
             .iter()
             .find(|folder| folder.default_folder)
@@ -377,33 +412,50 @@ mod tests {
     }
 
     impl FavoritesApi for FakeApi {
-        fn folders(&self) -> Result<Vec<FavoriteFolder>, FavoritesApiError> {
-            Ok(self.folders.clone())
+        fn folders(
+            &self,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<FavoriteFolder>, FavoritesApiError>> + Send + '_>>
+        {
+            let folders = self.folders.clone();
+            Box::pin(async move { Ok(folders) })
         }
 
-        fn favorite_folders(&self, listing_id: u64) -> Result<Vec<u64>, FavoritesApiError> {
-            Ok(self
+        fn favorite_folders(
+            &self,
+            listing_id: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<u64>, FavoritesApiError>> + Send + '_>>
+        {
+            let folders = self
                 .folders
                 .iter()
                 .filter(|folder| folder.item_count == listing_id)
                 .map(|folder| folder.folder_id)
-                .collect())
+                .collect();
+            Box::pin(async move { Ok(folders) })
         }
 
-        fn add(&self, folder_id: u64, listing_id: u64) -> Result<(), FavoritesApiError> {
+        fn add(
+            &self,
+            folder_id: u64,
+            listing_id: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<(), FavoritesApiError>> + Send + '_>> {
             self.mutations
                 .lock()
                 .unwrap()
                 .push((true, folder_id, listing_id));
-            Ok(())
+            Box::pin(async { Ok(()) })
         }
 
-        fn remove(&self, folder_id: u64, listing_id: u64) -> Result<(), FavoritesApiError> {
+        fn remove(
+            &self,
+            folder_id: u64,
+            listing_id: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<(), FavoritesApiError>> + Send + '_>> {
             self.mutations
                 .lock()
                 .unwrap()
                 .push((false, folder_id, listing_id));
-            Ok(())
+            Box::pin(async { Ok(()) })
         }
     }
 
@@ -418,8 +470,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn status_returns_every_matching_folder() {
+    #[tokio::test]
+    async fn status_returns_every_matching_folder() {
         let api = FakeApi {
             folders: vec![folder(42, false), folder(43, true)]
                 .into_iter()
@@ -431,45 +483,45 @@ mod tests {
             mutations: Mutex::new(Vec::new()),
         };
 
-        let result = Favorites::new(&api).status("123").unwrap();
+        let result = Favorites::new(&api).status("123").await.unwrap();
 
         assert!(result.favorite);
         assert_eq!(result.folder_ids, vec![42, 43]);
     }
 
-    #[test]
-    fn add_uses_the_default_folder() {
+    #[tokio::test]
+    async fn add_uses_the_default_folder() {
         let api = FakeApi {
             folders: vec![folder(42, true)],
             mutations: Mutex::new(Vec::new()),
         };
 
-        let result = Favorites::new(&api).add("123", None).unwrap();
+        let result = Favorites::new(&api).add("123", None).await.unwrap();
 
         assert_eq!(result.folder_id, 42);
         assert_eq!(*api.mutations.lock().unwrap(), vec![(true, 42, 123)]);
     }
 
-    #[test]
-    fn explicit_folder_skips_folder_discovery() {
+    #[tokio::test]
+    async fn explicit_folder_skips_folder_discovery() {
         let api = FakeApi {
             folders: Vec::new(),
             mutations: Mutex::new(Vec::new()),
         };
 
-        Favorites::new(&api).remove("123", Some(7)).unwrap();
+        Favorites::new(&api).remove("123", Some(7)).await.unwrap();
 
         assert_eq!(*api.mutations.lock().unwrap(), vec![(false, 7, 123)]);
     }
 
-    #[test]
-    fn rejects_non_numeric_listing_ids() {
+    #[tokio::test]
+    async fn rejects_non_numeric_listing_ids() {
         let api = FakeApi {
             folders: Vec::new(),
             mutations: Mutex::new(Vec::new()),
         };
 
-        let error = Favorites::new(&api).add("abc", Some(7)).unwrap_err();
+        let error = Favorites::new(&api).add("abc", Some(7)).await.unwrap_err();
 
         assert_eq!(error.code, "cli.invalid_usage");
     }

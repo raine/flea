@@ -54,18 +54,21 @@ pub enum FavoriteCommand {
     },
 }
 
-pub fn dispatch_with_api(args: FavoriteArgs, api: &dyn FavoritesApi) -> Result<Value, AppError> {
+pub async fn dispatch_with_api(
+    args: FavoriteArgs,
+    api: &dyn FavoritesApi,
+) -> Result<Value, AppError> {
     let favorites = Favorites::new(api);
     match args.command {
         FavoriteCommand::Folders => {
-            let folders = favorites.folders()?;
+            let folders = favorites.folders().await?;
             Ok(json!({
                 "folders": folders,
                 "_observation": Observation::confirmed_present("favorites_folders", None),
             }))
         }
         FavoriteCommand::Status { listing_id } => {
-            let status = favorites.status(&listing_id)?;
+            let status = favorites.status(&listing_id).await?;
             let observation = if status.favorite {
                 Observation::confirmed_present("favorites_minimal", None)
             } else {
@@ -84,11 +87,11 @@ pub fn dispatch_with_api(args: FavoriteArgs, api: &dyn FavoritesApi) -> Result<V
             Ok(value)
         }
         FavoriteCommand::Add { listing_id, folder } => {
-            let mutation = favorites.add(&listing_id, folder)?;
+            let mutation = favorites.add(&listing_id, folder).await?;
             Ok(mutation_value(mutation)?)
         }
         FavoriteCommand::Remove { listing_id, folder } => {
-            let mutation = favorites.remove(&listing_id, folder)?;
+            let mutation = favorites.remove(&listing_id, folder).await?;
             Ok(mutation_value(mutation)?)
         }
     }
