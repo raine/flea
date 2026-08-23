@@ -499,7 +499,7 @@ mod tests {
             >,
         > {
             let error = self.error;
-            Box::pin(async move { Err(HttpError::Transport(TransportError { kind: error })) })
+            Box::pin(async move { Err(HttpError::Transport(TransportError::request(error))) })
         }
     }
 

@@ -4,7 +4,10 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
-use reqwest::StatusCode;
+use reqwest::{
+    Method, StatusCode,
+    header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue},
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::Sha512;
 use url::Url;
@@ -17,6 +20,10 @@ use crate::{
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     retry::{FailureKind, OperationMethod, RetryClassification, RetryContext, classify},
+    transport::{
+        RequestBody, ReqwestTransport, Transport, TransportError, TransportErrorKind,
+        TransportErrorPhase, TransportRequest, TransportResponse,
+    },
 };
 
 pub const CLIENT_ID: &str = "6079834b9b0b741812e7e91f";
@@ -230,34 +237,29 @@ impl GatewaySigner for HmacGatewaySigner {
 }
 
 #[derive(Clone)]
-pub struct SchibstedToriAuthenticationApi<S = HmacGatewaySigner> {
-    client: reqwest::Client,
+pub struct SchibstedToriAuthenticationApi<S = HmacGatewaySigner, T = ReqwestTransport> {
+    transport: T,
     signer: S,
     login_base_url: String,
     tori_base_url: String,
 }
 
-impl SchibstedToriAuthenticationApi<HmacGatewaySigner> {
+impl SchibstedToriAuthenticationApi<HmacGatewaySigner, ReqwestTransport> {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .build()
-            .expect("static authentication client configuration is valid");
-        Self::with_signer(client, HmacGatewaySigner)
+        Self::with_transport(ReqwestTransport::default(), HmacGatewaySigner)
     }
 }
 
-impl Default for SchibstedToriAuthenticationApi<HmacGatewaySigner> {
+impl Default for SchibstedToriAuthenticationApi<HmacGatewaySigner, ReqwestTransport> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<S> SchibstedToriAuthenticationApi<S> {
-    fn with_signer(client: reqwest::Client, signer: S) -> Self {
+impl<S, T> SchibstedToriAuthenticationApi<S, T> {
+    fn with_transport(transport: T, signer: S) -> Self {
         Self {
-            client,
+            transport,
             signer,
             login_base_url: LOGIN_BASE_URL.to_owned(),
             tori_base_url: TORI_BASE_URL.to_owned(),
@@ -281,7 +283,7 @@ pub(crate) struct RefreshRequest<'a> {
     pub now_unix: u64,
 }
 
-impl<S: GatewaySigner> SchibstedToriAuthenticationApi<S> {
+impl<S: GatewaySigner, T: Transport> SchibstedToriAuthenticationApi<S, T> {
     pub(crate) async fn refresh_credentials(
         &self,
         request: RefreshRequest<'_>,
@@ -302,22 +304,24 @@ impl<S: GatewaySigner> SchibstedToriAuthenticationApi<S> {
             id_token: Option<String>,
         }
 
-        let response = self
-            .client
-            .post(format!("{}/oauth/token", self.login_base_url))
-            .header("X-OIDC", "v1")
-            .header("User-Agent", SCHIBSTED_USER_AGENT)
-            .form(&[
+        let request = provider_request(
+            Method::POST,
+            format!("{}/oauth/token", self.login_base_url),
+            &[("x-oidc", "v1"), ("user-agent", SCHIBSTED_USER_AGENT)],
+            form_body(&[
                 ("client_id", CLIENT_ID),
                 ("grant_type", "refresh_token"),
                 ("refresh_token", refresh_token),
-            ])
-            .timeout(AUTH_REQUEST_TIMEOUT)
-            .send()
+            ]),
+        )
+        .map_err(refresh_execution_error)?;
+        let response = self
+            .transport
+            .execute(request)
             .await
-            .map_err(|error| refresh_transport_error().with_source(error))?;
-        ensure_refresh_success(response.status())?;
-        let tokens: TokenResponse = bounded_refresh_json(response).await?;
+            .map_err(refresh_execution_error)?;
+        ensure_refresh_success(response.status)?;
+        let tokens: TokenResponse = decode_refresh_json(response)?;
         if tokens.access_token.is_empty()
             || tokens.refresh_token.as_deref() == Some("")
             || tokens.id_token.as_deref() == Some("")
@@ -355,7 +359,7 @@ impl<S: GatewaySigner> SchibstedToriAuthenticationApi<S> {
     }
 }
 
-impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
+impl<S: GatewaySigner, T: Transport> AuthenticationApi for SchibstedToriAuthenticationApi<S, T> {
     async fn exchange_authorization_code(
         &self,
         code: &str,
@@ -368,24 +372,26 @@ impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
             id_token: String,
         }
 
-        let response = self
-            .client
-            .post(format!("{}/oauth/token", self.login_base_url))
-            .header("X-OIDC", "v1")
-            .header("User-Agent", SCHIBSTED_USER_AGENT)
-            .form(&[
+        let request = provider_request(
+            Method::POST,
+            format!("{}/oauth/token", self.login_base_url),
+            &[("x-oidc", "v1"), ("user-agent", SCHIBSTED_USER_AGENT)],
+            form_body(&[
                 ("client_id", CLIENT_ID),
                 ("grant_type", "authorization_code"),
                 ("code", code),
                 ("redirect_uri", REDIRECT_URI),
                 ("code_verifier", pkce_verifier),
-            ])
-            .timeout(AUTH_REQUEST_TIMEOUT)
-            .send()
+            ]),
+        )
+        .map_err(|error| auth_execution_error(error, "token_exchange"))?;
+        let response = self
+            .transport
+            .execute(request)
             .await
-            .map_err(|_| upstream_error("token_exchange", true))?;
-        ensure_success(response.status(), "token_exchange")?;
-        let tokens: TokenResponse = bounded_json(response, "token_exchange").await?;
+            .map_err(|error| auth_execution_error(error, "token_exchange"))?;
+        ensure_success(response.status, "token_exchange")?;
+        let tokens: TokenResponse = decode_json(response, "token_exchange")?;
         if tokens.access_token.is_empty()
             || tokens.refresh_token.is_empty()
             || tokens.id_token.is_empty()
@@ -410,18 +416,24 @@ impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
             data: ExchangeData,
         }
 
+        let authorization = format!("Bearer {access_token}");
+        let request = provider_request(
+            Method::POST,
+            format!("{}/api/2/oauth/exchange", self.login_base_url),
+            &[
+                ("authorization", &authorization),
+                ("user-agent", "AccountSDKIOSWeb/7.0.2 (iPhone; iOS 26.1)"),
+            ],
+            form_body(&[("clientId", EXCHANGE_CLIENT_ID), ("type", "code")]),
+        )
+        .map_err(|error| auth_execution_error(error, "spid_exchange"))?;
         let response = self
-            .client
-            .post(format!("{}/api/2/oauth/exchange", self.login_base_url))
-            .bearer_auth(access_token)
-            .header("User-Agent", "AccountSDKIOSWeb/7.0.2 (iPhone; iOS 26.1)")
-            .form(&[("clientId", EXCHANGE_CLIENT_ID), ("type", "code")])
-            .timeout(AUTH_REQUEST_TIMEOUT)
-            .send()
+            .transport
+            .execute(request)
             .await
-            .map_err(|_| upstream_error("spid_exchange", true))?;
-        ensure_success(response.status(), "spid_exchange")?;
-        let exchange: ExchangeResponse = bounded_json(response, "spid_exchange").await?;
+            .map_err(|error| auth_execution_error(error, "spid_exchange"))?;
+        ensure_success(response.status, "spid_exchange")?;
+        let exchange: ExchangeResponse = decode_json(response, "spid_exchange")?;
         if exchange.data.code.is_empty() {
             return Err(unexpected_response("spid_exchange"));
         }
@@ -462,23 +474,27 @@ impl<S: GatewaySigner> AuthenticationApi for SchibstedToriAuthenticationApi<S> {
         })
         .map_err(|_| unexpected_response("tori_login"))?;
         let signature = self.signer.sign("POST", LOGIN_PATH, LOGIN_SERVICE, &body);
+        let request = provider_request(
+            Method::POST,
+            format!("{}{}", self.tori_base_url, LOGIN_PATH),
+            &[
+                ("user-agent", TORI_USER_AGENT),
+                ("accept", "application/json; charset=UTF-8"),
+                ("finn-gw-service", LOGIN_SERVICE),
+                ("finn-gw-key", signature.expose()),
+                ("finn-app-installation-id", installation_id),
+                ("ab-test-device-id", ab_test_device_id),
+            ],
+            json_body(body),
+        )
+        .map_err(|error| auth_execution_error(error, "tori_login"))?;
         let response = self
-            .client
-            .post(format!("{}{}", self.tori_base_url, LOGIN_PATH))
-            .header("User-Agent", TORI_USER_AGENT)
-            .header("Accept", "application/json; charset=UTF-8")
-            .header("Content-Type", "application/json")
-            .header("finn-gw-service", LOGIN_SERVICE)
-            .header("finn-gw-key", signature.expose())
-            .header("finn-app-installation-id", installation_id)
-            .header("ab-test-device-id", ab_test_device_id)
-            .body(body)
-            .timeout(AUTH_REQUEST_TIMEOUT)
-            .send()
+            .transport
+            .execute(request)
             .await
-            .map_err(|_| upstream_error("tori_login", true))?;
-        ensure_success(response.status(), "tori_login")?;
-        let login: LoginResponse = bounded_json(response, "tori_login").await?;
+            .map_err(|error| auth_execution_error(error, "tori_login"))?;
+        ensure_success(response.status, "tori_login")?;
+        let login: LoginResponse = decode_json(response, "tori_login")?;
         let user_id = match login.user_id {
             serde_json::Value::String(value) if !value.is_empty() => value,
             serde_json::Value::Number(value) => value.to_string(),
@@ -630,51 +646,75 @@ fn random_identifier() -> SecretString {
     random_secret(32)
 }
 
-async fn bounded_json<T: DeserializeOwned>(
-    mut response: reqwest::Response,
-    stage: &'static str,
-) -> Result<T, AppError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_AUTH_RESPONSE_BYTES as u64)
-    {
-        return Err(unexpected_response(stage));
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| unexpected_response(stage))?
-    {
-        if body.len().saturating_add(chunk.len()) > MAX_AUTH_RESPONSE_BYTES {
-            return Err(unexpected_response(stage));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&body).map_err(|_| unexpected_response(stage))
+struct ProviderBody {
+    bytes: Vec<u8>,
+    content_type: &'static str,
 }
 
-async fn bounded_refresh_json<T: DeserializeOwned>(
-    mut response: reqwest::Response,
+fn form_body(values: &[(&str, &str)]) -> ProviderBody {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.extend_pairs(values.iter().copied());
+    ProviderBody {
+        bytes: serializer.finish().into_bytes(),
+        content_type: "application/x-www-form-urlencoded",
+    }
+}
+
+fn json_body(bytes: Vec<u8>) -> ProviderBody {
+    ProviderBody {
+        bytes,
+        content_type: "application/json",
+    }
+}
+
+fn provider_request(
+    method: Method,
+    url: String,
+    values: &[(&'static str, &str)],
+    body: ProviderBody,
+) -> Result<TransportRequest, TransportError> {
+    let mut headers = HeaderMap::new();
+    for (name, value) in values {
+        let value = HeaderValue::from_str(value)
+            .map_err(|_| TransportError::request(TransportErrorKind::Other))?;
+        headers.insert(HeaderName::from_static(name), value);
+    }
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static(body.content_type));
+    Ok(TransportRequest {
+        method,
+        url,
+        headers,
+        body: RequestBody::Bytes(body.bytes),
+        deadline: AUTH_REQUEST_TIMEOUT,
+        max_response_bytes: MAX_AUTH_RESPONSE_BYTES,
+    })
+}
+
+fn auth_execution_error(error: TransportError, stage: &'static str) -> AppError {
+    if error.phase == TransportErrorPhase::Response {
+        unexpected_response(stage)
+    } else {
+        upstream_error(stage, true)
+    }
+}
+
+fn refresh_execution_error(error: TransportError) -> AppError {
+    if error.kind == TransportErrorKind::ResponseTooLarge {
+        refresh_malformed_error()
+    } else {
+        refresh_transport_error().with_source(error)
+    }
+}
+
+fn decode_json<T: DeserializeOwned>(
+    response: TransportResponse,
+    stage: &'static str,
 ) -> Result<T, AppError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_AUTH_RESPONSE_BYTES as u64)
-    {
-        return Err(refresh_malformed_error());
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| refresh_transport_error().with_source(error))?
-    {
-        if body.len().saturating_add(chunk.len()) > MAX_AUTH_RESPONSE_BYTES {
-            return Err(refresh_malformed_error());
-        }
-        body.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&body).map_err(|_| refresh_malformed_error())
+    serde_json::from_slice(&response.body).map_err(|_| unexpected_response(stage))
+}
+
+fn decode_refresh_json<T: DeserializeOwned>(response: TransportResponse) -> Result<T, AppError> {
+    serde_json::from_slice(&response.body).map_err(|_| refresh_malformed_error())
 }
 
 fn validate_callback(callback_url: &str, expected_state: &str) -> Result<SecretString, AppError> {

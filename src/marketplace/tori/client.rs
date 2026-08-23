@@ -604,7 +604,8 @@ fn retry_transport_classification(
     kind: TransportErrorKind,
     context: RetryContext,
 ) -> crate::retry::RetryClassification {
-    HttpFailure::from(HttpError::Transport(TransportError { kind })).retry_classification(context)
+    HttpFailure::from(HttpError::Transport(TransportError::request(kind)))
+        .retry_classification(context)
 }
 
 fn retry_delay(config: &ClientConfig, attempt: usize) -> Duration {
@@ -636,7 +637,7 @@ mod tests {
     #[test]
     fn http_failures_carry_transport_and_local_policy_in_types() {
         for kind in [TransportErrorKind::Timeout, TransportErrorKind::Connection] {
-            let failure = HttpFailure::from(HttpError::Transport(TransportError { kind }));
+            let failure = HttpFailure::from(HttpError::Transport(TransportError::request(kind)));
             assert!(matches!(failure, HttpFailure::Transport(_)));
             let retry = failure.retry_classification(RetryContext::read(OperationMethod::Get));
             assert!(retry.upstream_transient);
@@ -653,9 +654,7 @@ mod tests {
                 HttpAdapterFailure::ResponseTooLarge,
             ),
             (
-                HttpError::Transport(TransportError {
-                    kind: TransportErrorKind::Other,
-                }),
+                HttpError::Transport(TransportError::request(TransportErrorKind::Other)),
                 HttpAdapterFailure::OtherTransport,
             ),
         ] {

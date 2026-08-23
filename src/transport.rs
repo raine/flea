@@ -125,13 +125,37 @@ impl fmt::Debug for TransportResponse {
 pub enum TransportErrorKind {
     Timeout,
     Connection,
+    ResponseTooLarge,
     Other,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportErrorPhase {
+    Request,
+    Response,
 }
 
 #[derive(Clone, thiserror::Error, Eq, PartialEq)]
 #[error("HTTP transport {kind}")]
 pub struct TransportError {
     pub kind: TransportErrorKind,
+    pub phase: TransportErrorPhase,
+}
+
+impl TransportError {
+    pub const fn request(kind: TransportErrorKind) -> Self {
+        Self {
+            kind,
+            phase: TransportErrorPhase::Request,
+        }
+    }
+
+    pub const fn response(kind: TransportErrorKind) -> Self {
+        Self {
+            kind,
+            phase: TransportErrorPhase::Response,
+        }
+    }
 }
 
 impl fmt::Debug for TransportError {
@@ -139,6 +163,7 @@ impl fmt::Debug for TransportError {
         formatter
             .debug_struct("TransportError")
             .field("kind", &self.kind)
+            .field("phase", &self.phase)
             .finish()
     }
 }
@@ -148,7 +173,7 @@ impl fmt::Display for TransportErrorKind {
         formatter.write_str(match self {
             Self::Timeout => "timed out",
             Self::Connection => "connection failed",
-            Self::Other => "failed",
+            Self::ResponseTooLarge | Self::Other => "failed",
         })
     }
 }
@@ -203,12 +228,9 @@ impl Transport for ReqwestTransport {
                             reqwest_part = reqwest_part.file_name(file_name);
                         }
                         if let Some(mime_type) = part.mime_type {
-                            reqwest_part =
-                                reqwest_part
-                                    .mime_str(&mime_type)
-                                    .map_err(|_| TransportError {
-                                        kind: TransportErrorKind::Other,
-                                    })?;
+                            reqwest_part = reqwest_part
+                                .mime_str(&mime_type)
+                                .map_err(|_| TransportError::request(TransportErrorKind::Other))?;
                         }
                         form = form.part(part.name, reqwest_part);
                     }
@@ -221,19 +243,19 @@ impl Transport for ReqwestTransport {
                 .content_length()
                 .is_some_and(|len| len > max_response_bytes as u64)
             {
-                return Err(TransportError {
-                    kind: TransportErrorKind::Other,
-                });
+                return Err(TransportError::response(
+                    TransportErrorKind::ResponseTooLarge,
+                ));
             }
 
             let status = response.status();
             let headers = response.headers().clone();
             let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(classify_reqwest_error)? {
+            while let Some(chunk) = response.chunk().await.map_err(classify_response_error)? {
                 if bytes.len().saturating_add(chunk.len()) > max_response_bytes {
-                    return Err(TransportError {
-                        kind: TransportErrorKind::Other,
-                    });
+                    return Err(TransportError::response(
+                        TransportErrorKind::ResponseTooLarge,
+                    ));
                 }
                 bytes.extend_from_slice(&chunk);
             }
@@ -282,22 +304,27 @@ impl Transport for RecordingTransport {
             .lock()
             .expect("response queue lock")
             .pop_front()
-            .unwrap_or(Err(TransportError {
-                kind: TransportErrorKind::Other,
-            }));
+            .unwrap_or(Err(TransportError::request(TransportErrorKind::Other)));
         Box::pin(async move { response })
     }
 }
 
 fn classify_reqwest_error(error: reqwest::Error) -> TransportError {
-    let kind = if error.is_timeout() {
+    TransportError::request(reqwest_error_kind(&error))
+}
+
+fn classify_response_error(error: reqwest::Error) -> TransportError {
+    TransportError::response(reqwest_error_kind(&error))
+}
+
+fn reqwest_error_kind(error: &reqwest::Error) -> TransportErrorKind {
+    if error.is_timeout() {
         TransportErrorKind::Timeout
     } else if error.is_connect() {
         TransportErrorKind::Connection
     } else {
         TransportErrorKind::Other
-    };
-    TransportError { kind }
+    }
 }
 
 fn header_names(headers: &HeaderMap) -> Vec<&str> {

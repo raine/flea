@@ -128,7 +128,7 @@ async fn reqwest_transport_bounds_streamed_responses_without_content_length() {
         .unwrap_err();
     worker.join().unwrap();
 
-    assert_eq!(error.kind, TransportErrorKind::Other);
+    assert_eq!(error.kind, TransportErrorKind::ResponseTooLarge);
 }
 
 #[tokio::test]
@@ -255,9 +255,7 @@ async fn carries_if_match_and_extracts_etag() {
 async fn retries_only_bounded_safe_methods() {
     let get_transport = FixtureTransport::queued([
         fixture_response(StatusCode::SERVICE_UNAVAILABLE),
-        Err(TransportError {
-            kind: TransportErrorKind::Connection,
-        }),
+        Err(TransportError::request(TransportErrorKind::Connection)),
         fixture_response(StatusCode::OK),
     ]);
     let get_client = client(get_transport.clone());
