@@ -149,6 +149,9 @@ flea vinted category compose CATEGORY_ID
 flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted category attributes --input selections.json
 flea vinted category package-sizes CATEGORY_ID
+flea vinted draft list --page 1 --limit 20
+flea vinted draft show DRAFT_ID
+flea vinted draft validate DRAFT_ID
 flea vinted draft create --input listing.json --image front.heic
 flea vinted draft update DRAFT_ID --input listing.json --image front.jpg
 flea vinted draft publish DRAFT_ID --input listing.json
@@ -175,8 +178,11 @@ A minimal complete input has this shape:
 ```
 
 Optional fields include brand, ISBN, color, measurements, manufacturer fields,
-custom shipment prices, and parcel dimensions. Draft update and publish replace
-the complete image assignment, so pass every intended image in display order.
+custom shipment prices, and parcel dimensions. Draft inspection reads remote
+editable state and reports photo IDs in display order. Validation separates
+field schema blockers, upstream validation errors, and account prerequisites.
+Draft updates replace the complete image assignment. Draft completion reuses
+remote photos unless `--image` supplies a complete replacement set.
 
 Run command help for current syntax and constraints:
 

@@ -8,6 +8,7 @@ use crate::{
     marketplace::{
         PortalId,
         vinted::{
+            draft::{DEFAULT_PAGE_SIZE, DraftListRequest, VintedDraftApi, VintedDrafts},
             publication::{
                 ListingInput, PublicationOperation, VintedPublication, VintedPublicationApi,
             },
@@ -24,6 +25,34 @@ pub struct VintedDraftArgs {
 
 #[derive(Debug, Subcommand)]
 pub enum VintedDraftCommand {
+    #[command(
+        about = "List the authenticated account's Vinted drafts",
+        long_about = "Fetch one bounded page of remote Vinted drafts in newest-first order with stable IDs and concise summaries."
+    )]
+    List {
+        /// One-based page number.
+        #[arg(long, default_value_t = 1)]
+        page: u32,
+        /// Drafts per page, from 1 through 100.
+        #[arg(long, default_value_t = DEFAULT_PAGE_SIZE)]
+        limit: u16,
+    },
+    #[command(
+        about = "Show complete remote Vinted draft state",
+        long_about = "Fetch the authoritative editable draft state, including assigned photo IDs and display order, category, attributes, brand, colors, price, package, and revision metadata when available."
+    )]
+    Show {
+        /// Numeric Vinted draft identifier.
+        draft_id: String,
+    },
+    #[command(
+        about = "Validate Vinted draft publication readiness",
+        long_about = "Fetch authoritative remote draft state and report field-level local schema blockers, deterministic upstream validation errors, and account prerequisites without changing the draft."
+    )]
+    Validate {
+        /// Numeric Vinted draft identifier.
+        draft_id: String,
+    },
     #[command(
         about = "Create a Vinted draft from a complete listing input",
         long_about = "Sanitize and upload images in argument order, then create a Vinted draft from a complete JSON payload whose category, attributes, price, and package values were discovered at runtime."
@@ -62,6 +91,9 @@ pub enum VintedDraftCommand {
 impl VintedDraftCommand {
     pub const fn telemetry_name(&self) -> &'static str {
         match self {
+            Self::List { .. } => "draft list",
+            Self::Show { .. } => "draft show",
+            Self::Validate { .. } => "draft validate",
             Self::Create(_) => "draft create",
             Self::Update { .. } => "draft update",
             Self::Publish { .. } => "draft publish",
@@ -110,9 +142,44 @@ pub async fn execute_draft(
     portal: PortalId,
     command: VintedDraftCommand,
     session: &dyn VintedSearchSession,
-    api: &dyn VintedPublicationApi,
+    publication_api: &dyn VintedPublicationApi,
+    draft_api: &dyn VintedDraftApi,
 ) -> Result<CommandOutcome, AppError> {
+    match command {
+        VintedDraftCommand::List { page, limit } => {
+            let result = VintedDrafts::new(session, draft_api)
+                .list(
+                    portal,
+                    DraftListRequest {
+                        page,
+                        per_page: limit,
+                    },
+                )
+                .await?;
+            return Ok(CommandOutcome::new(CommandData::VintedDraftCollection(
+                result,
+            )));
+        }
+        VintedDraftCommand::Show { draft_id } => {
+            let result = VintedDrafts::new(session, draft_api)
+                .show(portal, &draft_id)
+                .await?;
+            return Ok(CommandOutcome::new(CommandData::VintedDraft(result)));
+        }
+        VintedDraftCommand::Validate { draft_id } => {
+            let result = VintedDrafts::new(session, draft_api)
+                .validate(portal, &draft_id)
+                .await?;
+            return Ok(CommandOutcome::new(CommandData::VintedDraftValidation(
+                result,
+            )));
+        }
+        _ => {}
+    }
     let (operation, values) = match command {
+        VintedDraftCommand::List { .. }
+        | VintedDraftCommand::Show { .. }
+        | VintedDraftCommand::Validate { .. } => unreachable!("read commands returned above"),
         VintedDraftCommand::Create(values) => (PublicationOperation::CreateDraft, Some(values)),
         VintedDraftCommand::Update { draft_id, values } => {
             (PublicationOperation::UpdateDraft { draft_id }, Some(values))
@@ -128,7 +195,7 @@ pub async fn execute_draft(
             (PublicationOperation::DeleteDraft { draft_id }, None)
         }
     };
-    execute_operation(portal, operation, values, session, api).await
+    execute_operation(portal, operation, values, session, publication_api).await
 }
 
 async fn execute_operation(

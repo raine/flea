@@ -30,8 +30,7 @@ flea vinted auth login
 flea vinted search [QUERY] [--price-from EUR] [--price-to EUR]
 flea vinted search [QUERY] --sort relevance|newest|price-asc|price-desc
 flea vinted search [QUERY] --page PAGE --limit LIMIT
-flea vinted item show ITEM_ID
-flea vinted item show ITEM_ID --raw
+flea vinted item show ITEM_ID [--raw]
 ```
 
 Inspect search IDs. `seller.seller_disclosed_location` is exposure-permitted
@@ -40,20 +39,22 @@ infer it from presentation text. `--raw` preserves upstream JSON.
 
 ## Publish Vinted listings
 
-Use runtime values for category, attributes, currency, price, and package.
-Never guess facts. Pass complete JSON and ordered images when creating or
-directly publishing:
+Pass complete JSON and ordered images:
 
 ```sh
 flea vinted category compose CATEGORY_ID --input listing.json
+flea vinted draft list --page 1 --limit 20
+flea vinted draft show DRAFT_ID
+flea vinted draft validate DRAFT_ID
 flea vinted draft create --input listing.json --image front.heic
 flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
 flea vinted publish --input listing.json --image front.jpg
 ```
 
-Completion reuses verified ordered remote photos. `--image` replaces and
-verifies all photos. Inspect partial state before retrying uncertainty.
+Completion reuses verified remote photos. `--image` replaces all photos.
+`draft show` returns photo IDs; `draft validate` classifies blockers. Inspect
+partial state before retrying uncertainty.
 
 ## Find Tori listings
 

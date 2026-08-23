@@ -238,7 +238,7 @@ pub enum VintedCommand {
     Category(vinted_category::VintedCategoryArgs),
     #[command(
         about = "Manage Vinted drafts",
-        long_about = "Create, replace, publish, or delete Vinted drafts using a complete runtime-discovered listing payload."
+        long_about = "List, inspect, validate, create, replace, publish, or delete authoritative Vinted drafts."
     )]
     Draft(vinted_publish::VintedDraftArgs),
     #[command(
@@ -409,6 +409,12 @@ mod tests {
             ),
             (&["vinted", "search", "private query"], "vinted search"),
             (&["vinted", "item", "show", "123"], "vinted item show"),
+            (&["vinted", "draft", "list"], "vinted draft list"),
+            (&["vinted", "draft", "show", "123"], "vinted draft show"),
+            (
+                &["vinted", "draft", "validate", "123"],
+                "vinted draft validate",
+            ),
             (&["unsupported"], "unknown"),
             (&["vinted", "unsupported"], "unknown"),
         ];

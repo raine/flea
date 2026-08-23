@@ -25,6 +25,7 @@ use crate::{
         },
         vinted::{
             auth::VintedCredentialRecord,
+            draft::{HttpVintedDraftApi, VintedDraftApi},
             item::{
                 HttpVintedItemApi, VintedItemApi, VintedItemRequest, VintedItemResult,
                 VintedItemSession, VintedItems,
@@ -63,6 +64,7 @@ pub struct ApplicationDependencies {
     vinted_item_session: Arc<dyn VintedItemSession>,
     vinted_search: Arc<dyn VintedSearchApi>,
     vinted_item: Arc<dyn VintedItemApi>,
+    vinted_draft: Arc<dyn VintedDraftApi>,
     vinted_publication: Arc<dyn VintedPublicationApi>,
     vinted_publication_discovery: Arc<dyn VintedPublicationDiscoveryApi>,
 }
@@ -84,6 +86,7 @@ impl ApplicationDependencies {
             vinted_item_session: Arc::new(vinted_session::credentials),
             vinted_search: Arc::new(HttpVintedSearchApi::new()),
             vinted_item: Arc::new(HttpVintedItemApi::new()),
+            vinted_draft: Arc::new(HttpVintedDraftApi::new()),
             vinted_publication: Arc::new(HttpVintedPublicationApi::new()),
             vinted_publication_discovery: Arc::new(HttpVintedPublicationDiscoveryApi::new()),
         }
@@ -134,6 +137,11 @@ impl ApplicationDependencies {
 
     pub fn with_vinted_item_api(mut self, api: Arc<dyn VintedItemApi>) -> Self {
         self.vinted_item = api;
+        self
+    }
+
+    pub fn with_vinted_draft_api(mut self, api: Arc<dyn VintedDraftApi>) -> Self {
+        self.vinted_draft = api;
         self
     }
 
@@ -294,6 +302,7 @@ async fn execute_vinted(
                 args.command,
                 dependencies.vinted_search_session.as_ref(),
                 dependencies.vinted_publication.as_ref(),
+                dependencies.vinted_draft.as_ref(),
             )
             .await
         }

@@ -1,6 +1,7 @@
 pub(crate) mod auth;
 pub(crate) mod binding;
 pub(crate) mod composer;
+pub(crate) mod draft;
 pub(crate) mod interactive;
 pub(crate) mod item;
 pub(crate) mod publication;

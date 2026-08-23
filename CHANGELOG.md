@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded Vinted draft listing, complete remote draft inspection, and
+  publication-readiness validation with reusable photo ordering
 - Reuse verified remote photos when publishing Vinted drafts, with explicit
   replace-all image uploads and inspectable partial replacement state
 - Add authenticated Vinted item inspection with exact raw output and
