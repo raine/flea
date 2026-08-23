@@ -121,8 +121,9 @@ impl CommandRuntime for TestRuntime {
                         listing::dispatch_with_api(args, &api).await
                     }
                     ToriCommand::Search(args) => {
-                        let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                        search::dispatch_with_api(*args, &api).await
+                        let search_api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
+                        let item_api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
+                        search::dispatch_with_apis(*args, &search_api, Some(&item_api)).await
                     }
                     ToriCommand::SavedSearch(args) => {
                         let api = HttpSavedSearchesApi::new(Arc::new(self.client.clone()));
@@ -1364,6 +1365,58 @@ fn public_search_flows_without_authentication_through_one_envelope() {
     assert_eq!(requests[0].service, "SEARCH-QUEST");
     assert!(requests[0].path_and_query.contains("client=android"));
     assert!(!requests[0].path_and_query.contains("include_filters"));
+}
+
+#[test]
+fn public_search_detail_explanation_uses_public_item_evidence() {
+    let client = MockClient::with_responses([
+        response(
+            StatusCode::OK,
+            json!({
+                "docs": [{"id": "42346404", "heading": "Potkulauta"}],
+                "metadata": {
+                    "result_size": {"match_count": 1},
+                    "paging": {"current": 1, "last": 1}
+                }
+            }),
+        ),
+        response(
+            StatusCode::OK,
+            json!({
+                "ad": {
+                    "title": "Potkulauta",
+                    "description": "Micro Mini lasten potkulauta"
+                },
+                "meta": {"adId": 42346404}
+            }),
+        ),
+    ]);
+
+    let value = invoke(
+        &TestRuntime {
+            client: client.clone(),
+        },
+        [
+            "flea",
+            "--format",
+            "json",
+            "tori",
+            "search",
+            "micro mini potkulauta",
+            "--explain",
+            "1",
+        ],
+    );
+
+    let explanation = &value["data"]["results"][0]["match_explanation"];
+    assert_eq!(explanation["source_field"], "description");
+    assert_eq!(explanation["evidence_origin"], "public_item");
+    assert_eq!(explanation["matched_terms"], json!(["micro", "mini"]));
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].service, "SEARCH-QUEST");
+    assert_eq!(requests[1].service, "ADVIEW-PROVIDER-RC");
+    assert_eq!(requests[1].path_and_query, "/adview/42346404");
 }
 
 #[test]
