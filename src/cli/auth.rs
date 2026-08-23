@@ -329,9 +329,9 @@ mod tests {
         ) -> Result<crate::marketplace::tori::auth::SchibstedTokens, AppError> {
             Ok(
                 crate::marketplace::tori::auth::SchibstedTokens::new_for_adapter(
-                    "access".into(),
-                    "refresh".into(),
-                    "id".into(),
+                    "access-secret-fixture".into(),
+                    "refresh-secret-fixture".into(),
+                    "id-secret-fixture".into(),
                 ),
             )
         }
@@ -354,7 +354,7 @@ mod tests {
                         user_id: "42".into(),
                     }
                     .user_id,
-                    "bearer".into(),
+                    "bearer-secret-fixture".into(),
                 ),
             )
         }
@@ -426,6 +426,76 @@ mod tests {
             handler.dispatch(AuthCommand::Logout).await.unwrap(),
             serde_json::json!({ "authenticated": false })
         );
+    }
+
+    #[test]
+    fn start_output_contains_only_public_flow_fields() {
+        let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
+
+        let started = handler.start(1_000).unwrap();
+        let object = started.as_object().unwrap();
+
+        assert_eq!(object.len(), 4);
+        assert!(
+            object["flow_id"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
+        assert!(
+            object["login_url"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("https://login.vend.fi/oauth/authorize?"))
+        );
+        assert_eq!(object["expires_at_unix"], 1_600);
+        assert_eq!(object["completion_command"], "flea tori auth login");
+        let rendered = started.to_string();
+        let flow = handler.store.flow.lock().unwrap();
+        let flow = flow.as_ref().unwrap();
+        for secret in [
+            flow.pkce_verifier.expose(),
+            &flow.device_id,
+            &flow.installation_id,
+            &flow.ab_test_device_id,
+        ] {
+            assert!(!rendered.contains(secret));
+        }
+    }
+
+    #[tokio::test]
+    async fn completion_output_contains_only_public_account_state() {
+        let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
+        let started = handler.start(1_000).unwrap();
+        let flow_id = started["flow_id"].as_str().unwrap().to_owned();
+        let state = handler
+            .store
+            .flow
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .state
+            .expose()
+            .to_owned();
+        let callback = format!(
+            "{}://login?code=authorization-code&state={state}",
+            crate::marketplace::tori::auth::CALLBACK_SCHEME
+        );
+
+        let completed = handler.complete(&flow_id, &callback, 1_001).await.unwrap();
+
+        assert_eq!(
+            completed,
+            serde_json::json!({ "authenticated": true, "user_id": "42" })
+        );
+        assert!(handler.store.load_flow(&flow_id).unwrap().is_none());
+        let debug = format!("{:?}", handler.store.credentials.lock().unwrap());
+        for secret in [
+            "refresh-secret-fixture",
+            "bearer-secret-fixture",
+            "id-secret-fixture",
+        ] {
+            assert!(!debug.contains(secret));
+        }
     }
 
     #[tokio::test]
