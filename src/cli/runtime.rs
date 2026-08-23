@@ -137,7 +137,7 @@ async fn execute_tori(
         ToriCommand::Category(args) => {
             let client = dependencies.authenticated_tori_client().await?;
             let api = HttpListingsApi::new(client);
-            category::dispatch_with_api(args, &api).await
+            category::dispatch(args, &api).await
         }
         ToriCommand::Draft(args) => match args.command {
             command @ super::draft::DraftCommand::Preview {
@@ -161,33 +161,31 @@ async fn execute_tori(
         ToriCommand::Favorite(args) => {
             let client = dependencies.authenticated_tori_client().await?;
             let api = HttpFavoritesApi::new(client);
-            favorite::dispatch_with_api(args, &api).await
+            favorite::dispatch(args, &api).await
         }
         ToriCommand::Item(args) => {
             let api = HttpPublicItemApi::new(Arc::clone(&dependencies.public_tori_client));
-            super::item::dispatch_with_api(args, &api).await
+            super::item::dispatch(args, &api).await
         }
         ToriCommand::Listing(args) => {
             let client = dependencies.authenticated_tori_client().await?;
             let api = HttpListingsApi::new(client);
-            listing::dispatch_with_api(args, &api).await
+            listing::dispatch(args, &api).await
         }
         ToriCommand::Search(args) => {
             let search_api = HttpPublicSearchApi::new(Arc::clone(&dependencies.public_tori_client));
             let item_api = HttpPublicItemApi::new(Arc::clone(&dependencies.public_tori_client));
-            super::search::dispatch_with_apis(*args, &search_api, Some(&item_api)).await
+            super::search::dispatch(*args, &search_api, Some(&item_api)).await
         }
         ToriCommand::SavedSearch(args) => {
             let client = dependencies.authenticated_tori_client().await?;
             let api = HttpSavedSearchesApi::new(Arc::clone(&client));
             let search_api = HttpPublicSearchApi::new(client);
-            saved_search::dispatch_with_apis(*args, &api, &search_api).await
+            saved_search::dispatch(*args, &api, &search_api).await
         }
         ToriCommand::Location(args) => {
             let api = HttpPublicSearchApi::new(Arc::clone(&dependencies.public_tori_client));
-            super::location::dispatch_with_api(args, &api)
-                .await
-                .map(Into::into)
+            super::location::dispatch(args, &api).await.map(Into::into)
         }
     }
 }

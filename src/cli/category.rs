@@ -69,7 +69,7 @@ impl CategoryCommand {
     }
 }
 
-pub async fn dispatch_with_api(
+pub async fn dispatch(
     command: CategoryArgs,
     api: &dyn ListingsApi,
 ) -> Result<CommandOutcome, AppError> {

@@ -32,10 +32,7 @@ impl LocationCommand {
     }
 }
 
-pub async fn dispatch_with_api(
-    args: LocationArgs,
-    api: &dyn PublicSearchApi,
-) -> Result<Value, AppError> {
+pub async fn dispatch(args: LocationArgs, api: &dyn PublicSearchApi) -> Result<Value, AppError> {
     let search = PublicSearch::new(api);
     let result = match args.command {
         LocationCommand::Search { query } => {

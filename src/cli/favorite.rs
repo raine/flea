@@ -66,7 +66,7 @@ impl FavoriteCommand {
     }
 }
 
-pub async fn dispatch_with_api(
+pub async fn dispatch(
     args: FavoriteArgs,
     api: &dyn FavoritesApi,
 ) -> Result<CommandOutcome, AppError> {

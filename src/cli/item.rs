@@ -37,10 +37,7 @@ impl ItemCommand {
     }
 }
 
-pub async fn dispatch_with_api(
-    args: ItemArgs,
-    api: &dyn PublicItemApi,
-) -> Result<CommandOutcome, AppError> {
+pub async fn dispatch(args: ItemArgs, api: &dyn PublicItemApi) -> Result<CommandOutcome, AppError> {
     match args.command {
         ItemCommand::Show { listing_id, raw } => {
             let (detail, upstream) = PublicItems::new(api).show(&listing_id).await?;

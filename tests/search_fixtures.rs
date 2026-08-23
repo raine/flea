@@ -138,7 +138,7 @@ async fn canonical_leaf_category_value_is_accepted_by_search() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         panic!("search command");
     };
-    search::dispatch_with_api(*args, &api).await.unwrap();
+    search::dispatch(*args, &api, None).await.unwrap();
     let request = api.requests.lock().unwrap()[0].clone();
 
     assert_eq!(
@@ -167,7 +167,7 @@ async fn encodes_helsinki_twenty_kilometer_radius_as_tori_meter_parameters() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    search::dispatch_with_api(*args, &api).await.unwrap();
+    search::dispatch(*args, &api, None).await.unwrap();
     assert_eq!(
         api.requests.lock().unwrap()[0].path_and_query(),
         "/search/SEARCH_ID_BAP_COMMON?client=android&lat=60.1699&lon=24.9384&page=1&q=tuoli&radius=20000&rows=1"
@@ -304,7 +304,7 @@ async fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_api(*args, &api).await.unwrap();
+    let output = search::dispatch(*args, &api, None).await.unwrap();
 
     assert_eq!(
         api.requests.lock().unwrap()[0].path_and_query(),
@@ -408,7 +408,7 @@ async fn bounds_and_prioritizes_large_category_and_location_facets() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_api(*args, &api).await.unwrap();
+    let output = search::dispatch(*args, &api, None).await.unwrap();
 
     for facet in output["facets"].as_array().unwrap() {
         assert_eq!(
@@ -438,7 +438,7 @@ async fn bounds_and_prioritizes_large_category_and_location_facets() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let broader = search::dispatch_with_api(*args, &api).await.unwrap();
+    let broader = search::dispatch(*args, &api, None).await.unwrap();
     for facet in broader["facets"].as_array().unwrap() {
         assert_eq!(
             facet["returned_option_count"],
@@ -505,7 +505,7 @@ async fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_local
         let ToriCommand::Search(args) = tori_command(cli) else {
             unreachable!()
         };
-        assert!(search::dispatch_with_api(*args, &api).await.is_err());
+        assert!(search::dispatch(*args, &api, None).await.is_err());
     }
     assert!(api.requests.lock().unwrap().is_empty());
 
@@ -526,7 +526,7 @@ async fn validates_coordinates_radius_pagination_and_duplicate_json_inputs_local
         unreachable!()
     };
     assert!(
-        search::dispatch_with_api(*args, &api)
+        search::dispatch(*args, &api, None)
             .await
             .unwrap_err()
             .to_string()
@@ -559,9 +559,7 @@ async fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let error = search::dispatch_with_api(*args, &ErrorApi)
-        .await
-        .unwrap_err();
+    let error = search::dispatch(*args, &ErrorApi, None).await.unwrap_err();
     assert_eq!(error.code, "upstream.request_failed");
     assert!(error.upstream_transient);
     assert!(error.safe_to_retry);
@@ -580,7 +578,7 @@ async fn unicode_query_limit_counts_characters_instead_of_bytes() {
         unreachable!()
     };
 
-    search::dispatch_with_api(*args, &api).await.unwrap();
+    search::dispatch(*args, &api, None).await.unwrap();
     assert_eq!(api.requests.lock().unwrap()[0].query, query);
 }
 
@@ -591,7 +589,7 @@ async fn page_cap_action_requests_facets_for_executable_refinement() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_api(*args, &api).await.unwrap();
+    let output = search::dispatch(*args, &api, None).await.unwrap();
 
     assert_eq!(
         output.next_actions[0].command,
@@ -610,7 +608,7 @@ async fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_apis(*args, &api, Some(&item_api))
+    let output = search::dispatch(*args, &api, Some(&item_api))
         .await
         .unwrap();
     let listing = output["results"][0].as_object().unwrap();
@@ -682,7 +680,7 @@ async fn explains_a_generic_title_from_bounded_public_description_evidence() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api))
+    let output = search::dispatch(*args, &search_api, Some(&item_api))
         .await
         .unwrap();
 
@@ -739,7 +737,7 @@ async fn explain_enforces_its_request_bound_and_reports_partial_failures() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    let output = search::dispatch_with_apis(*args, &search_api, Some(&item_api))
+    let output = search::dispatch(*args, &search_api, Some(&item_api))
         .await
         .unwrap();
 
@@ -771,7 +769,7 @@ async fn explain_bounds_and_mode_combinations_fail_before_search_requests() {
         let ToriCommand::Search(args) = tori_command(cli) else {
             unreachable!()
         };
-        assert!(search::dispatch_with_api(*args, &api).await.is_err());
+        assert!(search::dispatch(*args, &api, None).await.is_err());
     }
     assert!(api.requests.lock().unwrap().is_empty());
 }
@@ -784,7 +782,7 @@ async fn raw_mode_preserves_the_upstream_document() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    assert_eq!(search::dispatch_with_api(*args, &api).await.unwrap(), raw);
+    assert_eq!(search::dispatch(*args, &api, None).await.unwrap(), raw);
 }
 
 fn empty_fixture() -> Value {

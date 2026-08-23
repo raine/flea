@@ -206,14 +206,7 @@ struct SearchInput {
     raw: bool,
 }
 
-pub async fn dispatch_with_api(
-    args: SearchArgs,
-    api: &dyn PublicSearchApi,
-) -> Result<CommandOutcome, AppError> {
-    dispatch_with_apis(args, api, None).await
-}
-
-pub async fn dispatch_with_apis(
+pub async fn dispatch(
     args: SearchArgs,
     api: &dyn PublicSearchApi,
     item_api: Option<&dyn PublicItemApi>,

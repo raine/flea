@@ -82,7 +82,7 @@ impl ListingCommand {
     }
 }
 
-pub async fn dispatch_with_api(
+pub async fn dispatch(
     command: ListingArgs,
     api: &dyn ListingsApi,
 ) -> Result<CommandOutcome, AppError> {

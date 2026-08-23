@@ -119,7 +119,7 @@ pub enum NotificationState {
     Off,
 }
 
-pub async fn dispatch_with_apis(
+pub async fn dispatch(
     args: SavedSearchArgs,
     api: &dyn SavedSearchesApi,
     search_api: &dyn PublicSearchApi,
