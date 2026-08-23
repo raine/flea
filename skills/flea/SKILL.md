@@ -5,9 +5,8 @@ description: Operate Tori.fi workflows and authenticated Vinted search, item ins
 
 # Flea
 
-Use default TOON output for compact results. Add `--format json` for JSON.
-Run `flea <marketplace> <command> --help` for syntax. Use `flea capabilities`
-to inspect support.
+TOON is default output. Add `--format json` for JSON. Use command help for
+syntax and `flea capabilities` for support.
 
 ## Rules
 
@@ -35,10 +34,9 @@ flea vinted item show ITEM_ID
 flea vinted item show ITEM_ID --raw
 ```
 
-Use search IDs for item inspection. `seller.seller_disclosed_location` is
-exposure-permitted seller profile data, not a catalog filter or guaranteed item
-location. Never infer it from presentation text. `--raw` preserves upstream
-JSON.
+Inspect search IDs. `seller.seller_disclosed_location` is exposure-permitted
+seller profile data, not a catalog filter or guaranteed item location. Never
+infer it from presentation text. `--raw` preserves upstream JSON.
 
 ## Publish Vinted listings
 
@@ -71,11 +69,14 @@ Public search and item inspection need no login. Define geography explicitly:
 `--location Helsinki` selects the city, `--area` accepts places, and coordinates
 with `--radius-km` define a boundary. Clarify ambiguous areas.
 
-Use `--explain N` or `item show` for opaque matches. Return linked title,
-price, location, and URL. Manage favorites with
-`flea tori favorite add|remove LISTING_ID`.
+Merge searches by `listing_id`; ranks across queries are not comparable. Use
+`--explain N` or `item show` for opaque matches. Return linked title, price,
+location, and URL with scope and ordering. Manage favorites with
+`flea tori favorite add|remove LISTING_ID`. Use structured price fields, never
+parse `price.display`.
 
 Use `taxonomy_value` with `search --category` and `category_id` for drafts.
+Follow pagination actions instead of dumping the taxonomy.
 
 Manage authenticated alerts with
 `flea tori saved-search list|show|create|update|delete`. Choose notification

@@ -35,6 +35,9 @@ fn skill_prints_the_project_skill_source() {
     assert!(CANONICAL_SKILL.contains(".data.revision"));
     assert!(CANONICAL_SKILL.contains("Use `taxonomy_value` with `search --category`"));
     assert!(CANONICAL_SKILL.contains("flea vinted search [QUERY]"));
+    assert!(CANONICAL_SKILL.contains("flea vinted item show ITEM_ID"));
+    assert!(CANONICAL_SKILL.contains("seller profile data"));
+    assert!(CANONICAL_SKILL.contains("not a catalog filter or guaranteed item location"));
     assert!(CANONICAL_SKILL.contains("search requires authentication"));
     let words = CANONICAL_SKILL.split_whitespace().count();
     assert!(

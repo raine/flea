@@ -376,7 +376,7 @@ fn status_error(status: StatusCode, item_id: &str) -> AppError {
         ExitClass::Upstream,
     );
     error.upstream_transient = status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS;
-    error.safe_to_retry = true;
+    error.safe_to_retry = error.upstream_transient;
     error
 }
 
@@ -434,6 +434,14 @@ mod tests {
         assert_eq!(unavailable.code, "vinted_item.upstream_failed");
         assert!(unavailable.upstream_transient);
         assert!(unavailable.safe_to_retry);
+
+        let throttled = status_error(StatusCode::TOO_MANY_REQUESTS, "101");
+        assert!(throttled.upstream_transient);
+        assert!(throttled.safe_to_retry);
+
+        let rejected = status_error(StatusCode::BAD_REQUEST, "101");
+        assert!(!rejected.upstream_transient);
+        assert!(!rejected.safe_to_retry);
     }
 
     #[test]

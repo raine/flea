@@ -134,6 +134,12 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(item.contains("Numeric marketplace listing ID returned by `flea tori search`"));
     assert!(item.contains("--raw"));
 
+    let vinted_item = stdout(&invoke(&["vinted", "item", "show", "--help"]));
+    assert!(vinted_item.contains("Usage: flea vinted item show [OPTIONS] <ITEM_ID>"));
+    assert!(vinted_item.contains("seller-disclosed profile information"));
+    assert!(vinted_item.contains("not a catalog filter value"));
+    assert!(vinted_item.contains("exact upstream JSON body"));
+
     let draft = stdout(&invoke(&["tori", "draft", "--help"]));
     assert!(draft.contains("create    Create a remote draft"));
     assert!(draft.contains("preview   Preview and validate draft input locally"));

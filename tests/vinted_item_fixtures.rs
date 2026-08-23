@@ -1,4 +1,8 @@
-use std::{future::Future, pin::Pin, sync::Mutex};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use flea::{
     AppError, ExitClass, PortalId,
@@ -6,6 +10,7 @@ use flea::{
         VintedCredentialRecord, VintedItemApi, VintedItemRequest, VintedItemResult, VintedItems,
     },
     domain::vinted_item::VintedSellerLocationSource,
+    run_with_dependencies,
 };
 use serde_json::Value;
 
@@ -170,6 +175,24 @@ async fn raw_mode_returns_the_exact_direct_or_wrapped_upstream_document() {
         .unwrap();
 
     assert_eq!(result, VintedItemResult::Raw(raw));
+}
+
+#[test]
+fn raw_mode_preserves_the_upstream_document_in_the_cli_envelope() {
+    let raw = fixture("raw-output");
+    let dependencies = flea::dependencies::ApplicationDependencies::production()
+        .with_vinted_credentials_provider(|_| Ok(credentials()))
+        .with_vinted_item_api(Arc::new(FixtureApi::response(raw.clone())));
+    let result = run_with_dependencies(
+        [
+            "flea", "--format", "json", "vinted", "item", "show", "107", "--raw",
+        ],
+        &dependencies,
+    );
+    let envelope: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(envelope["data"], raw);
 }
 
 #[tokio::test]
