@@ -86,19 +86,19 @@ impl CommandRuntime for TestRuntime {
                     }
                     ToriCommand::Category(args) => {
                         let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                        category::dispatch_with_api(args, &api)
+                        category::dispatch_with_api(args, &api).await
                     }
                     ToriCommand::Draft(args) => match args.command {
                         command @ flea::cli::draft::DraftCommand::Preview {
                             verify_category: false,
                             ..
-                        } => draft::execute_preview(command, None),
+                        } => draft::execute_preview(command, None).await,
                         command @ flea::cli::draft::DraftCommand::Preview {
                             verify_category: true,
                             ..
                         } => {
                             let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                            draft::execute_preview(command, Some(&api))
+                            draft::execute_preview(command, Some(&api)).await
                         }
                         command => {
                             draft::execute(
@@ -119,7 +119,7 @@ impl CommandRuntime for TestRuntime {
                     }
                     ToriCommand::Listing(args) => {
                         let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                        listing::dispatch_with_api(args, &api)
+                        listing::dispatch_with_api(args, &api).await
                     }
                     ToriCommand::Search(args) => {
                         let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));

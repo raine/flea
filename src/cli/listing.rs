@@ -67,27 +67,33 @@ pub enum ListingCommand {
     },
 }
 
-pub fn dispatch_with_api(command: ListingArgs, api: &dyn ListingsApi) -> Result<Value, AppError> {
+pub async fn dispatch_with_api(
+    command: ListingArgs,
+    api: &dyn ListingsApi,
+) -> Result<Value, AppError> {
     let listings = Listings::new(api);
     let (value, source) = match command.command {
-        ListingCommand::List => (serde_json::to_value(listings.list()?), "listing_collection"),
+        ListingCommand::List => (
+            serde_json::to_value(listings.list().await?),
+            "listing_collection",
+        ),
         ListingCommand::Show { listing_id } => (
-            serde_json::to_value(listings.show(&listing_id)?),
+            serde_json::to_value(listings.show(&listing_id).await?),
             "listing_detail",
         ),
         ListingCommand::Update { listing_id, values } => {
             let changes = listing_changes(*values)?;
             (
-                serde_json::to_value(listings.update(&listing_id, changes)?),
+                serde_json::to_value(listings.update(&listing_id, changes).await?),
                 "listing_update_response",
             )
         }
         ListingCommand::Dispose { listing_id } => (
-            serde_json::to_value(listings.dispose(&listing_id)?),
+            serde_json::to_value(listings.dispose(&listing_id).await?),
             "listing_dispose_response",
         ),
         ListingCommand::Delete { listing_id } => {
-            let deleted = listings.delete(&listing_id)?;
+            let deleted = listings.delete(&listing_id).await?;
             (
                 Ok(json!({ "listing_id": deleted.listing_id, "deleted": true })),
                 "listing_delete_response",

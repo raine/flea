@@ -692,7 +692,7 @@ fn selected_delivery(delivery: &DraftDelivery) -> SelectedDelivery {
     }
 }
 
-pub fn execute_preview(
+pub async fn execute_preview(
     command: DraftCommand,
     taxonomy: Option<&dyn ListingsApi>,
 ) -> Result<Value, AppError> {
@@ -703,10 +703,12 @@ pub fn execute_preview(
     else {
         return Err(AppError::unexpected("expected a draft preview command"));
     };
-    draft_input::preview(collect_input(values)?, verify_category, taxonomy).map(|mut value| {
-        crate::domain::commerce::normalize_values_output(&mut value);
-        value
-    })
+    draft_input::preview(collect_input(values)?, verify_category, taxonomy)
+        .await
+        .map(|mut value| {
+            crate::domain::commerce::normalize_values_output(&mut value);
+            value
+        })
 }
 
 pub async fn execute<A: AdInputApi>(
@@ -715,7 +717,7 @@ pub async fn execute<A: AdInputApi>(
     config: WorkflowConfig,
 ) -> Result<Value, AppError> {
     if matches!(&command, DraftCommand::Preview { .. }) {
-        return execute_preview(command, None);
+        return execute_preview(command, None).await;
     }
     let confirms_absence = matches!(&command, DraftCommand::Delete { .. });
     let observation_source = match &command {

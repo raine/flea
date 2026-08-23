@@ -59,7 +59,10 @@ pub enum CategoryCommand {
     },
 }
 
-pub fn dispatch_with_api(command: CategoryArgs, api: &dyn ListingsApi) -> Result<Value, AppError> {
+pub async fn dispatch_with_api(
+    command: CategoryArgs,
+    api: &dyn ListingsApi,
+) -> Result<Value, AppError> {
     let listings = Listings::new(api);
     match command.command {
         CategoryCommand::Search {
@@ -69,15 +72,17 @@ pub fn dispatch_with_api(command: CategoryArgs, api: &dyn ListingsApi) -> Result
             limit,
             offset,
         } => {
-            let result = listings.search_categories_with_options(
-                &query,
-                CategorySearchOptions {
-                    parent: parent.as_deref(),
-                    path: path.as_deref(),
-                    offset,
-                    limit,
-                },
-            )?;
+            let result = listings
+                .search_categories_with_options(
+                    &query,
+                    CategorySearchOptions {
+                        parent: parent.as_deref(),
+                        path: path.as_deref(),
+                        offset,
+                        limit,
+                    },
+                )
+                .await?;
             let mut value = serde_json::to_value(&result)
                 .map_err(|error| AppError::output(error.to_string()))?;
             if result.truncated {
@@ -96,7 +101,7 @@ pub fn dispatch_with_api(command: CategoryArgs, api: &dyn ListingsApi) -> Result
             Ok(value)
         }
         CategoryCommand::List { parent } => {
-            serde_json::to_value(listings.categories(parent.as_deref())?)
+            serde_json::to_value(listings.categories(parent.as_deref()).await?)
                 .map_err(|error| AppError::output(error.to_string()))
         }
     }

@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
+    future::Future,
+    pin::Pin,
     sync::Mutex,
 };
 
@@ -53,89 +55,104 @@ impl MockListingsApi {
 }
 
 impl ListingsApi for MockListingsApi {
-    fn categories(&self) -> Result<Vec<UpstreamCategory>, ListingsApiError> {
-        self.categories.clone()
+    fn categories(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<UpstreamCategory>, ListingsApiError>> + Send + '_>>
+    {
+        let categories = self.categories.clone();
+        Box::pin(async move { categories })
     }
 
     fn listing_page(
         &self,
         offset: usize,
         limit: usize,
-    ) -> Result<UpstreamListingPage, ListingsApiError> {
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListingPage, ListingsApiError>> + Send + '_>>
+    {
         self.page_calls.lock().unwrap().push((offset, limit));
-        self.pages
-            .lock()
-            .unwrap()
-            .pop_front()
-            .ok_or_else(|| ListingsApiError::UnexpectedResponse("missing mock page".to_owned()))
+        let page =
+            self.pages.lock().unwrap().pop_front().ok_or_else(|| {
+                ListingsApiError::UnexpectedResponse("missing mock page".to_owned())
+            });
+        Box::pin(async move { page })
     }
 
-    fn listing(&self, listing_id: &str) -> Result<UpstreamListing, ListingsApiError> {
-        if let Some(error) = self.listing_errors.lock().unwrap().pop_front() {
-            return Err(error);
-        }
-        if let Some(index) = listing_id
+    fn listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>> {
+        let result = if let Some(error) = self.listing_errors.lock().unwrap().pop_front() {
+            Err(error)
+        } else if let Some(index) = listing_id
             .strip_prefix("10")
             .and_then(|value| value.parse::<u64>().ok())
         {
-            return Ok(serde_json::from_value(json!({
+            Ok(serde_json::from_value(json!({
                 "id": listing_id,
                 "etag": format!("listing-{listing_id}"),
                 "fields": {"trade_type": "sell", "price": index + 10}
             }))
-            .unwrap());
-        }
-        self.listings
-            .lock()
-            .unwrap()
-            .pop_front()
-            .ok_or_else(|| ListingsApiError::UnexpectedResponse("missing mock listing".to_owned()))
+            .unwrap())
+        } else {
+            self.listings.lock().unwrap().pop_front().ok_or_else(|| {
+                ListingsApiError::UnexpectedResponse("missing mock listing".to_owned())
+            })
+        };
+        Box::pin(async move { result })
     }
 
-    fn update_listing(
-        &self,
-        listing_id: &str,
-        etag: &str,
-        fields: &BTreeMap<String, Value>,
-    ) -> Result<UpstreamListing, ListingsApiError> {
+    fn update_listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+        etag: &'a str,
+        fields: &'a BTreeMap<String, Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>> {
         self.update_calls.lock().unwrap().push((
             listing_id.to_owned(),
             etag.to_owned(),
             fields.clone(),
         ));
-        self.updates
+        let result = self
+            .updates
             .lock()
             .unwrap()
             .pop_front()
-            .unwrap_or_else(|| Ok(fixture("detail-updated.json")))
+            .unwrap_or_else(|| Ok(fixture("detail-updated.json")));
+        Box::pin(async move { result })
     }
 
-    fn dispose_listing(&self, listing_id: &str) -> Result<(), ListingsApiError> {
+    fn dispose_listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>> {
         self.disposed.lock().unwrap().push(listing_id.to_owned());
-        Ok(())
+        Box::pin(async { Ok(()) })
     }
 
-    fn delete_listing(&self, listing_id: &str) -> Result<(), ListingsApiError> {
+    fn delete_listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>> {
         self.deleted.lock().unwrap().push(listing_id.to_owned());
-        Ok(())
+        Box::pin(async { Ok(()) })
     }
 }
 
-#[test]
-fn discovers_category_roots_children_and_search_paths() {
+#[tokio::test]
+async fn discovers_category_roots_children_and_search_paths() {
     let api = MockListingsApi::fixtures();
     let listings = Listings::new(&api);
 
-    let roots = listings.categories(None).unwrap();
+    let roots = listings.categories(None).await.unwrap();
     assert_eq!(roots.categories.len(), 2);
     assert_eq!(roots.categories[0].category_id, "100");
     assert!(!roots.categories[0].selectable);
 
-    let children = listings.categories(Some("100")).unwrap();
+    let children = listings.categories(Some("100")).await.unwrap();
     assert_eq!(children.categories.len(), 1);
     assert_eq!(children.categories[0].category_id, "110");
 
-    let matches = listings.search_categories("työtuolit").unwrap();
+    let matches = listings.search_categories("työtuolit").await.unwrap();
     assert_eq!(matches.categories.len(), 1);
     assert_eq!(
         matches.categories[0].path,
@@ -143,8 +160,8 @@ fn discovers_category_roots_children_and_search_paths() {
     );
 }
 
-#[test]
-fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
+#[tokio::test]
+async fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
     let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
         include_str!("fixtures/listings/category-taxonomy-live.json"),
     )
@@ -153,7 +170,7 @@ fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
     api.categories = Ok(taxonomy.categories);
     let listings = Listings::new(&api);
 
-    let cycling = listings.search_categories("polkupyörä").unwrap();
+    let cycling = listings.search_categories("polkupyörä").await.unwrap();
     assert_eq!(cycling.categories.len(), 2);
     assert_eq!(cycling.categories[0].category_id, "257");
     assert_eq!(cycling.categories[1].category_id, "8375");
@@ -162,7 +179,7 @@ fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
         "Urheilu ja ulkoilu > Pyöräily > Polkupyörät"
     );
 
-    let children = listings.categories(Some("3963")).unwrap();
+    let children = listings.categories(Some("3963")).await.unwrap();
     assert_eq!(children.categories.len(), 6);
     assert!(children.categories.iter().all(|category| {
         category.parent_id.as_deref() == Some("3963")
@@ -171,7 +188,10 @@ fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
                 .starts_with("Urheilu ja ulkoilu > Pyöräily > ")
     }));
 
-    let components = listings.search_categories("tietokonekomponentit").unwrap();
+    let components = listings
+        .search_categories("tietokonekomponentit")
+        .await
+        .unwrap();
     assert_eq!(components.categories.len(), 1);
     assert_eq!(components.categories[0].category_id, "8368");
     assert_eq!(components.categories[0].taxonomy_value, "2.93.3215.8368");
@@ -180,15 +200,15 @@ fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
         "2.93.3215.8368"
     );
 
-    let no_matches = listings.search_categories("lukko").unwrap();
+    let no_matches = listings.search_categories("lukko").await.unwrap();
     assert!(no_matches.categories.is_empty());
     assert_eq!(no_matches.returned, 0);
     assert_eq!(no_matches.total, 0);
     assert!(!no_matches.truncated);
 }
 
-#[test]
-fn category_search_bounds_broad_results_and_reports_pagination() {
+#[tokio::test]
+async fn category_search_bounds_broad_results_and_reports_pagination() {
     let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
         include_str!("fixtures/listings/category-taxonomy-live.json"),
     )
@@ -197,7 +217,7 @@ fn category_search_bounds_broad_results_and_reports_pagination() {
     api.categories = Ok(taxonomy.categories);
     let listings = Listings::new(&api);
 
-    let first = listings.search_categories("tarvikkeet").unwrap();
+    let first = listings.search_categories("tarvikkeet").await.unwrap();
     assert_eq!(first.limit, CATEGORY_SEARCH_LIMIT_DEFAULT);
     assert_eq!(first.offset, 0);
     assert_eq!(first.returned, CATEGORY_SEARCH_LIMIT_DEFAULT);
@@ -213,6 +233,7 @@ fn category_search_bounds_broad_results_and_reports_pagination() {
                 ..CategorySearchOptions::default()
             },
         )
+        .await
         .unwrap();
     assert_eq!(second.offset, CATEGORY_SEARCH_LIMIT_DEFAULT);
     assert_eq!(second.limit, 7);
@@ -221,8 +242,8 @@ fn category_search_bounds_broad_results_and_reports_pagination() {
     assert_ne!(second.categories[0], first.categories[0]);
 }
 
-#[test]
-fn category_search_resolves_ids_labels_and_finnish_unicode_deterministically() {
+#[tokio::test]
+async fn category_search_resolves_ids_labels_and_finnish_unicode_deterministically() {
     let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
         include_str!("fixtures/listings/category-taxonomy-live.json"),
     )
@@ -231,24 +252,31 @@ fn category_search_resolves_ids_labels_and_finnish_unicode_deterministically() {
     api.categories = Ok(taxonomy.categories);
     let listings = Listings::new(&api);
 
-    let id = listings.search_categories("258").unwrap();
+    let id = listings.search_categories("258").await.unwrap();
     assert_eq!(id.categories.len(), 1);
     assert_eq!(id.categories[0].label, "Pyöräilyvarusteet");
 
-    let label = listings.search_categories("PYÖRÄILYVARUSTEET").unwrap();
+    let label = listings
+        .search_categories("PYÖRÄILYVARUSTEET")
+        .await
+        .unwrap();
     assert_eq!(label.categories[0].category_id, "258");
 
     let decomposed = listings
         .search_categories("PYO\u{308}RA\u{308}ILYVARUSTEET")
+        .await
         .unwrap();
     assert_eq!(decomposed.categories[0].category_id, "258");
 
-    let finnish = listings.search_categories("ÖLJYVÄRIMAALAUKSET").unwrap();
+    let finnish = listings
+        .search_categories("ÖLJYVÄRIMAALAUKSET")
+        .await
+        .unwrap();
     assert_eq!(finnish.categories[0].category_id, "390");
 }
 
-#[test]
-fn category_search_filters_bicycle_accessories_by_parent_or_path() {
+#[tokio::test]
+async fn category_search_filters_bicycle_accessories_by_parent_or_path() {
     let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
         include_str!("fixtures/listings/category-taxonomy-live.json"),
     )
@@ -265,6 +293,7 @@ fn category_search_filters_bicycle_accessories_by_parent_or_path() {
                 ..CategorySearchOptions::default()
             },
         )
+        .await
         .unwrap();
     assert_eq!(by_parent.context.as_ref().unwrap().category_id, "3963");
     assert_eq!(by_parent.categories[0].category_id, "258");
@@ -278,13 +307,14 @@ fn category_search_filters_bicycle_accessories_by_parent_or_path() {
                 ..CategorySearchOptions::default()
             },
         )
+        .await
         .unwrap();
     assert_eq!(by_path.context.as_ref().unwrap().category_id, "3963");
     assert_eq!(by_path.categories, by_parent.categories);
 }
 
-#[test]
-fn category_ranking_orders_exact_prefix_token_context_and_substring_matches() {
+#[tokio::test]
+async fn category_ranking_orders_exact_prefix_token_context_and_substring_matches() {
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(vec![
         UpstreamCategory {
@@ -324,7 +354,10 @@ fn category_ranking_orders_exact_prefix_token_context_and_substring_matches() {
             children: Vec::new(),
         },
     ]);
-    let results = Listings::new(&api).search_categories("pyöräily").unwrap();
+    let results = Listings::new(&api)
+        .search_categories("pyöräily")
+        .await
+        .unwrap();
     let ids = results
         .categories
         .iter()
@@ -334,8 +367,8 @@ fn category_ranking_orders_exact_prefix_token_context_and_substring_matches() {
     assert_eq!(ids, ["10", "11", "12", "13", "20"]);
 }
 
-#[test]
-fn category_search_breaks_equal_relevance_ties_by_path_and_id() {
+#[tokio::test]
+async fn category_search_breaks_equal_relevance_ties_by_path_and_id() {
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(vec![
         UpstreamCategory {
@@ -374,7 +407,10 @@ fn category_search_breaks_equal_relevance_ties_by_path_and_id() {
             ],
         },
     ]);
-    let results = Listings::new(&api).search_categories("tarvikkeet").unwrap();
+    let results = Listings::new(&api)
+        .search_categories("tarvikkeet")
+        .await
+        .unwrap();
     let ids = results
         .categories
         .iter()
@@ -384,8 +420,8 @@ fn category_search_breaks_equal_relevance_ties_by_path_and_id() {
     assert_eq!(ids, ["11", "12", "22"]);
 }
 
-#[test]
-fn category_search_rejects_limits_outside_the_documented_bound() {
+#[tokio::test]
+async fn category_search_rejects_limits_outside_the_documented_bound() {
     let api = MockListingsApi::fixtures();
     let listings = Listings::new(&api);
     for limit in [0, CATEGORY_SEARCH_LIMIT_MAX + 1] {
@@ -397,24 +433,29 @@ fn category_search_rejects_limits_outside_the_documented_bound() {
                     ..CategorySearchOptions::default()
                 },
             )
+            .await
             .unwrap_err();
         assert_eq!(error.code, "cli.invalid_usage");
         assert!(error.message.contains("between 1 and 100"));
     }
 }
 
-#[test]
-fn category_failures_distinguish_collection_parent_and_protocol_errors() {
+#[tokio::test]
+async fn category_failures_distinguish_collection_parent_and_protocol_errors() {
     let mut api = MockListingsApi::fixtures();
     api.categories = Err(ListingsApiError::NotFound);
     let endpoint = Listings::new(&api)
         .search_categories("pyöräily")
+        .await
         .unwrap_err();
     assert_eq!(endpoint.code, "category.endpoint_unavailable");
     assert_eq!(endpoint.exit_class.code(), 40);
 
     let api = MockListingsApi::fixtures();
-    let parent = Listings::new(&api).categories(Some("missing")).unwrap_err();
+    let parent = Listings::new(&api)
+        .categories(Some("missing"))
+        .await
+        .unwrap_err();
     assert_eq!(parent.code, "category.not_found");
     assert_eq!(parent.details.unwrap()["category_id"], "missing");
 
@@ -426,14 +467,14 @@ fn category_failures_distinguish_collection_parent_and_protocol_errors() {
         selectable: Some(true),
         children: Vec::new(),
     }]);
-    let malformed = Listings::new(&api).categories(None).unwrap_err();
+    let malformed = Listings::new(&api).categories(None).await.unwrap_err();
     assert_eq!(malformed.code, "category.protocol_drift");
 }
 
-#[test]
-fn transparently_paginates_the_fifty_item_cap_and_normalizes_results() {
+#[tokio::test]
+async fn transparently_paginates_the_fifty_item_cap_and_normalizes_results() {
     let api = MockListingsApi::fixtures();
-    let collection = Listings::new(&api).list().unwrap();
+    let collection = Listings::new(&api).list().await.unwrap();
 
     assert_eq!(collection.total, 52);
     assert_eq!(collection.listings.len(), 52);
@@ -460,10 +501,10 @@ fn transparently_paginates_the_fifty_item_cap_and_normalizes_results() {
     );
 }
 
-#[test]
-fn show_normalizes_complete_fields_statistics_and_actions() {
+#[tokio::test]
+async fn show_normalizes_complete_fields_statistics_and_actions() {
     let api = MockListingsApi::fixtures();
-    let detail = Listings::new(&api).show("36443414").unwrap();
+    let detail = Listings::new(&api).show("36443414").await.unwrap();
 
     assert_eq!(detail.state, ListingState::Active);
     assert_eq!(detail.fields["material"], "10");
@@ -477,8 +518,8 @@ fn show_normalizes_complete_fields_statistics_and_actions() {
     assert_eq!(detail.actions[1].method, "DELETE");
 }
 
-#[test]
-fn show_merges_normalized_summary_values_into_partial_detail_models() {
+#[tokio::test]
+async fn show_merges_normalized_summary_values_into_partial_detail_models() {
     let mut api = MockListingsApi::fixtures();
     api.listings = Mutex::new(VecDeque::from([serde_json::from_value(json!({
         "id": "46031010",
@@ -492,7 +533,7 @@ fn show_merges_normalized_summary_values_into_partial_detail_models() {
     }))
     .unwrap()]));
 
-    let detail = Listings::new(&api).show("46031010").unwrap();
+    let detail = Listings::new(&api).show("46031010").await.unwrap();
 
     assert_eq!(detail.fields["title"], "Bicycle lock cable");
     assert_eq!(detail.trade_type, flea::domain::commerce::TradeType::Sell);
@@ -507,8 +548,8 @@ fn show_merges_normalized_summary_values_into_partial_detail_models() {
     );
 }
 
-#[test]
-fn show_reconciles_detail_not_found_with_the_matching_active_collection_item() {
+#[tokio::test]
+async fn show_reconciles_detail_not_found_with_the_matching_active_collection_item() {
     let mut api = MockListingsApi::fixtures();
     api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::NotFound]));
     api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
@@ -526,7 +567,7 @@ fn show_reconciles_detail_not_found_with_the_matching_active_collection_item() {
     }))
     .unwrap()]));
 
-    let detail = Listings::new(&api).show("46031010").unwrap();
+    let detail = Listings::new(&api).show("46031010").await.unwrap();
 
     assert_eq!(detail.listing_id, "46031010");
     assert_eq!(detail.state, ListingState::Active);
@@ -548,8 +589,8 @@ fn show_reconciles_detail_not_found_with_the_matching_active_collection_item() {
     );
 }
 
-#[test]
-fn show_preserves_definitive_not_found_after_detail_and_collection_agree() {
+#[tokio::test]
+async fn show_preserves_definitive_not_found_after_detail_and_collection_agree() {
     let mut api = MockListingsApi::fixtures();
     api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::NotFound]));
     api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
@@ -558,15 +599,15 @@ fn show_preserves_definitive_not_found_after_detail_and_collection_agree() {
     }))
     .unwrap()]));
 
-    let error = Listings::new(&api).show("46031010").unwrap_err();
+    let error = Listings::new(&api).show("46031010").await.unwrap_err();
 
     assert_eq!(error.code, "listing.not_found");
     assert!(!error.upstream_transient);
     assert!(!error.safe_to_retry);
 }
 
-#[test]
-fn show_reports_observation_delay_when_collection_cannot_reconcile_not_found() {
+#[tokio::test]
+async fn show_reports_observation_delay_when_collection_cannot_reconcile_not_found() {
     let mut api = MockListingsApi::fixtures();
     api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::NotFound]));
     api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
@@ -575,7 +616,7 @@ fn show_reports_observation_delay_when_collection_cannot_reconcile_not_found() {
     }))
     .unwrap()]));
 
-    let error = Listings::new(&api).show("46031010").unwrap_err();
+    let error = Listings::new(&api).show("46031010").await.unwrap_err();
 
     assert_eq!(error.code, "listing.observation_delayed");
     assert!(error.safe_to_retry);
@@ -590,8 +631,8 @@ fn show_reports_observation_delay_when_collection_cannot_reconcile_not_found() {
     );
 }
 
-#[test]
-fn show_uses_collection_when_detail_model_is_unexpected() {
+#[tokio::test]
+async fn show_uses_collection_when_detail_model_is_unexpected() {
     let mut api = MockListingsApi::fixtures();
     api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::UnexpectedResponse(
         "fixture model".to_owned(),
@@ -606,14 +647,14 @@ fn show_uses_collection_when_detail_model_is_unexpected() {
     }))
     .unwrap()]));
 
-    let detail = Listings::new(&api).show("46031010").unwrap();
+    let detail = Listings::new(&api).show("46031010").await.unwrap();
 
     assert_eq!(detail.listing_id, "46031010");
     assert_eq!(detail.state, ListingState::Active);
 }
 
-#[test]
-fn show_preserves_safe_model_diagnostics_when_no_fallback_matches() {
+#[tokio::test]
+async fn show_preserves_safe_model_diagnostics_when_no_fallback_matches() {
     let mut api = MockListingsApi::fixtures();
     api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::UnexpectedResponse(
         "private fixture body".to_owned(),
@@ -624,7 +665,7 @@ fn show_preserves_safe_model_diagnostics_when_no_fallback_matches() {
     }))
     .unwrap()]));
 
-    let error = Listings::new(&api).show("46031010").unwrap_err();
+    let error = Listings::new(&api).show("46031010").await.unwrap_err();
 
     assert_eq!(error.code, "upstream.unexpected_response");
     assert_eq!(
@@ -638,14 +679,15 @@ fn show_preserves_safe_model_diagnostics_when_no_fallback_matches() {
     assert!(!format!("{error:?}").contains("private fixture body"));
 }
 
-#[test]
-fn update_preserves_unmentioned_fields_and_uses_the_fetched_etag() {
+#[tokio::test]
+async fn update_preserves_unmentioned_fields_and_uses_the_fetched_etag() {
     let api = MockListingsApi::fixtures();
     let detail = Listings::new(&api)
         .update(
             "36443414",
             BTreeMap::from([("price".to_owned(), json!(50))]),
         )
+        .await
         .unwrap();
 
     assert_eq!(detail.price.amount, Some(json!(50)));
@@ -659,8 +701,8 @@ fn update_preserves_unmentioned_fields_and_uses_the_fetched_etag() {
     assert_eq!(calls[0].2["description"], "Solid birch");
 }
 
-#[test]
-fn etag_conflict_returns_fresh_state_without_retrying_the_mutation() {
+#[tokio::test]
+async fn etag_conflict_returns_fresh_state_without_retrying_the_mutation() {
     let mut api = MockListingsApi::fixtures();
     api.listings = Mutex::new(VecDeque::from([
         fixture("detail.json"),
@@ -673,6 +715,7 @@ fn etag_conflict_returns_fresh_state_without_retrying_the_mutation() {
             "36443414",
             BTreeMap::from([("price".to_owned(), json!(60))]),
         )
+        .await
         .unwrap_err();
 
     assert_eq!(error.code, "listing.conflict");
@@ -687,8 +730,8 @@ fn etag_conflict_returns_fresh_state_without_retrying_the_mutation() {
     assert_eq!(api.update_calls.lock().unwrap().len(), 1);
 }
 
-#[test]
-fn etag_conflict_without_fresh_observation_requires_authoritative_show() {
+#[tokio::test]
+async fn etag_conflict_without_fresh_observation_requires_authoritative_show() {
     let mut api = MockListingsApi::fixtures();
     api.updates = Mutex::new(VecDeque::from([Err(ListingsApiError::Conflict)]));
 
@@ -697,6 +740,7 @@ fn etag_conflict_without_fresh_observation_requires_authoritative_show() {
             "36443414",
             BTreeMap::from([("price".to_owned(), json!(60))]),
         )
+        .await
         .unwrap_err();
 
     assert!(!error.upstream_transient);
@@ -708,17 +752,17 @@ fn etag_conflict_without_fresh_observation_requires_authoritative_show() {
     );
 }
 
-#[test]
-fn dispose_delete_and_copy_hooks_are_immediate_and_deterministic() {
+#[tokio::test]
+async fn dispose_delete_and_copy_hooks_are_immediate_and_deterministic() {
     let mut api = MockListingsApi::fixtures();
     api.listings = Mutex::new(VecDeque::from([fixture("detail.json")]));
     let listings = Listings::new(&api);
 
-    let disposed = listings.dispose("36443414").unwrap();
+    let disposed = listings.dispose("36443414").await.unwrap();
     assert_eq!(disposed.state, ListingState::Disposed);
-    let deleted = listings.delete("36443415").unwrap();
+    let deleted = listings.delete("36443415").await.unwrap();
     assert_eq!(deleted.listing_id, "36443415");
-    let source = listings.copy_source("36443414").unwrap();
+    let source = listings.copy_source("36443414").await.unwrap();
 
     assert_eq!(*api.disposed.lock().unwrap(), ["36443414"]);
     assert_eq!(*api.deleted.lock().unwrap(), ["36443415"]);
@@ -732,8 +776,8 @@ fn dispose_delete_and_copy_hooks_are_immediate_and_deterministic() {
     );
 }
 
-#[test]
-fn json_and_flag_duplicates_are_a_structured_usage_error() {
+#[tokio::test]
+async fn json_and_flag_duplicates_are_a_structured_usage_error() {
     let directory = tempfile::tempdir().unwrap();
     let input = directory.path().join("listing.json");
     std::fs::write(&input, r#"{"title":"JSON title","condition":"3"}"#).unwrap();
@@ -763,8 +807,8 @@ fn json_and_flag_duplicates_are_a_structured_usage_error() {
     assert_eq!(error.exit_class.code(), 2);
 }
 
-#[test]
-fn ambiguous_mutation_failures_include_listing_recovery_context() {
+#[tokio::test]
+async fn ambiguous_mutation_failures_include_listing_recovery_context() {
     let mut api = MockListingsApi::fixtures();
     api.updates = Mutex::new(VecDeque::from([Err(ListingsApiError::Upstream(502))]));
 
@@ -773,6 +817,7 @@ fn ambiguous_mutation_failures_include_listing_recovery_context() {
             "36443414",
             BTreeMap::from([("price".to_owned(), json!(60))]),
         )
+        .await
         .unwrap_err();
 
     assert_eq!(error.exit_class.code(), 50);
@@ -788,24 +833,28 @@ fn ambiguous_mutation_failures_include_listing_recovery_context() {
     assert!(!error.message.contains("upstream-secret"));
 }
 
-#[test]
-fn rejects_listing_ids_that_can_change_request_paths() {
+#[tokio::test]
+async fn rejects_listing_ids_that_can_change_request_paths() {
     let api = MockListingsApi::fixtures();
 
-    let error = Listings::new(&api).show("../credentials").unwrap_err();
+    let error = Listings::new(&api)
+        .show("../credentials")
+        .await
+        .unwrap_err();
 
     assert_eq!(error.exit_class.code(), 2);
     assert!(api.listings.lock().unwrap().len() == 1);
 }
 
-#[test]
-fn semantic_values_and_failures_use_structured_errors() {
+#[tokio::test]
+async fn semantic_values_and_failures_use_structured_errors() {
     let api = MockListingsApi::fixtures();
     let error = Listings::new(&api)
         .update(
             "36443414",
             BTreeMap::from([("trade_type".to_owned(), json!("Give away"))]),
         )
+        .await
         .unwrap_err();
 
     assert_eq!(error.code, "listing.validation_failed");

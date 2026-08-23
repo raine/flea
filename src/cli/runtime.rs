@@ -54,20 +54,20 @@ async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
         ToriCommand::Category(args) => {
             let client = tori_session::authenticated_client().await?;
             let api = HttpListingsApi::new(Arc::new(client));
-            category::dispatch_with_api(args, &api)
+            category::dispatch_with_api(args, &api).await
         }
         ToriCommand::Draft(args) => match args.command {
             command @ super::draft::DraftCommand::Preview {
                 verify_category: false,
                 ..
-            } => draft::execute_preview(command, None),
+            } => draft::execute_preview(command, None).await,
             command @ super::draft::DraftCommand::Preview {
                 verify_category: true,
                 ..
             } => {
                 let client = tori_session::authenticated_client().await?;
                 let api = HttpListingsApi::new(Arc::new(client));
-                draft::execute_preview(command, Some(&api))
+                draft::execute_preview(command, Some(&api)).await
             }
             command => {
                 let client = tori_session::authenticated_client().await?;
@@ -87,7 +87,7 @@ async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
         ToriCommand::Listing(args) => {
             let client = tori_session::authenticated_client().await?;
             let api = HttpListingsApi::new(Arc::new(client));
-            listing::dispatch_with_api(args, &api)
+            listing::dispatch_with_api(args, &api).await
         }
         ToriCommand::Search(args) => {
             let search_api = HttpPublicSearchApi::new(Arc::new(public_client()));

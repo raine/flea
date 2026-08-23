@@ -45,7 +45,7 @@ pub fn normalize(input: CollectedInput, process_images: bool) -> Result<Normaliz
     })
 }
 
-pub fn preview(
+pub async fn preview(
     input: CollectedInput,
     verify_category: bool,
     taxonomy: Option<&dyn ListingsApi>,
@@ -73,7 +73,8 @@ pub fn preview(
         category_machine_value.as_deref(),
         &mut unverifiable,
         &mut warnings,
-    )?;
+    )
+    .await?;
 
     let image_plan = normalized
         .images
@@ -560,7 +561,7 @@ fn prepare_images(paths: &[PathBuf]) -> Result<Vec<PreparedImage>, AppError> {
     }
 }
 
-fn verify_remote_category(
+async fn verify_remote_category(
     requested: bool,
     taxonomy: Option<&dyn ListingsApi>,
     category: Option<&str>,
@@ -585,7 +586,7 @@ fn verify_remote_category(
             "verified_constraints": [],
         }));
     };
-    let categories = match taxonomy.categories() {
+    let categories = match taxonomy.categories().await {
         Ok(categories) => categories,
         Err(error) => {
             unverifiable.push("category taxonomy could not be queried".to_owned());
@@ -720,8 +721,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn complete_finnish_listing_is_normalized_for_preview() {
+    #[tokio::test]
+    async fn complete_finnish_listing_is_normalized_for_preview() {
         let temporary = tempfile::tempdir().unwrap();
         let image_path = temporary.path().join("tuoli.png");
         DynamicImage::new_rgb8(40, 60).save(&image_path).unwrap();
@@ -740,7 +741,7 @@ mod tests {
             image_paths: vec![image_path],
         };
 
-        let output = preview(input, false, None).unwrap();
+        let output = preview(input, false, None).await.unwrap();
 
         assert_eq!(output["mode"], "local_draft_preview");
         assert_eq!(output["remote_mutation"], "none");
@@ -769,8 +770,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn discovered_shipping_package_is_a_valid_delivery_machine_value() {
+    #[tokio::test]
+    async fn discovered_shipping_package_is_a_valid_delivery_machine_value() {
         let input = CollectedInput {
             values: serde_json::from_value(json!({
                 "delivery": ["shipping:small"]
@@ -784,8 +785,8 @@ mod tests {
         assert_eq!(normalized.values["delivery"], json!(["shipping:small"]));
     }
 
-    #[test]
-    fn invalid_fields_are_reported_together() {
+    #[tokio::test]
+    async fn invalid_fields_are_reported_together() {
         let input = CollectedInput {
             values: serde_json::from_value(json!({
                 "title": " ",
@@ -799,7 +800,7 @@ mod tests {
             image_paths: Vec::new(),
         };
 
-        let error = preview(input, false, None).unwrap_err();
+        let error = preview(input, false, None).await.unwrap_err();
         let fields = &error.details.as_deref().unwrap()["fields"];
 
         assert_eq!(error.code, "draft.input_invalid");
@@ -815,14 +816,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn missing_images_fail_before_any_remote_work() {
+    #[tokio::test]
+    async fn missing_images_fail_before_any_remote_work() {
         let input = CollectedInput {
             values: Map::new(),
             image_paths: vec![PathBuf::from("missing-preview-image.jpg")],
         };
 
-        let error = preview(input, false, None).unwrap_err();
+        let error = preview(input, false, None).await.unwrap_err();
 
         assert_eq!(error.code, "draft.input_invalid");
         assert!(
@@ -833,8 +834,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn description_summary_is_bounded_on_character_boundaries() {
+    #[tokio::test]
+    async fn description_summary_is_bounded_on_character_boundaries() {
         let summary = excerpt(&"ä".repeat(130), 120);
         assert_eq!(summary.chars().count(), 123);
         assert!(summary.ends_with("..."));

@@ -1,6 +1,8 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt,
+    future::Future,
+    pin::Pin,
     sync::Arc,
 };
 
@@ -31,21 +33,32 @@ pub const CATEGORY_SEARCH_LIMIT_MAX: usize = 100;
 const MAX_LISTING_PAGES: usize = 10_000;
 
 pub trait ListingsApi: Send + Sync {
-    fn categories(&self) -> Result<Vec<UpstreamCategory>, ListingsApiError>;
+    fn categories(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<UpstreamCategory>, ListingsApiError>> + Send + '_>>;
     fn listing_page(
         &self,
         offset: usize,
         limit: usize,
-    ) -> Result<UpstreamListingPage, ListingsApiError>;
-    fn listing(&self, listing_id: &str) -> Result<UpstreamListing, ListingsApiError>;
-    fn update_listing(
-        &self,
-        listing_id: &str,
-        etag: &str,
-        fields: &BTreeMap<String, Value>,
-    ) -> Result<UpstreamListing, ListingsApiError>;
-    fn dispose_listing(&self, listing_id: &str) -> Result<(), ListingsApiError>;
-    fn delete_listing(&self, listing_id: &str) -> Result<(), ListingsApiError>;
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListingPage, ListingsApiError>> + Send + '_>>;
+    fn listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>>;
+    fn update_listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+        etag: &'a str,
+        fields: &'a BTreeMap<String, Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>>;
+    fn dispose_listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>>;
+    fn delete_listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>>;
 }
 
 pub struct HttpListingsApi {
@@ -57,7 +70,7 @@ impl HttpListingsApi {
         Self { client }
     }
 
-    fn request<T: DeserializeOwned>(
+    async fn request<T: DeserializeOwned>(
         &self,
         method: Method,
         path: String,
@@ -78,57 +91,33 @@ impl HttpListingsApi {
                     ListingsApiError::UnexpectedResponse("invalid ETag".to_owned())
                 })?);
         }
-        let client = Arc::clone(&self.client);
-        let response = std::thread::scope(|scope| {
-            scope
-                .spawn(move || {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|_| {
-                            ListingsApiError::UnexpectedResponse("HTTP runtime failed".to_owned())
-                        })?
-                        .block_on(client.execute(request))
-                        .map_err(listings_http_error)
-                })
-                .join()
-                .map_err(|_| {
-                    ListingsApiError::UnexpectedResponse("HTTP worker failed".to_owned())
-                })?
-        })?;
+        let response = self
+            .client
+            .execute(request)
+            .await
+            .map_err(listings_http_error)?;
         decode_response(response.status, &response.body)
     }
 
-    fn request_with_service<T: DeserializeOwned>(
+    async fn request_with_service<T: DeserializeOwned>(
         &self,
         method: Method,
         path: String,
         service: &str,
     ) -> Result<T, ListingsApiError> {
         let request = RequestSpec::new(method, path, service);
-        let client = Arc::clone(&self.client);
-        let response = std::thread::scope(|scope| {
-            scope
-                .spawn(move || {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|_| {
-                            ListingsApiError::UnexpectedResponse("HTTP runtime failed".to_owned())
-                        })?
-                        .block_on(client.execute(request))
-                        .map_err(listings_http_error)
-                })
-                .join()
-                .map_err(|_| {
-                    ListingsApiError::UnexpectedResponse("HTTP worker failed".to_owned())
-                })?
-        })?;
+        let response = self
+            .client
+            .execute(request)
+            .await
+            .map_err(listings_http_error)?;
         decode_response(response.status, &response.body)
     }
 
-    fn empty(&self, method: Method, path: String) -> Result<(), ListingsApiError> {
-        self.request::<Value>(method, path, None, None).map(|_| ())
+    async fn empty(&self, method: Method, path: String) -> Result<(), ListingsApiError> {
+        self.request::<Value>(method, path, None, None)
+            .await
+            .map(|_| ())
     }
 }
 
@@ -174,52 +163,68 @@ fn decode_response<T: DeserializeOwned>(
 }
 
 impl ListingsApi for HttpListingsApi {
-    fn categories(&self) -> Result<Vec<UpstreamCategory>, ListingsApiError> {
-        self.request_with_service::<UpstreamCategoryTaxonomy>(
-            Method::GET,
-            "/categories/taxonomy".to_owned(),
-            compatibility::SERVICE_ITEM_CREATION,
-        )
-        .map(|taxonomy| taxonomy.categories)
+    fn categories(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<UpstreamCategory>, ListingsApiError>> + Send + '_>>
+    {
+        Box::pin(async move {
+            self.request_with_service::<UpstreamCategoryTaxonomy>(
+                Method::GET,
+                "/categories/taxonomy".to_owned(),
+                compatibility::SERVICE_ITEM_CREATION,
+            )
+            .await
+            .map(|taxonomy| taxonomy.categories)
+        })
     }
 
     fn listing_page(
         &self,
         offset: usize,
         limit: usize,
-    ) -> Result<UpstreamListingPage, ListingsApiError> {
-        self.request(
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListingPage, ListingsApiError>> + Send + '_>>
+    {
+        Box::pin(self.request(
             Method::GET,
             format!("/search?limit={limit}&offset={offset}"),
             None,
             None,
-        )
+        ))
     }
 
-    fn listing(&self, listing_id: &str) -> Result<UpstreamListing, ListingsApiError> {
-        self.request(Method::GET, format!("/{listing_id}"), None, None)
+    fn listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>> {
+        Box::pin(self.request(Method::GET, format!("/{listing_id}"), None, None))
     }
 
-    fn update_listing(
-        &self,
-        listing_id: &str,
-        etag: &str,
-        fields: &BTreeMap<String, Value>,
-    ) -> Result<UpstreamListing, ListingsApiError> {
-        self.request(
+    fn update_listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+        etag: &'a str,
+        fields: &'a BTreeMap<String, Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>> {
+        Box::pin(self.request(
             Method::PUT,
             format!("/my/listings/{listing_id}"),
             Some(Value::Object(fields.clone().into_iter().collect())),
             Some(etag),
-        )
+        ))
     }
 
-    fn dispose_listing(&self, listing_id: &str) -> Result<(), ListingsApiError> {
-        self.empty(Method::POST, format!("/my/listings/{listing_id}/dispose"))
+    fn dispose_listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>> {
+        Box::pin(self.empty(Method::POST, format!("/my/listings/{listing_id}/dispose")))
     }
 
-    fn delete_listing(&self, listing_id: &str) -> Result<(), ListingsApiError> {
-        self.empty(Method::DELETE, format!("/my/listings/{listing_id}"))
+    fn delete_listing<'a>(
+        &'a self,
+        listing_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>> {
+        Box::pin(self.empty(Method::DELETE, format!("/my/listings/{listing_id}")))
     }
 }
 
@@ -426,8 +431,8 @@ impl<'a> Listings<'a> {
         Self { api }
     }
 
-    pub fn categories(&self, parent: Option<&str>) -> Result<CategoryList, AppError> {
-        let categories = self.api.categories().map_err(category_error)?;
+    pub async fn categories(&self, parent: Option<&str>) -> Result<CategoryList, AppError> {
+        let categories = self.api.categories().await.map_err(category_error)?;
         let flattened = flatten_categories(&categories).map_err(category_protocol_error)?;
 
         if let Some(parent_id) = parent
@@ -450,11 +455,12 @@ impl<'a> Listings<'a> {
         })
     }
 
-    pub fn search_categories(&self, query: &str) -> Result<CategorySearchResult, AppError> {
+    pub async fn search_categories(&self, query: &str) -> Result<CategorySearchResult, AppError> {
         self.search_categories_with_options(query, CategorySearchOptions::default())
+            .await
     }
 
-    pub fn search_categories_with_options(
+    pub async fn search_categories_with_options(
         &self,
         query: &str,
         options: CategorySearchOptions<'_>,
@@ -478,7 +484,7 @@ impl<'a> Listings<'a> {
             ));
         }
 
-        let categories = self.api.categories().map_err(category_error)?;
+        let categories = self.api.categories().await.map_err(category_error)?;
         let flattened = flatten_categories(&categories).map_err(category_protocol_error)?;
         let context = resolve_category_context(&flattened, options.parent, options.path)?;
         let parents = flattened
@@ -531,7 +537,7 @@ impl<'a> Listings<'a> {
         })
     }
 
-    pub fn list(&self) -> Result<ListingCollection, AppError> {
+    pub async fn list(&self) -> Result<ListingCollection, AppError> {
         let mut listings = Vec::new();
         let mut facets = Vec::new();
         let mut total = None;
@@ -542,6 +548,7 @@ impl<'a> Listings<'a> {
             let page = self
                 .api
                 .listing_page(offset, LISTING_PAGE_SIZE)
+                .await
                 .map_err(|error| {
                     listing_error(error, None, RetryContext::read(OperationMethod::Get))
                 })?;
@@ -555,7 +562,7 @@ impl<'a> Listings<'a> {
             let page_len = page.summaries.len();
             for summary in page.summaries {
                 let listing_id = value_id(&summary.id)?;
-                let detail = self.api.listing(&listing_id).map_err(|error| {
+                let detail = self.api.listing(&listing_id).await.map_err(|error| {
                     listing_error(
                         error,
                         Some(&listing_id),
@@ -591,18 +598,18 @@ impl<'a> Listings<'a> {
         Err(unexpected("listing pagination exceeded its safety bound"))
     }
 
-    pub fn show(&self, listing_id: &str) -> Result<ListingDetail, AppError> {
+    pub async fn show(&self, listing_id: &str) -> Result<ListingDetail, AppError> {
         validate_id(listing_id)?;
-        match self.api.listing(listing_id) {
+        match self.api.listing(listing_id).await {
             Ok(listing) => match normalize_listing_detail_for_id(listing, listing_id) {
                 Ok(detail) => Ok(detail),
-                Err(detail_error) => match self.find_summary(listing_id) {
+                Err(detail_error) => match self.find_summary(listing_id).await {
                     Ok(Some(summary)) => Ok(summary_detail(summary)),
                     Ok(None) | Err(_) => Err(detail_error),
                 },
             },
             Err(detail_error) => {
-                let summary = self.find_summary(listing_id);
+                let summary = self.find_summary(listing_id).await;
                 match summary {
                     Ok(Some(summary)) => Ok(summary_detail(summary)),
                     Ok(None) => Err(listing_error(
@@ -648,11 +655,14 @@ impl<'a> Listings<'a> {
         }
     }
 
-    fn find_summary(&self, listing_id: &str) -> Result<Option<ListingSummary>, ListingsApiError> {
+    async fn find_summary(
+        &self,
+        listing_id: &str,
+    ) -> Result<Option<ListingSummary>, ListingsApiError> {
         let mut offset = 0;
         let mut expected_total = None;
         for _ in 0..MAX_LISTING_PAGES {
-            let page = self.api.listing_page(offset, LISTING_PAGE_SIZE)?;
+            let page = self.api.listing_page(offset, LISTING_PAGE_SIZE).await?;
             let total = *expected_total.get_or_insert(page.total);
             if page.total != total {
                 return Err(ListingsApiError::UnexpectedResponse(
@@ -691,10 +701,11 @@ impl<'a> Listings<'a> {
         ))
     }
 
-    pub fn snapshot(&self, listing_id: &str) -> Result<ListingSnapshot, AppError> {
+    pub async fn snapshot(&self, listing_id: &str) -> Result<ListingSnapshot, AppError> {
         validate_id(listing_id)?;
         self.api
             .listing(listing_id)
+            .await
             .map_err(|error| {
                 listing_error(
                     error,
@@ -705,7 +716,7 @@ impl<'a> Listings<'a> {
             .and_then(|listing| normalize_listing_for_id(listing, listing_id))
     }
 
-    pub fn update(
+    pub async fn update(
         &self,
         listing_id: &str,
         changes: BTreeMap<String, Value>,
@@ -718,12 +729,13 @@ impl<'a> Listings<'a> {
         }
         validate_changes(&changes)?;
 
-        let snapshot = self.snapshot(listing_id)?;
+        let snapshot = self.snapshot(listing_id).await?;
         let mut complete_fields = snapshot.source_fields;
         complete_fields.extend(changes);
         match self
             .api
             .update_listing(listing_id, &snapshot.etag, &complete_fields)
+            .await
         {
             Ok(listing) => {
                 normalize_listing_for_id(listing, listing_id).map(|snapshot| snapshot.detail)
@@ -731,6 +743,7 @@ impl<'a> Listings<'a> {
             Err(ListingsApiError::Conflict) => {
                 let fresh = self
                     .snapshot(listing_id)
+                    .await
                     .ok()
                     .map(|snapshot| snapshot.detail);
                 let mut retry_context = RetryContext::mutation(OperationMethod::Put).with_etag();
@@ -759,10 +772,11 @@ impl<'a> Listings<'a> {
         }
     }
 
-    pub fn dispose(&self, listing_id: &str) -> Result<ListingMutation, AppError> {
+    pub async fn dispose(&self, listing_id: &str) -> Result<ListingMutation, AppError> {
         validate_id(listing_id)?;
         self.api
             .dispose_listing(listing_id)
+            .await
             .map_err(|error| listing_mutation_error(error, listing_id, "dispose"))?;
         Ok(ListingMutation {
             listing_id: listing_id.to_owned(),
@@ -770,18 +784,19 @@ impl<'a> Listings<'a> {
         })
     }
 
-    pub fn delete(&self, listing_id: &str) -> Result<ListingRef, AppError> {
+    pub async fn delete(&self, listing_id: &str) -> Result<ListingRef, AppError> {
         validate_id(listing_id)?;
         self.api
             .delete_listing(listing_id)
+            .await
             .map_err(|error| listing_mutation_error(error, listing_id, "delete"))?;
         Ok(ListingRef {
             listing_id: listing_id.to_owned(),
         })
     }
 
-    pub fn copy_source(&self, listing_id: &str) -> Result<ListingCopySource, AppError> {
-        let snapshot = self.snapshot(listing_id)?;
+    pub async fn copy_source(&self, listing_id: &str) -> Result<ListingCopySource, AppError> {
+        let snapshot = self.snapshot(listing_id).await?;
         let mut fields = snapshot.source_fields;
         let mut image_urls = Vec::new();
         for key in ["image", "images", "multi_image"] {
