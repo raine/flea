@@ -7,8 +7,9 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 default:
     @just --list
 
-# Run project checks through checkle
+# Run dependency boundaries and project checks
 check:
+    scripts/check-dependency-boundaries
     checkle run all
 
 # Run check and fail if there are uncommitted changes for CI

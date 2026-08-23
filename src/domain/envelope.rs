@@ -2,9 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    domain::observation::Observation,
+    domain::{metadata::MarketplaceContext, observation::Observation},
     error::{AppError, ErrorBody},
-    marketplace::MarketplaceContext,
 };
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]

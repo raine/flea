@@ -216,7 +216,20 @@ async fn execute_vinted_auth(
         VintedAuthCommand::Status => vinted_session::AuthOperation::Status,
         VintedAuthCommand::Logout => vinted_session::AuthOperation::Logout,
     };
-    vinted_session::execute_auth(portal, operation).await
+    match vinted_session::execute_auth(portal, operation).await? {
+        vinted_session::AuthResult::Login(login) => {
+            let authenticated = login.authenticated;
+            Ok(CommandOutcome::new(CommandData::VintedAuthLogin(login))
+                .with_plain_authentication(MarketplaceId::Vinted, authenticated))
+        }
+        vinted_session::AuthResult::Status(status) => Ok(CommandOutcome::new(
+            CommandData::VintedAuthStatus(status.data),
+        )
+        .with_next_actions(status.next_actions)),
+        vinted_session::AuthResult::Logout(logout) => {
+            Ok(CommandOutcome::new(CommandData::VintedAuthLogout(logout)))
+        }
+    }
 }
 
 async fn execute_vinted(
@@ -347,7 +360,13 @@ async fn execute_tori_auth(args: ToriAuthArgs) -> Result<super::outcome::Command
     let paths = tori_session::state_paths()?;
     match command {
         ToriAuthCommand::Login => execute_interactive_login(paths).await,
-        ToriAuthCommand::Status => tori_session::status().await,
+        ToriAuthCommand::Status => {
+            let status = tori_session::status().await?;
+            Ok(
+                CommandOutcome::new(CommandData::ToriAuthStatus(status.data))
+                    .with_next_actions(status.next_actions),
+            )
+        }
         ToriAuthCommand::Logout => {
             let store = FileAuthStore::new(paths);
             let auth = ToriAuthentication::new(SchibstedToriAuthenticationApi::new(), store);

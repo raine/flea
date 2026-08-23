@@ -12,11 +12,12 @@ mod sensitive;
 mod storage;
 mod transport;
 
-pub use error::{AppError, ExitClass};
-pub use marketplace::{
+pub use domain::metadata::{
     AuthRequirement, CapabilityDescriptor, CapabilityId, CapabilityMaturity, MarketplaceContext,
-    MarketplaceDescriptor, MarketplaceId, PortalId, marketplace, marketplaces,
+    MarketplaceDescriptor, MarketplaceId, PortalId,
 };
+pub use error::{AppError, ExitClass};
+pub use marketplace::{marketplace, marketplaces};
 
 /// Dependency injection types for deterministic command tests and embedders.
 pub mod dependencies {

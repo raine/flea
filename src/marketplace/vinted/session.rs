@@ -1,11 +1,10 @@
 use serde::Serialize;
 
 use crate::{
-    cli::outcome::{CommandData, CommandOutcome},
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::{
-        CapabilityMaturity, MarketplaceContext, MarketplaceId, PortalId,
+        CapabilityMaturity, MarketplaceContext, PortalId,
         vinted::auth::{VintedAuthentication, VintedCredentialRecord},
     },
     storage::{StatePaths, credentials::TypedCredentialStore},
@@ -20,25 +19,25 @@ pub(crate) enum AuthOperation {
     Logout,
 }
 
+pub(crate) enum AuthResult {
+    Login(crate::marketplace::vinted::auth::VintedLoginResult),
+    Status(AuthStatusResult),
+    Logout(VintedLogoutOutput),
+}
+
 pub(crate) async fn execute_auth(
     portal: PortalId,
     operation: AuthOperation,
-) -> Result<CommandOutcome, AppError> {
+) -> Result<AuthResult, AppError> {
     if portal != PortalId::Fi {
         return Err(AppError::usage("the selected Vinted portal is unavailable"));
     }
     let paths = StatePaths::discover(MarketplaceContext::VINTED_FI)
         .map_err(|error| storage_error(error, "discover"))?;
     match operation {
-        AuthOperation::Login => execute_login(paths).await.map(|login| {
-            let authenticated = login.authenticated;
-            CommandOutcome::new(CommandData::VintedAuthLogin(login))
-                .with_plain_authentication(MarketplaceId::Vinted, authenticated)
-        }),
-        AuthOperation::Status => execute_status(paths).await,
-        AuthOperation::Logout => execute_logout(paths)
-            .map(CommandData::VintedAuthLogout)
-            .map(CommandOutcome::new),
+        AuthOperation::Login => execute_login(paths).await.map(AuthResult::Login),
+        AuthOperation::Status => execute_status(paths).await.map(AuthResult::Status),
+        AuthOperation::Logout => execute_logout(paths).map(AuthResult::Logout),
     }
 }
 
@@ -57,6 +56,11 @@ async fn execute_login(
         .save(&completion.credentials)
         .map_err(|error| storage_error(error, "write"))?;
     Ok(completion.output)
+}
+
+pub(crate) struct AuthStatusResult {
+    pub(crate) data: VintedAuthStatus,
+    pub(crate) next_actions: Vec<NextAction>,
 }
 
 #[derive(Debug, Serialize)]
@@ -78,7 +82,7 @@ pub struct VintedAuthStatus {
     next_actions: Vec<NextAction>,
 }
 
-async fn execute_status(paths: StatePaths) -> Result<CommandOutcome, AppError> {
+async fn execute_status(paths: StatePaths) -> Result<AuthStatusResult, AppError> {
     let now = unix_time_now()?;
     let Some(credentials) = VintedCredentialStore::new(paths)
         .load()
@@ -178,9 +182,12 @@ fn validation_failure_status(
     }
 }
 
-fn serialize_status(mut status: VintedAuthStatus) -> Result<CommandOutcome, AppError> {
+fn serialize_status(mut status: VintedAuthStatus) -> Result<AuthStatusResult, AppError> {
     let next_actions = std::mem::take(&mut status.next_actions);
-    Ok(CommandOutcome::new(CommandData::VintedAuthStatus(status)).with_next_actions(next_actions))
+    Ok(AuthStatusResult {
+        data: status,
+        next_actions,
+    })
 }
 
 fn storage_error(

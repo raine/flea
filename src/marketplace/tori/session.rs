@@ -3,7 +3,6 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::outcome::{CommandData, CommandOutcome},
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::MarketplaceContext,
@@ -122,7 +121,7 @@ pub(crate) async fn authenticated_client() -> Result<HttpClient<ReqwestTransport
     .await
 }
 
-pub(crate) async fn status() -> Result<CommandOutcome, AppError> {
+pub(crate) async fn status() -> Result<AuthStatusResult, AppError> {
     auth_status(
         state_paths()?,
         &SchibstedToriAuthenticationApi::new(),
@@ -150,6 +149,11 @@ struct CredentialResolutionFailure {
     error: Box<AppError>,
     stored_bearer_state: Option<StoredBearerState>,
     bearer_expires_at_unix: Option<u64>,
+}
+
+pub(crate) struct AuthStatusResult {
+    pub(crate) data: AuthStatusOutput,
+    pub(crate) next_actions: Vec<NextAction>,
 }
 
 #[derive(Debug, Serialize)]
@@ -267,7 +271,7 @@ async fn auth_status<S: GatewaySigner>(
     paths: StatePaths,
     api: &SchibstedToriAuthenticationApi<S>,
     now: u64,
-) -> Result<CommandOutcome, AppError> {
+) -> Result<AuthStatusResult, AppError> {
     let mut output = match resolve_credentials_with(paths, api, now).await {
         Ok(Some(resolved)) => AuthStatusOutput {
             authenticated: true,
@@ -292,7 +296,10 @@ async fn auth_status<S: GatewaySigner>(
         Err(failure) => status_from_failure(failure),
     };
     let next_actions = std::mem::take(&mut output.next_actions);
-    Ok(CommandOutcome::new(CommandData::ToriAuthStatus(output)).with_next_actions(next_actions))
+    Ok(AuthStatusResult {
+        data: output,
+        next_actions,
+    })
 }
 
 fn status_from_failure(failure: CredentialResolutionFailure) -> AuthStatusOutput {

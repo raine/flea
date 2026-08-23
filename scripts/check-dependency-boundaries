@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root="$(git rev-parse --show-toplevel)"
+cd "$repository_root"
+
+failed=0
+
+check_forbidden_path() {
+    local source_dir="$1"
+    local pattern="$2"
+    local rule="$3"
+    local matches
+
+    if matches="$(rg --line-number --glob '*.rs' "$pattern" "$source_dir")"; then
+        printf 'dependency boundary violation: %s\n%s\n' "$rule" "$matches" >&2
+        failed=1
+    fi
+}
+
+check_forbidden_path \
+    src/marketplace \
+    'crate::cli([^[:alnum:]_]|$)|(^|[^[:alnum:]_])cli::' \
+    'marketplace modules cannot depend on CLI modules'
+check_forbidden_path \
+    src/domain \
+    'crate::(cli|marketplace)([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(cli|marketplace)::' \
+    'domain modules cannot depend on CLI or marketplace implementation modules'
+
+if ((failed)); then
+    exit 1
+fi
