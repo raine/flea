@@ -18,6 +18,7 @@ use super::types::{
 use crate::domain::commerce::normalized_select_to_machine;
 use crate::domain::observation::Observation;
 use crate::domain::observation::ObservationOperation;
+use crate::domain::observation::ObservationSource;
 use crate::domain::observation::ObservationState;
 use crate::domain::observation::SourceStateEvidence;
 use crate::domain::observation::StatusEvidence;
@@ -136,7 +137,7 @@ impl<T> HttpAdInputApi<T> {
     }
 }
 
-fn unrecognized_read(mut error: ApiError, source: &str, status: u16) -> ApiError {
+fn unrecognized_read(mut error: ApiError, source: ObservationSource, status: u16) -> ApiError {
     error = error.with_observation(
         Observation::unrecognized_response(source, Some(status)),
         ObservationOperation::Read,
@@ -144,39 +145,11 @@ fn unrecognized_read(mut error: ApiError, source: &str, status: u16) -> ApiError
     error
 }
 
-pub(super) fn observation_source(path: &str) -> &'static str {
-    if path.starts_with("/listings/") && path.ends_with("/draft-source") {
-        "listing_copy_eligibility"
-    } else if path.starts_with("/adinput/ad/withModel/") {
-        "draft_detail"
-    } else if path.starts_with("/ui/addelivery") || path.contains("/delivery") {
-        "delivery_composer"
-    } else if path == "/categories/taxonomy" {
-        "category_taxonomy"
-    } else if path.starts_with("/search?") {
-        "authenticated_listing_collection"
-    } else if path.starts_with("/my/listings/")
-        || path.starts_with("/listings/")
-        || path.strip_prefix('/').is_some_and(|id| {
-            !id.is_empty()
-                && id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        })
-    {
-        "listing_detail"
-    } else if path.starts_with("/orders/") || path.starts_with("/tracking/") {
-        "publication_confirmation"
-    } else {
-        "draft_service"
-    }
-}
-
 impl<T: HttpTransport> HttpAdInputApi<T> {
     async fn json(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
         debug_assert!(!request.method.is_mutation() || request.retry == RetryPolicy::Never);
         let retry_context = request.retry_context();
-        let source = observation_source(&request.path);
+        let source = request.observation_source;
         let response = self.transport.execute(request).await?;
         if (200..300).contains(&response.status) {
             Ok(response)
@@ -191,7 +164,7 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
         require_authoritative_model: bool,
     ) -> Result<DraftState, ApiError> {
         let is_mutation = request.method.is_mutation();
-        let source = observation_source(&request.path);
+        let source = request.observation_source;
         let response = self.json(request).await?;
         if response.body_is_unparseable {
             let operation = if is_mutation {
@@ -246,9 +219,10 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
         let mut expected_total = None;
         for _ in 0..PAGE_LIMIT {
             let response = self
-                .json(HttpRequest::read(format!(
-                    "/search?limit={PAGE_SIZE}&offset={offset}"
-                )))
+                .json(HttpRequest::read(
+                    ObservationSource::AuthenticatedListingCollection,
+                    format!("/search?limit={PAGE_SIZE}&offset={offset}"),
+                ))
                 .await?;
             if response.body_is_unparseable {
                 return Err(listing_observation_model_error(
@@ -309,9 +283,10 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
             let mut offset = 0;
             let mut expected_total = None;
             for _ in 0..PAGE_LIMIT {
-                let request = HttpRequest::read(format!(
-                    "/search?facet=DRAFT&limit={PAGE_SIZE}&offset={offset}"
-                ))
+                let request = HttpRequest::read(
+                    ObservationSource::AuthenticatedListingCollection,
+                    format!("/search?facet=DRAFT&limit={PAGE_SIZE}&offset={offset}"),
+                )
                 .with_service(compatibility::SERVICE_AD_SUMMARIES);
                 let response = self.json(request).await?;
                 let summaries = response
@@ -416,14 +391,15 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
     }
 
     async fn reconcile_missing_draft(&self, draft_id: &str, detail_error: ApiError) -> ApiError {
-        let detail_observation = detail_error
-            .observation
-            .clone()
-            .unwrap_or_else(|| Observation::confirmed_absent("draft_detail", Some(404)));
+        let detail_observation = detail_error.observation.clone().unwrap_or_else(|| {
+            Observation::confirmed_absent(ObservationSource::DraftDetail, Some(404))
+        });
         match self.find_listing_summary(draft_id).await {
             Ok(Some(summary)) => {
-                let collection =
-                    Observation::confirmed_present("authenticated_listing_collection", Some(200));
+                let collection = Observation::confirmed_present(
+                    ObservationSource::AuthenticatedListingCollection,
+                    Some(200),
+                );
                 let observation = Observation::reconcile(&[detail_observation, collection])
                     .expect("draft lifecycle observations are non-empty");
                 let state = summary
@@ -445,8 +421,10 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
                 error
             }
             Ok(None) => {
-                let collection =
-                    Observation::confirmed_absent("authenticated_listing_collection", Some(200));
+                let collection = Observation::confirmed_absent(
+                    ObservationSource::AuthenticatedListingCollection,
+                    Some(200),
+                );
                 let source_states = [&detail_observation, &collection]
                     .into_iter()
                     .map(|observation| SourceStateEvidence {
@@ -470,7 +448,10 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
             }
             Err(collection_error) => {
                 let collection_observation = collection_error.observation.unwrap_or_else(|| {
-                    Observation::unrecognized_response("authenticated_listing_collection", None)
+                    Observation::unrecognized_response(
+                        ObservationSource::AuthenticatedListingCollection,
+                        None,
+                    )
                 });
                 let mut error = ApiError::new(
                     "draft.observation_incomplete",
@@ -512,6 +493,7 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
 impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     async fn create_draft(&self) -> Result<DraftState, ApiError> {
         let request = HttpRequest::mutation(
+            ObservationSource::DraftCreation,
             Method::Post,
             "/adinput/ad/withModel/recommerce",
             RequestBody::Empty,
@@ -531,7 +513,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             return Err(ApiError::response(
                 &response,
                 retry_context,
-                "draft_creation",
+                ObservationSource::DraftCreation,
             ));
         }
         if response.body_is_unparseable {
@@ -564,7 +546,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         validate_resource_id(draft_id, "draft")?;
         match self
             .draft_request(
-                HttpRequest::read(format!("/adinput/ad/withModel/{draft_id}")),
+                HttpRequest::read(
+                    ObservationSource::DraftDetail,
+                    format!("/adinput/ad/withModel/{draft_id}"),
+                ),
                 true,
             )
             .await
@@ -587,9 +572,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     ) -> Result<PublicationDraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
         let response = match self
-            .json(HttpRequest::read(format!(
-                "/adinput/ad/withModel/{draft_id}"
-            )))
+            .json(HttpRequest::read(
+                ObservationSource::DraftDetail,
+                format!("/adinput/ad/withModel/{draft_id}"),
+            ))
             .await
         {
             Err(error) if error.status == Some(404) => {
@@ -598,7 +584,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             result => result?,
         };
         if response.body_is_unparseable {
-            return Err(malformed_read_response("publication_draft"));
+            return Err(malformed_read_response(
+                "publication_draft",
+                ObservationSource::DraftDetail,
+            ));
         }
         let status = response.status;
         let parsed = if include_all_options {
@@ -610,7 +599,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         } else {
             normalize_publication_draft(response.body, response.etag.as_deref())
         };
-        parsed.map_err(|error| unrecognized_read(error, "draft_detail", status))
+        parsed.map_err(|error| unrecognized_read(error, ObservationSource::DraftDetail, status))
     }
 
     async fn update_item(
@@ -622,6 +611,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         validate_resource_id(draft_id, "draft")?;
         let values = composer_values(values)?;
         let mut request = HttpRequest::mutation(
+            ObservationSource::DraftService,
             Method::Put,
             format!("/adinput/ad/recommerce/{draft_id}/update"),
             RequestBody::Json(Value::Object(values)),
@@ -639,6 +629,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         validate_resource_id(draft_id, "draft")?;
         validate_price(price)?;
         let mut request = HttpRequest::mutation(
+            ObservationSource::DraftService,
             Method::Patch,
             format!("/items/{draft_id}"),
             RequestBody::Json(json!({
@@ -666,6 +657,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         validate_resource_id(draft_id, "draft")?;
         let data = item_creation_fields(values)?;
         let mut request = HttpRequest::mutation(
+            ObservationSource::DraftService,
             Method::Patch,
             format!("/items/{draft_id}"),
             RequestBody::Json(json!({ "data": data })),
@@ -687,6 +679,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         validate_resource_id(draft_id, "draft")?;
         let body = composer_values(values)?;
         let mut request = HttpRequest::mutation(
+            ObservationSource::DraftService,
             Method::Put,
             format!("/adinput/ad/recommerce/{draft_id}/update"),
             RequestBody::Json(Value::Object(body)),
@@ -704,8 +697,13 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         self.get_draft(draft_id).await?;
         let path = self.draft_delete_action(draft_id).await?;
         self.json(
-            HttpRequest::mutation(Method::Delete, path, RequestBody::Empty)
-                .with_service(compatibility::SERVICE_AD_ACTION),
+            HttpRequest::mutation(
+                ObservationSource::DraftService,
+                Method::Delete,
+                path,
+                RequestBody::Empty,
+            )
+            .with_service(compatibility::SERVICE_AD_ACTION),
         )
         .await
         .map(|_| ())
@@ -727,6 +725,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         };
         let response = self
             .json(HttpRequest::mutation(
+                ObservationSource::DraftService,
                 Method::Post,
                 format!("/adinput/ad/recommerce/{draft_id}/upload"),
                 RequestBody::Image {
@@ -801,6 +800,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         values.insert("image".to_owned(), Value::Array(image));
         values.insert("multi_image".to_owned(), Value::Array(multi_image));
         let mut request = HttpRequest::mutation(
+            ObservationSource::DraftService,
             Method::Put,
             format!("/adinput/ad/recommerce/{draft_id}/update"),
             RequestBody::Json(Value::Object(values)),
@@ -815,18 +815,29 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
     ) -> Result<Vec<CategoryPrediction>, ApiError> {
         validate_resource_id(draft_id, "draft")?;
         let response = self
-            .json(HttpRequest::read(format!(
-                "/drafts/{draft_id}/category-predictions"
-            )))
+            .json(HttpRequest::read(
+                ObservationSource::DraftCategoryPredictions,
+                format!("/drafts/{draft_id}/category-predictions"),
+            ))
             .await?;
-        serde_json::from_value(response.body)
-            .map_err(|_| malformed_read_response("category_predictions"))
+        serde_json::from_value(response.body).map_err(|_| {
+            malformed_read_response(
+                "category_predictions",
+                ObservationSource::DraftCategoryPredictions,
+            )
+        })
     }
 
     async fn publication_categories(&self) -> Result<Vec<PublicationCategory>, ApiError> {
-        let response = self.json(HttpRequest::read("/categories/taxonomy")).await?;
-        normalize_publication_categories(&response.body)
-            .map_err(|error| unrecognized_read(error, "category_taxonomy", response.status))
+        let response = self
+            .json(HttpRequest::read(
+                ObservationSource::CategoryTaxonomy,
+                "/categories/taxonomy",
+            ))
+            .await?;
+        normalize_publication_categories(&response.body).map_err(|error| {
+            unrecognized_read(error, ObservationSource::CategoryTaxonomy, response.status)
+        })
     }
 
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
@@ -839,9 +850,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             ));
         };
         let response = self
-            .json(HttpRequest::read(format!(
-                "/listings/{listing_id}/draft-source"
-            )))
+            .json(HttpRequest::read(
+                ObservationSource::ListingCopyEligibility,
+                format!("/listings/{listing_id}/draft-source"),
+            ))
             .await
             .map_err(|error| {
                 if error.status == Some(404) {
@@ -871,9 +883,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         let draft_id_query: String =
             url::form_urlencoded::byte_serialize(draft_id.as_bytes()).collect();
         let response = self
-            .json(HttpRequest::read(format!(
-                "/ui/addelivery?adId={draft_id_query}&editMode=false"
-            )))
+            .json(HttpRequest::read(
+                ObservationSource::DeliveryComposer,
+                format!("/ui/addelivery?adId={draft_id_query}&editMode=false"),
+            ))
             .await?;
         let status = response.status;
         let parsed = if include_all_options {
@@ -881,7 +894,8 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         } else {
             normalize_delivery_composer(response.body, draft_id)
         };
-        parsed.map_err(|error| unrecognized_read(error, "delivery_composer", status))
+        parsed
+            .map_err(|error| unrecognized_read(error, ObservationSource::DeliveryComposer, status))
     }
 
     async fn apply_delivery(
@@ -956,10 +970,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             query.append_pair("size", package_size);
             query.append_pair("name", &name);
             let response = self
-                .json(HttpRequest::read(format!(
-                    "/ui/addelivery/shipping?{}",
-                    query.finish()
-                )))
+                .json(HttpRequest::read(
+                    ObservationSource::DeliveryComposer,
+                    format!("/ui/addelivery/shipping?{}", query.finish()),
+                ))
                 .await?;
             let products = shipping_products(&response.body);
             if products.is_empty() {
@@ -1014,6 +1028,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             })
         };
         self.json(HttpRequest::mutation(
+            ObservationSource::DeliveryComposer,
             Method::Post,
             format!("/ads/{draft_id}/delivery"),
             RequestBody::Json(body),
@@ -1031,13 +1046,17 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         let encoded_revision: String =
             url::form_urlencoded::byte_serialize(revision.as_bytes()).collect();
         let response = self
-            .json(HttpRequest::read(format!(
-                "/adinput/product/recommerce/{draft_id}/productcontext?adRevision={encoded_revision}"
-            )))
+            .json(HttpRequest::read(
+                ObservationSource::PublicationProductContext,
+                format!(
+                    "/adinput/product/recommerce/{draft_id}/productcontext?adRevision={encoded_revision}"
+                ),
+            ))
             .await?;
         let status = response.status;
-        normalize_product_context(response.body, draft_id, revision)
-            .map_err(|error| unrecognized_read(error, "publication_product_context", status))
+        normalize_product_context(response.body, draft_id, revision).map_err(|error| {
+            unrecognized_read(error, ObservationSource::PublicationProductContext, status)
+        })
     }
 
     async fn publish_basic(
@@ -1048,6 +1067,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         validate_resource_id(draft_id, "draft")?;
         let response = self
             .json(HttpRequest::mutation(
+                ObservationSource::DraftService,
                 Method::Post,
                 format!("/adinput/order/choices/{draft_id}"),
                 RequestBody::Form(vec![(
@@ -1064,13 +1084,19 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         validate_resource_id(&publication.listing_id, "listing")?;
         validate_resource_id(&publication.order_id, "order")?;
         let response = self
-            .json(HttpRequest::read(format!(
-                "/orders/{}/confirmation/{}",
-                publication.order_id, publication.listing_id
-            )))
+            .json(HttpRequest::read(
+                ObservationSource::PublicationConfirmation,
+                format!(
+                    "/orders/{}/confirmation/{}",
+                    publication.order_id, publication.listing_id
+                ),
+            ))
             .await?;
         if response.body_is_unparseable || !response.body.is_object() {
-            return Err(malformed_read_response("confirmation"));
+            return Err(malformed_read_response(
+                "confirmation",
+                ObservationSource::PublicationConfirmation,
+            ));
         }
         Ok(Confirmation {
             listing_id: publication.listing_id.clone(),
@@ -1083,10 +1109,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query.append_pair("adId", &confirmation.listing_id);
         query.append_pair("orderId", &confirmation.order_id);
-        self.json(HttpRequest::read(format!(
-            "/tracking/adconfirmation?{}",
-            query.finish()
-        )))
+        self.json(HttpRequest::read(
+            ObservationSource::PublicationConfirmation,
+            format!("/tracking/adconfirmation?{}", query.finish()),
+        ))
         .await
         .map(|_| ())
     }
@@ -1101,7 +1127,12 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
 
     async fn observed_listing(&self, listing_id: &str) -> Result<Value, ApiError> {
         validate_resource_id(listing_id, "listing")?;
-        let detail = self.json(HttpRequest::read(format!("/{listing_id}"))).await;
+        let detail = self
+            .json(HttpRequest::read(
+                ObservationSource::ListingDetail,
+                format!("/{listing_id}"),
+            ))
+            .await;
         if let Ok(response) = &detail
             && !response.body_is_unparseable
             && observed_detail_matches(&response.body, listing_id)
@@ -1131,7 +1162,10 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
                 };
                 (
                     status,
-                    Observation::unrecognized_response("listing_detail", Some(response.status)),
+                    Observation::unrecognized_response(
+                        ObservationSource::ListingDetail,
+                        Some(response.status),
+                    ),
                 )
             }
             Err(error) => {
@@ -1142,7 +1176,7 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
                 };
                 let observation = error.observation.unwrap_or_else(|| {
                     Observation::temporarily_unavailable(
-                        "listing_detail",
+                        ObservationSource::ListingDetail,
                         error.status,
                         error.status.is_some(),
                     )
@@ -1220,9 +1254,11 @@ fn public_listing_url(listing_id: &str) -> String {
 }
 
 fn listing_not_copyable(listing_id: &str, reason: &str, status: Option<u16>) -> ApiError {
-    let eligibility = Observation::confirmed_absent("listing_copy_eligibility", status);
-    let listing_presence = status
-        .map(|_| Observation::confirmed_present("authenticated_listing_collection", Some(200)));
+    let eligibility =
+        Observation::confirmed_absent(ObservationSource::ListingCopyEligibility, status);
+    let listing_presence = status.map(|_| {
+        Observation::confirmed_present(ObservationSource::AuthenticatedListingCollection, Some(200))
+    });
     let mut error = ApiError::new(
         "listing.not_copyable",
         "Only listings in the authenticated seller's listing collection can be copied",
@@ -1247,7 +1283,7 @@ fn copy_source_error(mut error: ApiError, listing_id: &str) -> ApiError {
         "listing_id": listing_id,
         "source_scope": "authenticated_seller_listings",
         "listing_presence": Observation::confirmed_present(
-            "authenticated_listing_collection",
+            ObservationSource::AuthenticatedListingCollection,
             Some(200),
         ),
         "copy_eligibility": copy_eligibility,
@@ -1258,15 +1294,16 @@ fn copy_source_error(mut error: ApiError, listing_id: &str) -> ApiError {
 }
 
 fn malformed_copy_source(listing_id: &str, status: u16) -> ApiError {
-    let eligibility = Observation::unrecognized_response("listing_copy_eligibility", Some(status));
-    let mut error = malformed_read_response("source_listing")
+    let eligibility =
+        Observation::unrecognized_response(ObservationSource::ListingCopyEligibility, Some(status));
+    let mut error = malformed_read_response("source_listing", ObservationSource::ListingDetail)
         .with_observation(eligibility.clone(), ObservationOperation::Read);
     error.status = Some(status);
     error.details = Some(Box::new(json!({
         "listing_id": listing_id,
         "source_scope": "authenticated_seller_listings",
         "listing_presence": Observation::confirmed_present(
-            "authenticated_listing_collection",
+            ObservationSource::AuthenticatedListingCollection,
             Some(200),
         ),
         "copy_eligibility": eligibility,
@@ -1281,7 +1318,10 @@ fn listing_observation_model_error(status: u16, model: &str) -> ApiError {
         "Tori returned an unrecognized listing collection model",
     )
     .with_observation(
-        Observation::unrecognized_response("authenticated_listing_collection", Some(status)),
+        Observation::unrecognized_response(
+            ObservationSource::AuthenticatedListingCollection,
+            Some(status),
+        ),
         ObservationOperation::Read,
     );
     error.status = Some(status);
@@ -1657,16 +1697,7 @@ fn unexpected_representation(stage: &str, response: &HttpResponse) -> ApiError {
     error
 }
 
-pub(super) fn malformed_read_response(stage: &str) -> ApiError {
-    let source = match stage {
-        "publication_draft" => "draft_detail",
-        "delivery_composer" => "delivery_composer",
-        "observed_listing" => "listing_detail",
-        "confirmation" => "publication_confirmation",
-        "category_predictions" => "draft_category_predictions",
-        "source_listing" => "listing_detail",
-        _ => "draft_service",
-    };
+pub(super) fn malformed_read_response(stage: &str, source: ObservationSource) -> ApiError {
     let mut error = ApiError::new(
         "upstream.unexpected_response",
         "Tori returned an invalid success response",

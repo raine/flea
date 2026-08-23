@@ -1,6 +1,7 @@
 use crate::diagnostics;
 use crate::domain::observation::Observation;
 use crate::domain::observation::ObservationOperation;
+use crate::domain::observation::ObservationSource;
 use crate::marketplace::tori::client::HttpError;
 use crate::marketplace::tori::client::MultipartPart;
 use crate::marketplace::tori::client::RequestSpec;
@@ -99,6 +100,7 @@ impl fmt::Debug for RequestBody {
 pub struct HttpRequest {
     pub method: Method,
     pub path: String,
+    pub observation_source: ObservationSource,
     pub service: Option<&'static str>,
     pub if_match: Option<String>,
     pub retry: RetryPolicy,
@@ -111,6 +113,7 @@ impl fmt::Debug for HttpRequest {
             .debug_struct("HttpRequest")
             .field("method", &self.method)
             .field("request_target", &"[REDACTED]")
+            .field("observation_source", &self.observation_source)
             .field("has_if_match", &self.if_match.is_some())
             .field("retry", &self.retry)
             .field("body", &self.body)
@@ -119,10 +122,11 @@ impl fmt::Debug for HttpRequest {
 }
 
 impl HttpRequest {
-    pub(super) fn read(path: impl Into<String>) -> Self {
+    pub(super) fn read(source: ObservationSource, path: impl Into<String>) -> Self {
         Self {
             method: Method::Get,
             path: path.into(),
+            observation_source: source,
             service: None,
             if_match: None,
             retry: RetryPolicy::BoundedRead,
@@ -130,10 +134,16 @@ impl HttpRequest {
         }
     }
 
-    pub(super) fn mutation(method: Method, path: impl Into<String>, body: RequestBody) -> Self {
+    pub(super) fn mutation(
+        source: ObservationSource,
+        method: Method,
+        path: impl Into<String>,
+        body: RequestBody,
+    ) -> Self {
         Self {
             method,
             path: path.into(),
+            observation_source: source,
             service: None,
             if_match: None,
             retry: RetryPolicy::Never,
@@ -190,7 +200,11 @@ impl ApiError {
         }
     }
 
-    pub(super) fn response(response: &HttpResponse, context: RetryContext, source: &str) -> Self {
+    pub(super) fn response(
+        response: &HttpResponse,
+        context: RetryContext,
+        source: ObservationSource,
+    ) -> Self {
         let message = response
             .body
             .get("message")
@@ -226,7 +240,7 @@ impl ApiError {
         };
         let mut error = Self::new(code, message).with_observation(observation, operation);
         if response.status == 404 && context.method.is_read() {
-            error.code = if source == "draft_detail" {
+            error.code = if source == ObservationSource::DraftDetail {
                 "draft.not_found".to_owned()
             } else {
                 "remote.not_found".to_owned()
@@ -312,7 +326,7 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
         let service = request
             .service
             .unwrap_or_else(|| service_for_path(&request.path));
-        let observation_source = super::adapter::observation_source(&request.path);
+        let observation_source = request.observation_source;
         let retry_context = request.retry_context();
         let method = match request.method {
             Method::Get => ReqwestMethod::GET,
@@ -471,4 +485,127 @@ fn safe_content_type(value: &str) -> String {
         .unwrap_or("unknown")
         .trim()
         .to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::marketplace::tori::client::{RequestSpec, TransportError};
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct FailingClient {
+        error: TransportErrorKind,
+    }
+
+    impl ToriClient for FailingClient {
+        fn execute(
+            &self,
+            _request: RequestSpec,
+        ) -> Pin<
+            Box<
+                dyn Future<
+                        Output = Result<crate::marketplace::tori::client::HttpResponse, HttpError>,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            let error = self.error;
+            Box::pin(async move { Err(HttpError::Transport(TransportError { kind: error })) })
+        }
+    }
+
+    fn response(status: u16) -> HttpResponse {
+        HttpResponse {
+            status,
+            etag: None,
+            content_type: Some("application/json".to_owned()),
+            location: None,
+            body: json!({ "message": "fixture" }),
+            body_is_unparseable: false,
+        }
+    }
+
+    #[test]
+    fn response_errors_preserve_each_typed_source_and_read_retry_behavior() {
+        let sources = [
+            ObservationSource::AuthenticatedListingCollection,
+            ObservationSource::CategoryTaxonomy,
+            ObservationSource::DeliveryComposer,
+            ObservationSource::DraftCategoryPredictions,
+            ObservationSource::DraftCreation,
+            ObservationSource::DraftDetail,
+            ObservationSource::DraftService,
+            ObservationSource::ListingCopyEligibility,
+            ObservationSource::ListingDetail,
+            ObservationSource::PublicationConfirmation,
+            ObservationSource::PublicationProductContext,
+        ];
+
+        for source in sources {
+            let error = ApiError::response(
+                &response(503),
+                RetryContext::read(OperationMethod::Get),
+                source,
+            );
+
+            assert_eq!(error.observation.unwrap().source, source.as_str());
+            assert!(error.upstream_transient);
+            assert!(error.safe_to_retry);
+        }
+    }
+
+    #[test]
+    fn typed_draft_detail_preserves_not_found_classification() {
+        let error = ApiError::response(
+            &response(404),
+            RetryContext::read(OperationMethod::Get),
+            ObservationSource::DraftDetail,
+        );
+
+        assert_eq!(error.code, "draft.not_found");
+        assert_eq!(
+            error.observation.unwrap().source,
+            ObservationSource::DraftDetail.as_str()
+        );
+        assert!(!error.upstream_transient);
+        assert!(!error.safe_to_retry);
+    }
+
+    #[tokio::test]
+    async fn transport_errors_use_request_metadata_instead_of_request_paths() {
+        let transport = ClientTransport::new(FailingClient {
+            error: TransportErrorKind::Connection,
+        });
+        let read = transport
+            .execute(HttpRequest::read(
+                ObservationSource::CategoryTaxonomy,
+                "/path-with-no-source-semantics",
+            ))
+            .await
+            .unwrap_err();
+        let mutation = transport
+            .execute(HttpRequest::mutation(
+                ObservationSource::PublicationConfirmation,
+                Method::Post,
+                "/another-unrelated-path",
+                RequestBody::Empty,
+            ))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            read.observation.unwrap().source,
+            ObservationSource::CategoryTaxonomy.as_str()
+        );
+        assert!(read.upstream_transient);
+        assert!(read.safe_to_retry);
+        assert_eq!(mutation.code, "mutation.uncertain");
+        assert_eq!(
+            mutation.observation.unwrap().source,
+            ObservationSource::PublicationConfirmation.as_str()
+        );
+        assert!(mutation.upstream_transient);
+        assert!(!mutation.safe_to_retry);
+    }
 }

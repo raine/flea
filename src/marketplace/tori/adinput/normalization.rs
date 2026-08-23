@@ -11,6 +11,7 @@ use crate::domain::commerce::select_values_equal;
 use crate::domain::field::Field;
 use crate::domain::field::FieldType;
 use crate::domain::field::Requirement;
+use crate::domain::observation::ObservationSource;
 use serde_json::Map;
 use serde_json::Value;
 use serde_json::json;
@@ -1241,7 +1242,10 @@ fn normalize_publication_category(
 }
 
 fn category_model_error() -> ApiError {
-    malformed_read_response("publication_category_taxonomy")
+    malformed_read_response(
+        "publication_category_taxonomy",
+        ObservationSource::DraftService,
+    )
 }
 
 pub(super) fn validate_resource_id(value: &str, resource: &str) -> Result<(), ApiError> {

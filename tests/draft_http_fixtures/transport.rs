@@ -1,4 +1,5 @@
 use super::support::*;
+use flea::domain::observation::ObservationSource;
 
 #[tokio::test]
 async fn rejects_resource_ids_before_constructing_transport_paths() {
@@ -38,6 +39,7 @@ fn request_debug_redacts_targets_raw_bytes_and_secret_json_values() {
     let image = HttpRequest {
         method: Method::Post,
         path: "/images".to_owned(),
+        observation_source: ObservationSource::DraftService,
         service: None,
         if_match: None,
         retry: RetryPolicy::Never,
@@ -52,6 +54,7 @@ fn request_debug_redacts_targets_raw_bytes_and_secret_json_values() {
     let json = HttpRequest {
         method: Method::Post,
         path: "/drafts".to_owned(),
+        observation_source: ObservationSource::DraftService,
         service: None,
         if_match: None,
         retry: RetryPolicy::Never,
@@ -60,6 +63,7 @@ fn request_debug_redacts_targets_raw_bytes_and_secret_json_values() {
     let delivery = HttpRequest {
         method: Method::Get,
         path: "/ui/addelivery/shipping?name=Private+Seller".to_owned(),
+        observation_source: ObservationSource::DeliveryComposer,
         service: None,
         if_match: None,
         retry: RetryPolicy::BoundedRead,
