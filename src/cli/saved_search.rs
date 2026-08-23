@@ -117,7 +117,7 @@ pub async fn dispatch_with_apis(
             if limit.is_some_and(|limit| !(1..=1000).contains(&limit)) {
                 return Err(AppError::usage("--limit must be between 1 and 1000"));
             }
-            let searches = saved.list(limit)?;
+            let searches = saved.list(limit).await?;
             let count = searches.len();
             Ok(json!({
                 "saved_searches": searches,
@@ -126,7 +126,7 @@ pub async fn dispatch_with_apis(
             }))
         }
         SavedSearchCommand::Show { id } => {
-            let search = saved.show(&id)?;
+            let search = saved.show(&id).await?;
             let mut value = serde_json::to_value(search).map_err(|error| {
                 AppError::output("failed to serialize saved search").with_source(error)
             })?;
@@ -155,11 +155,13 @@ pub async fn dispatch_with_apis(
             let parameters = saved_search_parameters(search, search_api).await?;
             let notifications = notification_list(email, push, notification_center);
             mutation_value(
-                saved.create(CreateSavedSearch {
-                    name,
-                    notifications,
-                    parameters,
-                })?,
+                saved
+                    .create(CreateSavedSearch {
+                        name,
+                        notifications,
+                        parameters,
+                    })
+                    .await?,
                 true,
             )
         }
@@ -176,15 +178,15 @@ pub async fn dispatch_with_apis(
                     "provide --name or a notification channel state",
                 ));
             }
-            let current = saved.show(&id)?;
+            let current = saved.show(&id).await?;
             let mut notifications = current.notifications;
             apply_notification(&mut notifications, "EMAIL", email);
             apply_notification(&mut notifications, "PUSH", push);
             apply_notification(&mut notifications, "NC", notification_center);
-            mutation_value(saved.update(&id, name, Some(notifications))?, true)
+            mutation_value(saved.update(&id, name, Some(notifications)).await?, true)
         }
         SavedSearchCommand::Delete { id } => {
-            let deleted = saved.delete(&id)?;
+            let deleted = saved.delete(&id).await?;
             let mut value = serde_json::to_value(deleted).map_err(|error| {
                 AppError::output("failed to serialize saved search deletion").with_source(error)
             })?;

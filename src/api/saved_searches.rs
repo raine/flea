@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, sync::Arc};
+use std::{collections::BTreeMap, fmt, future::Future, pin::Pin, sync::Arc};
 
 use reqwest::{Method, StatusCode, header::HeaderValue};
 use serde::Serialize;
@@ -21,11 +21,26 @@ const SEARCH_KEY: &str = "SEARCH_ID_BAP_COMMON";
 const SEARCH_TYPE: &str = "alert";
 
 pub trait SavedSearchesApi: Send + Sync {
-    fn list(&self, rows: Option<usize>) -> Result<Vec<Value>, SavedSearchApiError>;
-    fn show(&self, id: &str) -> Result<Option<Value>, SavedSearchApiError>;
-    fn create(&self, body: &Value) -> Result<String, SavedSearchApiError>;
-    fn update(&self, body: &Value) -> Result<(), SavedSearchApiError>;
-    fn delete(&self, id: &str) -> Result<(), SavedSearchApiError>;
+    fn list(
+        &self,
+        rows: Option<usize>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>, SavedSearchApiError>> + Send + '_>>;
+    fn show<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, SavedSearchApiError>> + Send + 'a>>;
+    fn create<'a>(
+        &'a self,
+        body: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<String, SavedSearchApiError>> + Send + 'a>>;
+    fn update<'a>(
+        &'a self,
+        body: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SavedSearchApiError>> + Send + 'a>>;
+    fn delete<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SavedSearchApiError>> + Send + 'a>>;
 }
 
 pub struct HttpSavedSearchesApi {
@@ -37,24 +52,11 @@ impl HttpSavedSearchesApi {
         Self { client }
     }
 
-    fn execute(
+    async fn execute(
         &self,
         request: RequestSpec,
     ) -> Result<crate::api::client::HttpResponse, SavedSearchApiError> {
-        let client = Arc::clone(&self.client);
-        std::thread::scope(|scope| {
-            scope
-                .spawn(move || {
-                    tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|_| SavedSearchApiError::Unexpected)?
-                        .block_on(client.execute(request))
-                        .map_err(http_error)
-                })
-                .join()
-                .map_err(|_| SavedSearchApiError::Unexpected)?
-        })
+        self.client.execute(request).await.map_err(http_error)
     }
 
     fn query(pairs: &[(&str, String)]) -> String {
@@ -66,17 +68,19 @@ impl HttpSavedSearchesApi {
         format!("{PATH}?{}", encoder.finish())
     }
 
-    fn read(&self, pairs: &[(&str, String)]) -> Result<Vec<Value>, SavedSearchApiError> {
-        let response = self.execute(RequestSpec::new(
-            Method::GET,
-            Self::query(pairs),
-            compatibility::SERVICE_SAVED_SEARCHES,
-        ))?;
+    async fn read(&self, pairs: &[(&str, String)]) -> Result<Vec<Value>, SavedSearchApiError> {
+        let response = self
+            .execute(RequestSpec::new(
+                Method::GET,
+                Self::query(pairs),
+                compatibility::SERVICE_SAVED_SEARCHES,
+            ))
+            .await?;
         ensure_success(response.status)?;
         serde_json::from_slice(&response.body).map_err(|_| SavedSearchApiError::Unexpected)
     }
 
-    fn mutation(
+    async fn mutation(
         &self,
         method: Method,
         target: String,
@@ -89,40 +93,73 @@ impl HttpSavedSearchesApi {
                 HeaderValue::from_static("application/json"),
             );
         }
-        let response = self.execute(request)?;
+        let response = self.execute(request).await?;
         ensure_success(response.status)?;
         Ok(response)
     }
 }
 
 impl SavedSearchesApi for HttpSavedSearchesApi {
-    fn list(&self, rows: Option<usize>) -> Result<Vec<Value>, SavedSearchApiError> {
-        let mut pairs = vec![("type", SEARCH_TYPE.to_owned())];
-        if let Some(rows) = rows {
-            pairs.push(("rows", rows.to_string()));
-        }
-        self.read(&pairs)
+    fn list(
+        &self,
+        rows: Option<usize>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>, SavedSearchApiError>> + Send + '_>> {
+        Box::pin(async move {
+            let mut pairs = vec![("type", SEARCH_TYPE.to_owned())];
+            if let Some(rows) = rows {
+                pairs.push(("rows", rows.to_string()));
+            }
+            self.read(&pairs).await
+        })
     }
 
-    fn show(&self, id: &str) -> Result<Option<Value>, SavedSearchApiError> {
-        Ok(self.read(&[("id", id.to_owned())])?.into_iter().next())
+    fn show<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, SavedSearchApiError>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(self
+                .read(&[("id", id.to_owned())])
+                .await?
+                .into_iter()
+                .next())
+        })
     }
 
-    fn create(&self, body: &Value) -> Result<String, SavedSearchApiError> {
-        let response = self.mutation(Method::POST, Self::query(&[]), Some(body))?;
-        let value: Value =
-            serde_json::from_slice(&response.body).map_err(|_| SavedSearchApiError::Unexpected)?;
-        opaque(&value).ok_or(SavedSearchApiError::Unexpected)
+    fn create<'a>(
+        &'a self,
+        body: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<String, SavedSearchApiError>> + Send + 'a>> {
+        Box::pin(async move {
+            let response = self
+                .mutation(Method::POST, Self::query(&[]), Some(body))
+                .await?;
+            let value: Value = serde_json::from_slice(&response.body)
+                .map_err(|_| SavedSearchApiError::Unexpected)?;
+            opaque(&value).ok_or(SavedSearchApiError::Unexpected)
+        })
     }
 
-    fn update(&self, body: &Value) -> Result<(), SavedSearchApiError> {
-        self.mutation(Method::PUT, Self::query(&[]), Some(body))
-            .map(|_| ())
+    fn update<'a>(
+        &'a self,
+        body: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SavedSearchApiError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.mutation(Method::PUT, Self::query(&[]), Some(body))
+                .await
+                .map(|_| ())
+        })
     }
 
-    fn delete(&self, id: &str) -> Result<(), SavedSearchApiError> {
-        self.mutation(Method::DELETE, Self::query(&[("id", id.to_owned())]), None)
-            .map(|_| ())
+    fn delete<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SavedSearchApiError>> + Send + 'a>> {
+        Box::pin(async move {
+            self.mutation(Method::DELETE, Self::query(&[("id", id.to_owned())]), None)
+                .await
+                .map(|_| ())
+        })
     }
 }
 
@@ -220,32 +257,34 @@ impl<'a> SavedSearches<'a> {
         Self { api }
     }
 
-    pub fn list(&self, rows: Option<usize>) -> Result<Vec<SavedSearch>, AppError> {
+    pub async fn list(&self, rows: Option<usize>) -> Result<Vec<SavedSearch>, AppError> {
         self.api
             .list(rows)
+            .await
             .map_err(|error| api_error(error, None, true))?
             .iter()
             .map(normalize)
             .collect()
     }
 
-    pub fn show(&self, id: &str) -> Result<SavedSearch, AppError> {
+    pub async fn show(&self, id: &str) -> Result<SavedSearch, AppError> {
         validate_id(id)?;
         let raw = self
             .api
             .show(id)
+            .await
             .map_err(|error| api_error(error, Some(id), true))?
             .ok_or_else(|| not_found(id))?;
         normalize(&raw)
     }
 
-    pub fn create(&self, input: CreateSavedSearch) -> Result<SavedSearch, AppError> {
+    pub async fn create(&self, input: CreateSavedSearch) -> Result<SavedSearch, AppError> {
         validate_name(&input.name)?;
         let body = create_body(&input);
-        match self.api.create(&body) {
-            Ok(id) => self.verify_present(&id),
+        match self.api.create(&body).await {
+            Ok(id) => self.verify_present(&id).await,
             Err(error) => {
-                let recovery = self.api.list(None);
+                let recovery = self.api.list(None).await;
                 if let Ok(ref raw) = recovery {
                     let matches = raw
                         .iter()
@@ -273,7 +312,7 @@ impl<'a> SavedSearches<'a> {
         }
     }
 
-    pub fn update(
+    pub async fn update(
         &self,
         id: &str,
         name: Option<String>,
@@ -291,12 +330,13 @@ impl<'a> SavedSearches<'a> {
         let current = self
             .api
             .show(id)
+            .await
             .map_err(|error| api_error(error, Some(id), true))?
             .ok_or_else(|| not_found(id))?;
         let raw = update_body(&current, name, notifications)?;
-        match self.api.update(&raw) {
-            Ok(()) => self.verify_present(id),
-            Err(error) => match self.api.show(id) {
+        match self.api.update(&raw).await {
+            Ok(()) => self.verify_present(id).await,
+            Err(error) => match self.api.show(id).await {
                 Ok(Some(observed)) if intended_update(&observed, &raw) => normalize(&observed),
                 Ok(Some(_)) => Err(mutation_error(
                     error,
@@ -320,8 +360,8 @@ impl<'a> SavedSearches<'a> {
         }
     }
 
-    fn verify_present(&self, id: &str) -> Result<SavedSearch, AppError> {
-        match self.api.show(id) {
+    async fn verify_present(&self, id: &str) -> Result<SavedSearch, AppError> {
+        match self.api.show(id).await {
             Ok(Some(raw)) => normalize(&raw),
             Ok(None) | Err(SavedSearchApiError::NotFound) => Err(mutation_error(
                 SavedSearchApiError::Unexpected,
@@ -336,14 +376,14 @@ impl<'a> SavedSearches<'a> {
         }
     }
 
-    pub fn delete(&self, id: &str) -> Result<DeletedSavedSearch, AppError> {
+    pub async fn delete(&self, id: &str) -> Result<DeletedSavedSearch, AppError> {
         validate_id(id)?;
-        match self.api.delete(id) {
+        match self.api.delete(id).await {
             Ok(()) => Ok(DeletedSavedSearch {
                 id: id.to_owned(),
                 deleted: true,
             }),
-            Err(error) => match self.api.show(id) {
+            Err(error) => match self.api.show(id).await {
                 Ok(None) | Err(SavedSearchApiError::NotFound) => Ok(DeletedSavedSearch {
                     id: id.to_owned(),
                     deleted: true,

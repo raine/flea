@@ -41,6 +41,10 @@ impl ToriClient for FixtureClient {
     }
 }
 
+fn ready<T: Send + 'static>(value: T) -> Pin<Box<dyn Future<Output = T> + Send>> {
+    Box::pin(async move { value })
+}
+
 fn response(status: StatusCode, body: impl Into<Vec<u8>>) -> Result<HttpResponse, HttpError> {
     Ok(HttpResponse {
         status,
@@ -49,8 +53,8 @@ fn response(status: StatusCode, body: impl Into<Vec<u8>>) -> Result<HttpResponse
     })
 }
 
-#[test]
-fn http_fixture_covers_list_show_create_update_and_delete_protocol() {
+#[tokio::test]
+async fn http_fixture_covers_list_show_create_update_and_delete_protocol() {
     let fixture = include_bytes!("fixtures/saved-searches/list.json");
     let client = FixtureClient::new([
         response(StatusCode::OK, fixture.as_slice()),
@@ -61,12 +65,12 @@ fn http_fixture_covers_list_show_create_update_and_delete_protocol() {
     ]);
     let api = HttpSavedSearchesApi::new(Arc::new(client.clone()));
 
-    assert_eq!(api.list(Some(25)).unwrap().len(), 1);
-    assert!(api.show("987654321").unwrap().is_some());
+    assert_eq!(api.list(Some(25)).await.unwrap().len(), 1);
+    assert!(api.show("987654321").await.unwrap().is_some());
     let body = json!({"description":"fixture"});
-    assert_eq!(api.create(&body).unwrap(), "987654321");
-    api.update(&body).unwrap();
-    api.delete("opaque/id").unwrap();
+    assert_eq!(api.create(&body).await.unwrap(), "987654321");
+    api.update(&body).await.unwrap();
+    api.delete("opaque/id").await.unwrap();
 
     let requests = client.requests.lock().unwrap();
     assert_eq!(
@@ -100,12 +104,12 @@ fn http_fixture_covers_list_show_create_update_and_delete_protocol() {
     assert_eq!(serde_json::from_slice::<Value>(bytes).unwrap(), body);
 }
 
-#[test]
-fn fixture_normalizes_opaque_ids_values_and_parameters() {
+#[tokio::test]
+async fn fixture_normalizes_opaque_ids_values_and_parameters() {
     let raw: Vec<Value> =
         serde_json::from_slice(include_bytes!("fixtures/saved-searches/list.json")).unwrap();
     let api = StateApi::new(raw);
-    let result = SavedSearches::new(&api).list(None).unwrap();
+    let result = SavedSearches::new(&api).list(None).await.unwrap();
 
     assert_eq!(result[0].id, "987654321");
     assert_eq!(result[0].created.as_deref(), Some("1750000000456"));
@@ -136,43 +140,62 @@ impl StateApi {
 }
 
 impl SavedSearchesApi for StateApi {
-    fn list(&self, _: Option<usize>) -> Result<Vec<Value>, SavedSearchApiError> {
-        Ok(self.searches.lock().unwrap().clone())
+    fn list(
+        &self,
+        _: Option<usize>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>, SavedSearchApiError>> + Send + '_>> {
+        ready(Ok(self.searches.lock().unwrap().clone()))
     }
-    fn show(&self, id: &str) -> Result<Option<Value>, SavedSearchApiError> {
-        Ok(self
+
+    fn show<'a>(
+        &'a self,
+        id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, SavedSearchApiError>> + Send + 'a>> {
+        ready(Ok(self
             .searches
             .lock()
             .unwrap()
             .iter()
             .find(|value| value["id"].to_string().trim_matches('"') == id)
-            .cloned())
+            .cloned()))
     }
-    fn create(&self, body: &Value) -> Result<String, SavedSearchApiError> {
+
+    fn create<'a>(
+        &'a self,
+        body: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<String, SavedSearchApiError>> + Send + 'a>> {
         *self.last_create.lock().unwrap() = Some(body.clone());
-        Err(self
+        ready(Err(self
             .create_error
             .lock()
             .unwrap()
             .clone()
-            .unwrap_or(SavedSearchApiError::Transport))
+            .unwrap_or(SavedSearchApiError::Transport)))
     }
-    fn update(&self, body: &Value) -> Result<(), SavedSearchApiError> {
+
+    fn update<'a>(
+        &'a self,
+        body: &'a Value,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SavedSearchApiError>> + Send + 'a>> {
         *self.last_update.lock().unwrap() = Some(body.clone());
-        Err(self
+        ready(Err(self
             .update_error
             .lock()
             .unwrap()
             .clone()
-            .unwrap_or(SavedSearchApiError::Transport))
+            .unwrap_or(SavedSearchApiError::Transport)))
     }
-    fn delete(&self, _: &str) -> Result<(), SavedSearchApiError> {
-        Err(self
+
+    fn delete<'a>(
+        &'a self,
+        _: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), SavedSearchApiError>> + Send + 'a>> {
+        ready(Err(self
             .delete_error
             .lock()
             .unwrap()
             .clone()
-            .unwrap_or(SavedSearchApiError::Transport))
+            .unwrap_or(SavedSearchApiError::Transport)))
     }
 }
 
@@ -188,13 +211,14 @@ fn intended_input() -> CreateSavedSearch {
     }
 }
 
-#[test]
-fn uncertain_create_recovers_existing_result_or_proves_retryable_absence() {
+#[tokio::test]
+async fn uncertain_create_recovers_existing_result_or_proves_retryable_absence() {
     let existing: Vec<Value> =
         serde_json::from_slice(include_bytes!("fixtures/saved-searches/list.json")).unwrap();
     let present_api = StateApi::new(existing);
     let recovered = SavedSearches::new(&present_api)
         .create(intended_input())
+        .await
         .unwrap();
     assert_eq!(recovered.id, "987654321");
     let body = present_api.last_create.lock().unwrap().clone().unwrap();
@@ -208,14 +232,15 @@ fn uncertain_create_recovers_existing_result_or_proves_retryable_absence() {
     let absent_api = StateApi::new(Vec::new());
     let error = SavedSearches::new(&absent_api)
         .create(intended_input())
+        .await
         .unwrap_err();
     assert_eq!(error.code, "mutation.uncertain");
     assert!(error.safe_to_retry);
     assert_eq!(error.next_actions[0].command, "flea tori saved-search list");
 }
 
-#[test]
-fn uncertain_update_and_delete_return_read_only_recovery_actions() {
+#[tokio::test]
+async fn uncertain_update_and_delete_return_read_only_recovery_actions() {
     let existing: Vec<Value> =
         serde_json::from_slice(include_bytes!("fixtures/saved-searches/list.json")).unwrap();
     let api = StateApi::new(existing);
@@ -223,6 +248,7 @@ fn uncertain_update_and_delete_return_read_only_recovery_actions() {
 
     let update = saved
         .update("987654321", Some("Changed".to_owned()), None)
+        .await
         .unwrap_err();
     assert!(update.safe_to_retry);
     let body = api.last_update.lock().unwrap().clone().unwrap();
@@ -235,7 +261,7 @@ fn uncertain_update_and_delete_return_read_only_recovery_actions() {
         "flea tori saved-search show 987654321"
     );
 
-    let delete = saved.delete("987654321").unwrap_err();
+    let delete = saved.delete("987654321").await.unwrap_err();
     assert!(delete.safe_to_retry);
     assert_eq!(
         delete.next_actions[0].command,
@@ -243,28 +269,51 @@ fn uncertain_update_and_delete_return_read_only_recovery_actions() {
     );
 }
 
-#[test]
-fn transport_failure_without_recovery_evidence_is_unsafe() {
+#[tokio::test]
+async fn transport_failure_without_recovery_evidence_is_unsafe() {
     struct Unavailable;
     impl SavedSearchesApi for Unavailable {
-        fn list(&self, _: Option<usize>) -> Result<Vec<Value>, SavedSearchApiError> {
-            Err(SavedSearchApiError::Transport)
+        fn list(
+            &self,
+            _: Option<usize>,
+        ) -> Pin<Box<dyn Future<Output = Result<Vec<Value>, SavedSearchApiError>> + Send + '_>>
+        {
+            ready(Err(SavedSearchApiError::Transport))
         }
-        fn show(&self, _: &str) -> Result<Option<Value>, SavedSearchApiError> {
-            Err(SavedSearchApiError::Transport)
+
+        fn show<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Option<Value>, SavedSearchApiError>> + Send + 'a>>
+        {
+            ready(Err(SavedSearchApiError::Transport))
         }
-        fn create(&self, _: &Value) -> Result<String, SavedSearchApiError> {
-            Err(SavedSearchApiError::Transport)
+
+        fn create<'a>(
+            &'a self,
+            _: &'a Value,
+        ) -> Pin<Box<dyn Future<Output = Result<String, SavedSearchApiError>> + Send + 'a>>
+        {
+            ready(Err(SavedSearchApiError::Transport))
         }
-        fn update(&self, _: &Value) -> Result<(), SavedSearchApiError> {
-            Err(SavedSearchApiError::Transport)
+
+        fn update<'a>(
+            &'a self,
+            _: &'a Value,
+        ) -> Pin<Box<dyn Future<Output = Result<(), SavedSearchApiError>> + Send + 'a>> {
+            ready(Err(SavedSearchApiError::Transport))
         }
-        fn delete(&self, _: &str) -> Result<(), SavedSearchApiError> {
-            Err(SavedSearchApiError::Transport)
+
+        fn delete<'a>(
+            &'a self,
+            _: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), SavedSearchApiError>> + Send + 'a>> {
+            ready(Err(SavedSearchApiError::Transport))
         }
     }
     let error = SavedSearches::new(&Unavailable)
         .create(intended_input())
+        .await
         .unwrap_err();
     assert!(error.upstream_transient);
     assert!(!error.safe_to_retry);
