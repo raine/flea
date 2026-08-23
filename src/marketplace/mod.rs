@@ -56,6 +56,29 @@ impl MarketplaceContext {
     };
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityId {
+    #[serde(rename = "auth.login")]
+    AuthLogin,
+    #[serde(rename = "auth.status")]
+    AuthStatus,
+    #[serde(rename = "auth.logout")]
+    AuthLogout,
+    #[serde(rename = "auth.refresh")]
+    AuthRefresh,
+    Search,
+    #[serde(rename = "item.show")]
+    ItemShow,
+    #[serde(rename = "location.search")]
+    LocationSearch,
+    Category,
+    Favorite,
+    SavedSearch,
+    Draft,
+    Listing,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityMaturity {
@@ -75,9 +98,36 @@ pub enum AuthRequirement {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct CapabilityDescriptor {
-    pub name: &'static str,
+    #[serde(rename = "name")]
+    pub id: CapabilityId,
     pub auth: AuthRequirement,
     pub maturity: CapabilityMaturity,
+}
+
+impl CapabilityDescriptor {
+    pub const fn validated(id: CapabilityId, auth: AuthRequirement) -> Self {
+        Self {
+            id,
+            auth,
+            maturity: CapabilityMaturity::Validated,
+        }
+    }
+
+    pub const fn source_derived(id: CapabilityId, auth: AuthRequirement) -> Self {
+        Self {
+            id,
+            auth,
+            maturity: CapabilityMaturity::SourceDerived,
+        }
+    }
+
+    pub const fn unavailable(id: CapabilityId) -> Self {
+        Self {
+            id,
+            auth: AuthRequirement::Unknown,
+            maturity: CapabilityMaturity::Unavailable,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -87,74 +137,7 @@ pub struct MarketplaceDescriptor {
     pub capabilities: &'static [CapabilityDescriptor],
 }
 
-const FI_PORTAL: &[PortalId] = &[PortalId::Fi];
-
-const TORI_CAPABILITIES: &[CapabilityDescriptor] = &[
-    validated("auth.login", AuthRequirement::None),
-    validated("auth.status", AuthRequirement::None),
-    validated("auth.logout", AuthRequirement::None),
-    validated("search", AuthRequirement::None),
-    validated("item.show", AuthRequirement::None),
-    validated("location.search", AuthRequirement::None),
-    validated("category", AuthRequirement::Required),
-    validated("favorite", AuthRequirement::Required),
-    validated("saved_search", AuthRequirement::Required),
-    validated("draft", AuthRequirement::Required),
-    validated("listing", AuthRequirement::Required),
-    validated("auth.refresh", AuthRequirement::Internal),
-];
-
-const VINTED_CAPABILITIES: &[CapabilityDescriptor] = &[
-    validated("auth.login", AuthRequirement::None),
-    validated("auth.status", AuthRequirement::None),
-    validated("auth.logout", AuthRequirement::None),
-    CapabilityDescriptor {
-        name: "auth.refresh",
-        auth: AuthRequirement::Internal,
-        maturity: CapabilityMaturity::SourceDerived,
-    },
-    CapabilityDescriptor {
-        name: "search",
-        auth: AuthRequirement::Required,
-        maturity: CapabilityMaturity::SourceDerived,
-    },
-    unavailable("item.show"),
-    unavailable("location.search"),
-    unavailable("category"),
-    unavailable("favorite"),
-    unavailable("saved_search"),
-    unavailable("draft"),
-    unavailable("listing"),
-];
-
-const MARKETPLACES: &[MarketplaceDescriptor] = &[
-    MarketplaceDescriptor {
-        marketplace: MarketplaceId::Tori,
-        portals: FI_PORTAL,
-        capabilities: TORI_CAPABILITIES,
-    },
-    MarketplaceDescriptor {
-        marketplace: MarketplaceId::Vinted,
-        portals: FI_PORTAL,
-        capabilities: VINTED_CAPABILITIES,
-    },
-];
-
-const fn validated(name: &'static str, auth: AuthRequirement) -> CapabilityDescriptor {
-    CapabilityDescriptor {
-        name,
-        auth,
-        maturity: CapabilityMaturity::Validated,
-    }
-}
-
-const fn unavailable(name: &'static str) -> CapabilityDescriptor {
-    CapabilityDescriptor {
-        name,
-        auth: AuthRequirement::Unknown,
-        maturity: CapabilityMaturity::Unavailable,
-    }
-}
+const MARKETPLACES: &[MarketplaceDescriptor] = &[tori::MANIFEST, vinted::MANIFEST];
 
 pub fn marketplaces() -> &'static [MarketplaceDescriptor] {
     MARKETPLACES
@@ -174,37 +157,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capability_matrix_exposes_source_derived_vinted_operations() {
-        let vinted = marketplace(MarketplaceId::Vinted);
+    fn capability_identifiers_preserve_wire_names() {
+        let cases = [
+            (CapabilityId::AuthLogin, "auth.login"),
+            (CapabilityId::AuthStatus, "auth.status"),
+            (CapabilityId::AuthLogout, "auth.logout"),
+            (CapabilityId::AuthRefresh, "auth.refresh"),
+            (CapabilityId::Search, "search"),
+            (CapabilityId::ItemShow, "item.show"),
+            (CapabilityId::LocationSearch, "location.search"),
+            (CapabilityId::Category, "category"),
+            (CapabilityId::Favorite, "favorite"),
+            (CapabilityId::SavedSearch, "saved_search"),
+            (CapabilityId::Draft, "draft"),
+            (CapabilityId::Listing, "listing"),
+        ];
 
-        for name in ["auth.login", "auth.status", "auth.logout"] {
-            assert_eq!(
-                vinted
-                    .capabilities
-                    .iter()
-                    .find(|capability| capability.name == name)
-                    .unwrap()
-                    .maturity,
-                CapabilityMaturity::Validated
-            );
+        for (id, expected) in cases {
+            assert_eq!(serde_json::to_value(id).unwrap(), expected);
         }
-        assert_eq!(
-            vinted
-                .capabilities
-                .iter()
-                .find(|capability| capability.name == "auth.refresh")
-                .unwrap()
-                .maturity,
-            CapabilityMaturity::SourceDerived
-        );
-        assert_eq!(
-            vinted
-                .capabilities
-                .iter()
-                .find(|capability| capability.name == "search")
-                .unwrap()
-                .maturity,
-            CapabilityMaturity::SourceDerived
-        );
     }
 }
