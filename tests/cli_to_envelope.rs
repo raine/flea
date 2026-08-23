@@ -7,13 +7,7 @@ use std::{
 
 use flea::{
     Presentation,
-    cli::auth::{AuthCommandHandler, AuthStore},
-    error::AppError,
     marketplace::tori::{
-        auth::{
-            AuthCredentials, AuthenticatedAccount, AuthenticationApi, OAuthFlow, SchibstedTokens,
-            SecretString, ToriSession,
-        },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
         favorites::{FavoritesApi, HttpFavoritesApi},
     },
@@ -61,100 +55,9 @@ impl FixtureApplication {
     fn dependencies(&self) -> flea::cli::runtime::ApplicationDependencies {
         flea::cli::runtime::ApplicationDependencies::production()
             .with_tori_client(Arc::new(self.client.clone()))
-            .with_tori_auth_handler(|args| async move {
-                match args.command {
-                    flea::cli::auth::AuthCommand::Login => {
-                        Ok(json!({ "authenticated": true, "user_id": "user-1" }).into())
-                    }
-                    command => AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
-                        .dispatch(command)
-                        .await
-                        .map(Into::into),
-                }
+            .with_tori_auth_handler(|_| async {
+                Ok(json!({ "authenticated": true, "user_id": "user-1" }).into())
             })
-    }
-}
-
-#[derive(Default)]
-struct MemoryAuthStore {
-    flow: Mutex<Option<OAuthFlow>>,
-    credentials: Mutex<Option<AuthCredentials>>,
-}
-
-impl AuthStore for MemoryAuthStore {
-    fn save_flow(&self, flow: &OAuthFlow) -> Result<(), AppError> {
-        *self.flow.lock().unwrap() = Some(flow.clone());
-        Ok(())
-    }
-
-    fn load_flow(&self, flow_id: &str) -> Result<Option<OAuthFlow>, AppError> {
-        Ok(self
-            .flow
-            .lock()
-            .unwrap()
-            .clone()
-            .filter(|flow| flow.flow_id == flow_id))
-    }
-
-    fn delete_flow(&self, _flow_id: &str) -> Result<(), AppError> {
-        *self.flow.lock().unwrap() = None;
-        Ok(())
-    }
-
-    fn load_credentials(&self) -> Result<Option<AuthCredentials>, AppError> {
-        Ok(self.credentials.lock().unwrap().clone())
-    }
-
-    fn commit_credentials(
-        &self,
-        flow_id: &str,
-        credentials: &AuthCredentials,
-    ) -> Result<(), AppError> {
-        *self.credentials.lock().unwrap() = Some(credentials.clone());
-        self.delete_flow(flow_id)
-    }
-
-    fn clear_auth(&self) -> Result<(), AppError> {
-        *self.flow.lock().unwrap() = None;
-        *self.credentials.lock().unwrap() = None;
-        Ok(())
-    }
-}
-
-struct FakeAuthApi;
-
-impl AuthenticationApi for FakeAuthApi {
-    async fn exchange_authorization_code(
-        &self,
-        _code: &str,
-        _pkce_verifier: &str,
-    ) -> Result<SchibstedTokens, AppError> {
-        Ok(SchibstedTokens::new_for_adapter(
-            "access".to_owned(),
-            "refresh".to_owned(),
-            "id".to_owned(),
-        ))
-    }
-
-    async fn exchange_spid_code(&self, _access_token: &str) -> Result<SecretString, AppError> {
-        Ok(SecretString::new_for_adapter("spid".to_owned()))
-    }
-
-    async fn login_to_tori(
-        &self,
-        _spid_code: &str,
-        _id_token: Option<&str>,
-        _device_id: &str,
-        _installation_id: &str,
-        _ab_test_device_id: &str,
-    ) -> Result<ToriSession, AppError> {
-        let account = AuthenticatedAccount {
-            user_id: "user-1".to_owned(),
-        };
-        Ok(ToriSession::new_for_adapter(
-            account.user_id,
-            "bearer".to_owned(),
-        ))
     }
 }
 

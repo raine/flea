@@ -30,6 +30,33 @@ pub struct VintedCredentialRecord {
     pub(crate) user_device_token: Option<String>,
 }
 
+impl VintedCredentialRecord {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_for_adapter(
+        portal: PortalId,
+        user_id: String,
+        login: Option<String>,
+        access_token: String,
+        refresh_token: String,
+        access_expires_at_unix: u64,
+        device_uuid: String,
+        anonymous_id: String,
+        user_device_token: Option<String>,
+    ) -> Self {
+        Self {
+            portal,
+            user_id,
+            login,
+            access_token,
+            refresh_token,
+            access_expires_at_unix,
+            device_uuid,
+            anonymous_id,
+            user_device_token,
+        }
+    }
+}
+
 impl std::fmt::Debug for VintedCredentialRecord {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
