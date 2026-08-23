@@ -1,48 +1,25 @@
 use std::{
-    collections::VecDeque,
     io::{Read, Write},
     net::TcpListener,
-    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
 
-use flea::marketplace::tori::client::{
-    ClientConfig, DeviceIdentity, HttpClient, MultipartPart, RequestBody, RequestSpec, Transport,
-    TransportError, TransportErrorKind, TransportFuture, TransportRequest, TransportResponse,
-    compatibility,
+use flea::{
+    marketplace::tori::client::{
+        ClientConfig, DeviceIdentity, HttpClient, RequestSpec, compatibility,
+    },
+    transport::{
+        MultipartPart, RecordingTransport, RequestBody, ReqwestTransport, Transport,
+        TransportError, TransportErrorKind, TransportRequest, TransportResponse,
+    },
 };
 use reqwest::{
     Method, StatusCode,
     header::{AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, HeaderValue, IF_MATCH},
 };
 
-#[derive(Clone)]
-struct FixtureTransport {
-    requests: Arc<Mutex<Vec<TransportRequest>>>,
-    responses: Arc<Mutex<VecDeque<Result<TransportResponse, TransportError>>>>,
-}
-
-impl FixtureTransport {
-    fn new(responses: impl IntoIterator<Item = Result<TransportResponse, TransportError>>) -> Self {
-        Self {
-            requests: Arc::new(Mutex::new(Vec::new())),
-            responses: Arc::new(Mutex::new(responses.into_iter().collect())),
-        }
-    }
-
-    fn requests(&self) -> Vec<TransportRequest> {
-        self.requests.lock().unwrap().clone()
-    }
-}
-
-impl Transport for FixtureTransport {
-    fn execute(&self, request: TransportRequest) -> TransportFuture<'_> {
-        self.requests.lock().unwrap().push(request);
-        let response = self.responses.lock().unwrap().pop_front().unwrap();
-        Box::pin(async move { response })
-    }
-}
+type FixtureTransport = RecordingTransport;
 
 fn fixture_response(status: StatusCode) -> Result<TransportResponse, TransportError> {
     Ok(TransportResponse {
@@ -79,7 +56,6 @@ fn transport_request(
     TransportRequest {
         method: Method::GET,
         url,
-        path_and_query: "/policy".to_owned(),
         headers: HeaderMap::new(),
         body: RequestBody::Empty,
         deadline,
@@ -111,7 +87,7 @@ async fn reqwest_transport_does_not_follow_redirects() {
             .unwrap();
     });
 
-    let response = flea::marketplace::tori::client::ReqwestTransport::default()
+    let response = ReqwestTransport::default()
         .execute(transport_request(url, Duration::from_secs(1), 1024))
         .await
         .unwrap();
@@ -129,7 +105,7 @@ async fn reqwest_transport_enforces_deadlines() {
             .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
     });
 
-    let error = flea::marketplace::tori::client::ReqwestTransport::default()
+    let error = ReqwestTransport::default()
         .execute(transport_request(url, Duration::from_millis(10), 1024))
         .await
         .unwrap_err();
@@ -146,7 +122,7 @@ async fn reqwest_transport_bounds_streamed_responses_without_content_length() {
         );
     });
 
-    let error = flea::marketplace::tori::client::ReqwestTransport::default()
+    let error = ReqwestTransport::default()
         .execute(transport_request(url, Duration::from_secs(1), 7))
         .await
         .unwrap_err();
@@ -157,7 +133,7 @@ async fn reqwest_transport_bounds_streamed_responses_without_content_length() {
 
 #[tokio::test]
 async fn fixture_observes_exact_signed_target_and_compatibility_headers() {
-    let transport = FixtureTransport::new([fixture_response(StatusCode::OK)]);
+    let transport = FixtureTransport::queued([fixture_response(StatusCode::OK)]);
     let client = client(transport.clone());
 
     client
@@ -171,7 +147,7 @@ async fn fixture_observes_exact_signed_target_and_compatibility_headers() {
 
     let requests = transport.requests();
     let request = &requests[0];
-    assert_eq!(request.path_and_query, "/search?foo=one%20two&x=1");
+    assert!(request.url.ends_with("/search?foo=one%20two&x=1"));
     assert_eq!(request.deadline, Duration::from_secs(7));
     assert_eq!(request.max_response_bytes, 32);
     assert_eq!(
@@ -200,7 +176,7 @@ async fn fixture_observes_exact_signed_target_and_compatibility_headers() {
 
 #[tokio::test]
 async fn public_search_uses_android_service_without_identity_or_bearer_headers() {
-    let transport = FixtureTransport::new([fixture_response(StatusCode::OK)]);
+    let transport = FixtureTransport::queued([fixture_response(StatusCode::OK)]);
     let config = ClientConfig {
         include_device_identity: false,
         retry_base_delay: Duration::ZERO,
@@ -227,7 +203,7 @@ async fn public_search_uses_android_service_without_identity_or_bearer_headers()
         .unwrap();
 
     let request = &transport.requests()[0];
-    assert_eq!(request.path_and_query, target);
+    assert!(request.url.ends_with(target));
     assert_eq!(request.headers["finn-gw-service"], "SEARCH-QUEST");
     assert_eq!(
         request.headers["finn-gw-key"],
@@ -242,7 +218,7 @@ async fn public_search_uses_android_service_without_identity_or_bearer_headers()
 async fn carries_if_match_and_extracts_etag() {
     let mut headers = HeaderMap::new();
     headers.insert(ETAG, HeaderValue::from_static("\"revision-2\""));
-    let transport = FixtureTransport::new([Ok(TransportResponse {
+    let transport = FixtureTransport::queued([Ok(TransportResponse {
         status: StatusCode::OK,
         headers,
         body: Vec::new(),
@@ -277,7 +253,7 @@ async fn carries_if_match_and_extracts_etag() {
 
 #[tokio::test]
 async fn retries_only_bounded_safe_methods() {
-    let get_transport = FixtureTransport::new([
+    let get_transport = FixtureTransport::queued([
         fixture_response(StatusCode::SERVICE_UNAVAILABLE),
         Err(TransportError {
             kind: TransportErrorKind::Connection,
@@ -292,7 +268,7 @@ async fn retries_only_bounded_safe_methods() {
     assert_eq!(response.status, StatusCode::OK);
     assert_eq!(get_transport.requests().len(), 3);
 
-    let post_transport = FixtureTransport::new([
+    let post_transport = FixtureTransport::queued([
         fixture_response(StatusCode::SERVICE_UNAVAILABLE),
         fixture_response(StatusCode::OK),
     ]);
@@ -307,7 +283,7 @@ async fn retries_only_bounded_safe_methods() {
 
 #[tokio::test]
 async fn source_backed_mutation_idempotency_uses_the_shared_retry_classification() {
-    let contract_transport = FixtureTransport::new([
+    let contract_transport = FixtureTransport::queued([
         fixture_response(StatusCode::BAD_GATEWAY),
         fixture_response(StatusCode::OK),
     ]);
@@ -322,7 +298,7 @@ async fn source_backed_mutation_idempotency_uses_the_shared_retry_classification
     assert_eq!(response.status, StatusCode::OK);
     assert_eq!(contract_transport.requests().len(), 2);
 
-    let key_transport = FixtureTransport::new([
+    let key_transport = FixtureTransport::queued([
         fixture_response(StatusCode::TOO_MANY_REQUESTS),
         fixture_response(StatusCode::CREATED),
     ]);
@@ -347,7 +323,7 @@ async fn source_backed_mutation_idempotency_uses_the_shared_retry_classification
 
 #[tokio::test]
 async fn empty_post_sends_an_explicit_zero_content_length_once() {
-    let transport = FixtureTransport::new([fixture_response(StatusCode::OK)]);
+    let transport = FixtureTransport::queued([fixture_response(StatusCode::OK)]);
     let client = client(transport.clone());
 
     client
@@ -362,7 +338,7 @@ async fn empty_post_sends_an_explicit_zero_content_length_once() {
 
 #[tokio::test]
 async fn multipart_request_is_inspectable_and_signs_an_empty_body() {
-    let transport = FixtureTransport::new([fixture_response(StatusCode::CREATED)]);
+    let transport = FixtureTransport::queued([fixture_response(StatusCode::CREATED)]);
     let client = client(transport.clone());
     let part = MultipartPart::bytes("file", b"image-fixture".to_vec())
         .file_name("chair.jpg")
@@ -394,7 +370,7 @@ async fn multipart_request_is_inspectable_and_signs_an_empty_body() {
 
 #[tokio::test]
 async fn rejects_oversized_fixture_responses() {
-    let transport = FixtureTransport::new([Ok(TransportResponse {
+    let transport = FixtureTransport::queued([Ok(TransportResponse {
         status: StatusCode::OK,
         headers: HeaderMap::new(),
         body: vec![0; 33],
@@ -412,7 +388,7 @@ async fn rejects_oversized_fixture_responses() {
 
 #[tokio::test]
 async fn debug_and_errors_do_not_expose_credentials_or_signatures() {
-    let transport = FixtureTransport::new([fixture_response(StatusCode::OK)]);
+    let transport = FixtureTransport::queued([fixture_response(StatusCode::OK)]);
     let client = client(transport.clone());
     let mut spec = RequestSpec::new(Method::GET, "/oauth?code=authorization-material", "AUTH");
     spec.headers.insert(
@@ -450,7 +426,7 @@ async fn rejects_targets_that_url_parsing_would_rewrite() {
         "/query with spaces",
         "//attacker.example/secret",
     ] {
-        let transport = FixtureTransport::new([fixture_response(StatusCode::OK)]);
+        let transport = FixtureTransport::queued([fixture_response(StatusCode::OK)]);
         let error = client(transport.clone())
             .send(RequestSpec::new(Method::GET, target, "ITEMS"))
             .await
@@ -467,7 +443,7 @@ async fn rejects_targets_that_url_parsing_would_rewrite() {
 #[tokio::test]
 async fn caps_adversarial_retry_and_timeout_configuration() {
     let responses = (0..=8).map(|_| fixture_response(StatusCode::SERVICE_UNAVAILABLE));
-    let transport = FixtureTransport::new(responses);
+    let transport = FixtureTransport::queued(responses);
     let config = ClientConfig {
         request_timeout: Duration::MAX,
         max_get_retries: usize::MAX,

@@ -213,7 +213,7 @@ async fn favorite_mutations_send_an_explicit_empty_body() {
     assert!(requests[0].content_length_zero);
     assert!(matches!(
         &requests[0].body,
-        flea::marketplace::tori::client::RequestBody::Bytes(bytes) if bytes.is_empty()
+        flea::transport::RequestBody::Bytes(bytes) if bytes.is_empty()
     ));
 }
 
@@ -242,7 +242,7 @@ fn draft_create_flows_through_the_http_adapter() {
     assert!(requests[0].content_length_zero);
     assert!(matches!(
         &requests[0].body,
-        flea::marketplace::tori::client::RequestBody::Bytes(bytes) if bytes.is_empty()
+        flea::transport::RequestBody::Bytes(bytes) if bytes.is_empty()
     ));
 }
 
@@ -566,7 +566,7 @@ fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
         requests[1].content_type.as_ref().unwrap(),
         "application/json"
     );
-    let flea::marketplace::tori::client::RequestBody::Bytes(body) = &requests[1].body else {
+    let flea::transport::RequestBody::Bytes(body) = &requests[1].body else {
         panic!("expected JSON request body")
     };
     assert_eq!(
@@ -1159,7 +1159,7 @@ fn publish_flows_through_every_http_step() {
         requests[11].content_type.as_ref().unwrap(),
         "application/x-www-form-urlencoded"
     );
-    let flea::marketplace::tori::client::RequestBody::Bytes(body) = &requests[11].body else {
+    let flea::transport::RequestBody::Bytes(body) = &requests[11].body else {
         panic!("expected encoded package choice")
     };
     assert_eq!(body, b"choices=urn%3Aproduct%3Apackage-specification%3A10");

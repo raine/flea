@@ -3,7 +3,6 @@ use crate::domain::observation::Observation;
 use crate::domain::observation::ObservationOperation;
 use crate::domain::observation::ObservationSource;
 use crate::marketplace::tori::client::HttpFailure;
-use crate::marketplace::tori::client::MultipartPart;
 use crate::marketplace::tori::client::RequestSpec;
 use crate::marketplace::tori::client::ToriClient;
 use crate::marketplace::tori::client::compatibility;
@@ -12,6 +11,7 @@ use crate::retry::OperationMethod;
 use crate::retry::RetryClassification;
 use crate::retry::RetryContext;
 use crate::retry::classify;
+use crate::transport::MultipartPart;
 use reqwest::Method as ReqwestMethod;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderValue;
@@ -477,9 +477,8 @@ fn safe_content_type(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::marketplace::tori::client::{
-        HttpError, RequestSpec, TransportError, TransportErrorKind,
-    };
+    use crate::marketplace::tori::client::{HttpError, RequestSpec};
+    use crate::transport::{TransportError, TransportErrorKind};
     use std::future::Future;
     use std::pin::Pin;
 

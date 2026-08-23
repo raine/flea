@@ -10,6 +10,7 @@ pub mod output;
 pub mod retry;
 pub mod sensitive;
 pub mod storage;
+pub mod transport;
 
 use std::{
     ffi::OsString,

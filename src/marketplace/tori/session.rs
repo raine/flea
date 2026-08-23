@@ -11,11 +11,12 @@ use crate::{
         AuthCredentials, GatewaySigner, RefreshRequest, SchibstedToriAuthenticationApi,
         SecretString,
     },
-    marketplace::tori::client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
+    marketplace::tori::client::{ClientConfig, DeviceIdentity, HttpClient},
     storage::{
         StatePaths,
         credentials::{CredentialStoreError, StoredCredential, TypedCredentialStore},
     },
+    transport::ReqwestTransport,
 };
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]

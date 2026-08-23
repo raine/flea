@@ -6,13 +6,12 @@ use std::{
 };
 
 use flea::{
-    marketplace::tori::client::{
-        HttpError, HttpResponse, RequestBody, RequestSpec, ToriClient, compatibility,
-    },
+    marketplace::tori::client::{HttpError, HttpResponse, RequestSpec, ToriClient, compatibility},
     marketplace::tori::saved_searches::{
         CreateSavedSearch, HttpSavedSearchesApi, SavedSearchApiError, SavedSearches,
         SavedSearchesApi,
     },
+    transport::RequestBody,
 };
 use reqwest::StatusCode;
 use serde_json::{Value, json};

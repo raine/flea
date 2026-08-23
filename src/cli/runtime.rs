@@ -13,7 +13,7 @@ use crate::{
         tori::{
             adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
             auth::SchibstedToriAuthenticationApi,
-            client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport, ToriClient},
+            client::{ClientConfig, DeviceIdentity, HttpClient, ToriClient},
             favorites::HttpFavoritesApi,
             interactive as tori_interactive,
             item::HttpPublicItemApi,
@@ -33,6 +33,7 @@ use crate::{
         },
     },
     storage::StatePaths,
+    transport::ReqwestTransport,
 };
 
 use super::outcome::{
