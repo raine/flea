@@ -41,11 +41,9 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
-    install_safe_panic_hook();
-    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    let cli = match cli::Cli::try_parse_from(args.iter().cloned()) {
+    let cli = match parse_cli(args) {
         Ok(cli) => cli,
-        Err(error) => return clap_presentation(error),
+        Err(result) => return result,
     };
     let command = cli.command.telemetry_name();
     let context = cli.command.context();
@@ -58,22 +56,7 @@ where
     };
     let dependencies = cli::runtime::ApplicationDependencies::production();
     session.run(&command, || {
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            finish(
-                cli.format,
-                execute_command(cli.command, &dependencies),
-                Some(session.context()),
-                context,
-            )
-        }))
-        .unwrap_or_else(|_| {
-            finish(
-                cli.format,
-                Err(AppError::unexpected("command failed unexpectedly")),
-                Some(session.context()),
-                context,
-            )
-        });
+        let result = run_command(cli, &dependencies, Some(session.context()));
         let exit_code = result.exit_code;
         (result, exit_code)
     })
@@ -87,26 +70,43 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
+    let cli = match parse_cli(args) {
+        Ok(cli) => cli,
+        Err(result) => return result,
+    };
+    run_command(cli, dependencies, None)
+}
+
+fn parse_cli<I, T>(args: I) -> Result<cli::Cli, RunResult>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString>,
+{
     install_safe_panic_hook();
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    let cli = match cli::Cli::try_parse_from(args) {
-        Ok(cli) => cli,
-        Err(error) => return clap_presentation(error),
-    };
+    cli::Cli::try_parse_from(args).map_err(clap_presentation)
+}
+
+fn run_command(
+    cli: cli::Cli,
+    dependencies: &cli::runtime::ApplicationDependencies,
+    diagnostics: Option<&DiagnosticsContext>,
+) -> RunResult {
+    let format = cli.format;
     let context = cli.command.context();
     catch_unwind(AssertUnwindSafe(|| {
         finish(
-            cli.format,
+            format,
             execute_command(cli.command, dependencies),
-            None,
+            diagnostics,
             context,
         )
     }))
     .unwrap_or_else(|_| {
         finish(
-            cli.format,
+            format,
             Err(AppError::unexpected("command failed unexpectedly")),
-            None,
+            diagnostics,
             context,
         )
     })
