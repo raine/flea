@@ -10,6 +10,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
+    domain::envelope::NextAction,
     error::{AppError, ExitClass},
     image_processing,
     marketplace::{
@@ -148,11 +149,18 @@ impl<'a> VintedPublication<'a> {
         input: Option<ListingInput>,
         image_paths: Vec<PathBuf>,
     ) -> Result<PublicationResult, AppError> {
-        validate_operation(&operation, input.as_ref(), &image_paths)?;
-        let credentials = self.session.credentials(portal)?;
+        validate_operation(&operation, input.as_ref(), &image_paths).map_err(|error| {
+            publication_error(error, &operation, &[], MutationStatus::NotAttempted)
+        })?;
+        let credentials = self.session.credentials(portal).map_err(|error| {
+            publication_error(error, &operation, &[], MutationStatus::NotAttempted)
+        })?;
 
         if matches!(operation, PublicationOperation::DeleteDraft { .. }) {
-            self.api.mutate(&credentials, &operation, None).await?;
+            self.api
+                .mutate(&credentials, &operation, None)
+                .await
+                .map_err(|error| classify_mutation_error(error, &operation, &[]))?;
             return Ok(PublicationResult {
                 operation: "delete_draft",
                 draft_id: draft_id(&operation).map(ToOwned::to_owned),
@@ -164,23 +172,26 @@ impl<'a> VintedPublication<'a> {
 
         let mut photos = Vec::with_capacity(image_paths.len());
         for path in image_paths {
-            let prepared = prepare_image(path).await?;
-            photos.push(self.api.upload_photo(&credentials, prepared).await?);
+            let prepared = prepare_image(path).await.map_err(|error| {
+                publication_error(error, &operation, &photos, MutationStatus::NotAttempted)
+            })?;
+            photos.push(
+                self.api
+                    .upload_photo(&credentials, prepared)
+                    .await
+                    .map_err(|error| {
+                        publication_error(error, &operation, &photos, MutationStatus::NotAttempted)
+                    })?,
+            );
         }
         let input = input.expect("validated publication input");
         let upload_session_id = Uuid::new_v4().to_string();
         let body = publication_body(&operation, input, &photos, &upload_session_id);
-        let response = match self.api.mutate(&credentials, &operation, Some(body)).await {
-            Ok(response) => response,
-            Err(mut error) => {
-                error.safe_to_retry = false;
-                error.partial = Some(Box::new(json!({
-                    "uploaded_photos": photos,
-                    "mutation_status": "unknown"
-                })));
-                return Err(error);
-            }
-        };
+        let response = self
+            .api
+            .mutate(&credentials, &operation, Some(body))
+            .await
+            .map_err(|error| classify_mutation_error(error, &operation, &photos))?;
         normalize_result(&operation, photos.len(), &response)
     }
 }
@@ -274,7 +285,7 @@ impl HttpVintedPublicationApi {
             .executor()
             .execute(request)
             .await
-            .map_err(execution_error)?;
+            .map_err(mutation_execution_error)?;
         decode_mutation_response(response)
     }
 }
@@ -542,7 +553,14 @@ fn decode_photo_response(response: TransportResponse) -> Result<UploadedPhoto, A
 
 fn decode_mutation_response(response: TransportResponse) -> Result<Value, AppError> {
     let status = response.status;
-    let value = bounded_json(response)?;
+    let value = serde_json::from_slice(&response.body).map_err(|error| {
+        invalid_response("publication")
+            .with_details(json!({
+                "mutation_response": "malformed",
+                "http_status": status.as_u16()
+            }))
+            .with_source(error)
+    })?;
     if status.is_success() {
         Ok(value)
     } else {
@@ -613,30 +631,160 @@ fn value_as_id(value: &Value) -> Option<String> {
 }
 
 fn upstream_error(status: StatusCode, value: &Value, stage: &str) -> AppError {
-    let code = value.get("code").and_then(Value::as_i64);
+    let response_code = value.get("code").cloned().unwrap_or(Value::Null);
     let message_code = value.get("message_code").and_then(Value::as_str);
     let message = value
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or("Vinted rejected the request");
-    let exit_class = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-        ExitClass::Authentication
+    let gate = message_code.unwrap_or_default().to_ascii_lowercase();
+    let (error_code, exit_class) = if gate.contains("verification") || gate.contains("verify") {
+        (
+            "vinted.publication_verification_required",
+            ExitClass::Validation,
+        )
+    } else if gate.contains("confirmation") || gate.contains("confirm") {
+        (
+            "vinted.publication_confirmation_required",
+            ExitClass::Validation,
+        )
+    } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        (
+            "vinted.publication_authentication_required",
+            ExitClass::Authentication,
+        )
     } else if status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY {
-        ExitClass::Validation
+        (
+            "vinted.publication_validation_failed",
+            ExitClass::Validation,
+        )
     } else {
-        ExitClass::Upstream
+        ("vinted.publication_failed", ExitClass::Upstream)
     };
     let mut error = AppError::new(
-        format!("vinted.{}_failed", stage.replace(' ', "_")),
+        if stage == "publication" {
+            error_code.to_owned()
+        } else {
+            format!("vinted.{}_failed", stage.replace(' ', "_"))
+        },
         message,
         exit_class,
     );
-    error.details = Some(Box::new(
-        json!({ "http_status": status.as_u16(), "response_code": code, "message_code": message_code, "errors": value.get("errors") }),
-    ));
+    error.details = Some(Box::new(json!({
+        "http_status": status.as_u16(),
+        "response_code": response_code,
+        "message_code": message_code,
+        "field_errors": value
+            .get("errors")
+            .or_else(|| value.get("field_errors"))
+            .cloned()
+            .unwrap_or(Value::Null)
+    })));
+    if stage == "publication"
+        && (error.exit_class == ExitClass::Authentication
+            || error.code == "vinted.publication_verification_required")
+    {
+        error.next_actions.push(NextAction {
+            command: crate::invocation::vinted_fi("auth login"),
+        });
+    }
     error.safe_to_retry = stage == "image upload" && status.is_server_error();
     error.upstream_transient = status.is_server_error();
     error
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum MutationStatus {
+    NotAttempted,
+    ConfirmedRejected,
+    Unknown,
+}
+
+fn classify_mutation_error(
+    error: AppError,
+    operation: &PublicationOperation,
+    photos: &[UploadedPhoto],
+) -> AppError {
+    let status = error
+        .details
+        .as_deref()
+        .and_then(|details| details.get("http_status"))
+        .and_then(Value::as_u64);
+    let malformed = error
+        .details
+        .as_deref()
+        .and_then(|details| details.get("mutation_response"))
+        .is_some();
+    let phase = error
+        .details
+        .as_deref()
+        .and_then(|details| details.get("transport_phase"))
+        .and_then(Value::as_str);
+    let kind = error
+        .details
+        .as_deref()
+        .and_then(|details| details.get("transport_kind"))
+        .and_then(Value::as_str);
+    let mutation_status = if status.is_some_and(|status| (400..500).contains(&status)) && !malformed
+    {
+        MutationStatus::ConfirmedRejected
+    } else if phase == Some("request") && kind == Some("connection") {
+        MutationStatus::NotAttempted
+    } else {
+        MutationStatus::Unknown
+    };
+    publication_error(error, operation, photos, mutation_status)
+}
+
+fn publication_error(
+    mut error: AppError,
+    operation: &PublicationOperation,
+    photos: &[UploadedPhoto],
+    mutation_status: MutationStatus,
+) -> AppError {
+    let assignments_reusable = !photos.is_empty();
+    error.safe_to_retry = matches!(
+        mutation_status,
+        MutationStatus::NotAttempted | MutationStatus::ConfirmedRejected
+    ) && (photos.is_empty() || assignments_reusable);
+    let (resource, state_explanation) = mutation_state(operation, mutation_status);
+    error.partial = Some(Box::new(json!({
+        "uploaded_photos": photos,
+        "uploaded_photo_assignments_reusable": assignments_reusable,
+        "mutation_status": mutation_status,
+        "remote_state": {
+            "resource": resource,
+            "may_have_changed": mutation_status == MutationStatus::Unknown,
+            "explanation": state_explanation
+        }
+    })));
+    error
+}
+
+fn mutation_state(
+    operation: &PublicationOperation,
+    status: MutationStatus,
+) -> (&'static str, &'static str) {
+    let resource = match operation {
+        PublicationOperation::CreateDraft
+        | PublicationOperation::UpdateDraft { .. }
+        | PublicationOperation::DeleteDraft { .. } => "draft",
+        PublicationOperation::Publish => "listing",
+        PublicationOperation::CompleteDraft { .. } => "draft_or_listing",
+    };
+    let explanation = match status {
+        MutationStatus::NotAttempted => {
+            "The publication mutation was not attempted, so the draft or listing did not change through this operation."
+        }
+        MutationStatus::ConfirmedRejected => {
+            "Vinted confirmed that it rejected the publication mutation, so the draft or listing did not change through this operation."
+        }
+        MutationStatus::Unknown => {
+            "The publication mutation outcome is unknown, so the draft or listing state may have changed. Inspect remote state before retrying."
+        }
+    };
+    (resource, explanation)
 }
 
 fn invalid_response(stage: &str) -> AppError {
@@ -658,11 +806,38 @@ fn insert_header(
 }
 
 fn transport_error(error: TransportError) -> AppError {
-    let mut app_error =
-        AppError::upstream("vinted.transport_failed", "Vinted request failed").with_source(error);
+    let phase = match error.phase {
+        crate::transport::TransportErrorPhase::Request => "request",
+        crate::transport::TransportErrorPhase::Response => "response",
+    };
+    let kind = match error.kind {
+        TransportErrorKind::Timeout => "timeout",
+        TransportErrorKind::Connection => "connection",
+        TransportErrorKind::ResponseTooLarge => "response_too_large",
+        TransportErrorKind::Other => "other",
+    };
+    let mut app_error = AppError::upstream("vinted.transport_failed", "Vinted request failed")
+        .with_details(json!({ "transport_phase": phase, "transport_kind": kind }))
+        .with_source(error);
     app_error.upstream_transient = true;
     app_error.safe_to_retry = false;
     app_error
+}
+
+fn mutation_execution_error(error: TransportError) -> AppError {
+    if error.kind == TransportErrorKind::ResponseTooLarge {
+        let status = error.status.map(|status| status.as_u16());
+        invalid_response("publication")
+            .with_details(json!({
+                "mutation_response": "malformed",
+                "http_status": status,
+                "transport_phase": "response",
+                "transport_kind": "response_too_large"
+            }))
+            .with_source(error)
+    } else {
+        transport_error(error)
+    }
 }
 
 fn execution_error(error: TransportError) -> AppError {
@@ -767,6 +942,221 @@ mod tests {
                 draft_id: "8".to_owned()
             }),
             (Method::POST, "item_upload/drafts/8/completion".to_owned())
+        );
+    }
+
+    fn response(status: StatusCode, body: Value) -> TransportResponse {
+        TransportResponse {
+            status,
+            headers: reqwest::header::HeaderMap::new(),
+            body: serde_json::to_vec(&body).unwrap(),
+        }
+    }
+
+    fn classify(error: AppError) -> AppError {
+        classify_mutation_error(error, &PublicationOperation::Publish, &[])
+    }
+
+    #[test]
+    fn validation_response_is_a_confirmed_rejection_with_upstream_fields() {
+        let value = json!({
+            "code": 100,
+            "message_code": "validation_error",
+            "message": "Tarkista kentät",
+            "errors": {
+                "brand": ["Merkki ei voi olla tyhjä"],
+                "color_ids": ["Väri ei voi olla tyhjä"]
+            }
+        });
+        let error = classify(
+            decode_mutation_response(response(StatusCode::BAD_REQUEST, value)).unwrap_err(),
+        );
+
+        assert_eq!(error.code, "vinted.publication_validation_failed");
+        assert_eq!(error.exit_class, ExitClass::Validation);
+        assert!(error.safe_to_retry);
+        let details = error.details.unwrap();
+        assert_eq!(details["http_status"], 400);
+        assert_eq!(details["response_code"], 100);
+        assert_eq!(details["message_code"], "validation_error");
+        assert_eq!(
+            details["field_errors"]["brand"][0],
+            "Merkki ei voi olla tyhjä"
+        );
+        let partial = error.partial.unwrap();
+        assert_eq!(partial["mutation_status"], "confirmed_rejected");
+        assert_eq!(partial["remote_state"]["may_have_changed"], false);
+    }
+
+    #[test]
+    fn authentication_response_is_a_confirmed_rejection_with_login_action() {
+        let error = classify(
+            decode_mutation_response(response(
+                StatusCode::UNAUTHORIZED,
+                json!({"message": "Kirjaudu sisään"}),
+            ))
+            .unwrap_err(),
+        );
+
+        assert_eq!(error.code, "vinted.publication_authentication_required");
+        assert_eq!(error.exit_class, ExitClass::Authentication);
+        assert_eq!(
+            error.partial.unwrap()["mutation_status"],
+            "confirmed_rejected"
+        );
+        assert_eq!(
+            error.next_actions[0].command,
+            crate::invocation::vinted_fi("auth login")
+        );
+    }
+
+    #[test]
+    fn verification_gate_has_a_dedicated_error_and_action() {
+        let error = classify(
+            decode_mutation_response(response(
+                StatusCode::FORBIDDEN,
+                json!({
+                    "code": 55,
+                    "message_code": "phone_verification_required",
+                    "message": "Vahvista puhelinnumerosi"
+                }),
+            ))
+            .unwrap_err(),
+        );
+
+        assert_eq!(error.code, "vinted.publication_verification_required");
+        assert_eq!(
+            error.partial.unwrap()["mutation_status"],
+            "confirmed_rejected"
+        );
+    }
+
+    #[test]
+    fn verification_gate_on_validation_status_has_a_dedicated_error() {
+        let error = classify(
+            decode_mutation_response(response(
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "message_code": "phone_verification_required",
+                    "message": "Vahvista puhelinnumerosi"
+                }),
+            ))
+            .unwrap_err(),
+        );
+
+        assert_eq!(error.code, "vinted.publication_verification_required");
+        assert_eq!(
+            error.next_actions[0].command,
+            crate::invocation::vinted_fi("auth login")
+        );
+    }
+
+    #[test]
+    fn confirmation_gate_has_a_dedicated_error() {
+        let error = classify(
+            decode_mutation_response(response(
+                StatusCode::BAD_REQUEST,
+                json!({
+                    "message_code": "email_confirmation_required",
+                    "message": "Vahvista sähköpostiosoitteesi"
+                }),
+            ))
+            .unwrap_err(),
+        );
+
+        assert_eq!(error.code, "vinted.publication_confirmation_required");
+        assert_eq!(
+            error.partial.unwrap()["mutation_status"],
+            "confirmed_rejected"
+        );
+    }
+
+    #[test]
+    fn timeout_after_mutation_start_has_an_unknown_outcome() {
+        let error = classify(transport_error(TransportError::request(
+            TransportErrorKind::Timeout,
+        )));
+
+        assert_eq!(error.partial.unwrap()["mutation_status"], "unknown");
+        assert!(!error.safe_to_retry);
+    }
+
+    #[test]
+    fn connection_failure_before_send_is_not_attempted() {
+        let error = classify(transport_error(TransportError::request(
+            TransportErrorKind::Connection,
+        )));
+
+        assert_eq!(error.partial.unwrap()["mutation_status"], "not_attempted");
+        assert!(error.safe_to_retry);
+    }
+
+    #[test]
+    fn response_transport_failure_has_an_unknown_outcome() {
+        let error = classify(mutation_execution_error(TransportError::response(
+            TransportErrorKind::ResponseTooLarge,
+            StatusCode::OK,
+        )));
+
+        assert_eq!(error.partial.unwrap()["mutation_status"], "unknown");
+        assert!(!error.safe_to_retry);
+    }
+
+    #[test]
+    fn malformed_response_has_an_unknown_outcome() {
+        let error = classify(
+            decode_mutation_response(TransportResponse {
+                status: StatusCode::OK,
+                headers: reqwest::header::HeaderMap::new(),
+                body: b"not json".to_vec(),
+            })
+            .unwrap_err(),
+        );
+
+        assert_eq!(error.code, "vinted.invalid_response");
+        assert_eq!(error.partial.unwrap()["mutation_status"], "unknown");
+        assert!(!error.safe_to_retry);
+    }
+
+    #[test]
+    fn successful_response_is_returned_for_normalization() {
+        let value = json!({"item": {"id": 42}});
+        assert_eq!(
+            decode_mutation_response(response(StatusCode::OK, value.clone())).unwrap(),
+            value
+        );
+    }
+
+    #[test]
+    fn safe_retry_requires_a_known_mutation_outcome_even_with_reusable_photos() {
+        let photo = UploadedPhoto {
+            id: 9,
+            orientation: 0,
+            width: 100,
+            height: 200,
+        };
+        let rejected = publication_error(
+            AppError::validation("rejected", "rejected"),
+            &PublicationOperation::Publish,
+            std::slice::from_ref(&photo),
+            MutationStatus::ConfirmedRejected,
+        );
+        let unknown = publication_error(
+            AppError::upstream("unknown", "unknown"),
+            &PublicationOperation::Publish,
+            &[photo],
+            MutationStatus::Unknown,
+        );
+
+        assert!(rejected.safe_to_retry);
+        assert_eq!(
+            rejected.partial.unwrap()["uploaded_photo_assignments_reusable"],
+            true
+        );
+        assert!(!unknown.safe_to_retry);
+        assert_eq!(
+            unknown.partial.unwrap()["uploaded_photo_assignments_reusable"],
+            true
         );
     }
 
