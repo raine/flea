@@ -42,6 +42,8 @@ Use runtime portal values for category, attributes, currency, price, and package
 Never guess product facts. Pass complete JSON and every image in display order:
 
 ```sh
+flea vinted category list
+flea vinted category attributes --input selections.json
 flea vinted draft create --input listing.json --image front.heic
 flea vinted draft publish DRAFT_ID --input listing.json --image front.jpg
 flea vinted draft delete DRAFT_ID

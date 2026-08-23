@@ -124,6 +124,9 @@ endpoint. Category IDs, dynamic attributes, currency, price bounds, and package
 IDs are runtime portal values.
 
 ```sh
+flea vinted category list
+flea vinted category attributes --input selections.json
+flea vinted category package-sizes CATEGORY_ID
 flea vinted draft create --input listing.json --image front.heic
 flea vinted draft update DRAFT_ID --input listing.json --image front.jpg
 flea vinted draft publish DRAFT_ID --input listing.json --image front.jpg

@@ -2,6 +2,7 @@ pub(crate) mod auth;
 pub(crate) mod binding;
 pub(crate) mod interactive;
 pub(crate) mod publication;
+pub(crate) mod publication_discovery;
 pub(crate) mod search;
 pub(crate) mod session;
 
@@ -20,7 +21,7 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor::source_derived(CapabilityId::Search, AuthRequirement::Required),
     CapabilityDescriptor::unavailable(CapabilityId::ItemShow),
     CapabilityDescriptor::unavailable(CapabilityId::LocationSearch),
-    CapabilityDescriptor::unavailable(CapabilityId::Category),
+    CapabilityDescriptor::source_derived(CapabilityId::Category, AuthRequirement::Required),
     CapabilityDescriptor::unavailable(CapabilityId::Favorite),
     CapabilityDescriptor::unavailable(CapabilityId::SavedSearch),
     CapabilityDescriptor::source_derived(CapabilityId::Draft, AuthRequirement::Required),
@@ -58,6 +59,7 @@ mod tests {
         for id in [
             CapabilityId::AuthRefresh,
             CapabilityId::Search,
+            CapabilityId::Category,
             CapabilityId::Draft,
         ] {
             assert_eq!(
