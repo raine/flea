@@ -113,7 +113,11 @@ const VINTED_CAPABILITIES: &[CapabilityDescriptor] = &[
         auth: AuthRequirement::Internal,
         maturity: CapabilityMaturity::SourceDerived,
     },
-    unavailable("search"),
+    CapabilityDescriptor {
+        name: "search",
+        auth: AuthRequirement::Required,
+        maturity: CapabilityMaturity::SourceDerived,
+    },
     unavailable("item.show"),
     unavailable("location.search"),
     unavailable("category"),
@@ -167,6 +171,7 @@ pub fn marketplace(id: MarketplaceId) -> &'static MarketplaceDescriptor {
 pub struct VintedPortalBinding {
     pub context: MarketplaceContext,
     pub host: &'static str,
+    pub api_host: &'static str,
     pub locale: &'static str,
     pub iso_locale: &'static str,
     pub client_profile: &'static str,
@@ -179,6 +184,7 @@ pub struct VintedPortalBinding {
 pub const VINTED_FI_BINDING: VintedPortalBinding = VintedPortalBinding {
     context: MarketplaceContext::VINTED_FI,
     host: "https://www.vinted.fi",
+    api_host: "https://api.vinted.com",
     locale: "fi",
     iso_locale: "fi-FI",
     client_profile: "android-fr",
@@ -193,7 +199,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capability_matrix_exposes_only_validated_vinted_auth_operations() {
+    fn capability_matrix_exposes_source_derived_vinted_operations() {
         let vinted = marketplace(MarketplaceId::Vinted);
 
         for name in ["auth.login", "auth.status", "auth.logout"] {
@@ -223,13 +229,14 @@ mod tests {
                 .find(|capability| capability.name == "search")
                 .unwrap()
                 .maturity,
-            CapabilityMaturity::Unavailable
+            CapabilityMaturity::SourceDerived
         );
     }
 
     #[test]
     fn validated_vinted_binding_keeps_host_and_client_profile_distinct() {
         assert_eq!(VINTED_FI_BINDING.host, "https://www.vinted.fi");
+        assert_eq!(VINTED_FI_BINDING.api_host, "https://api.vinted.com");
         assert_eq!(VINTED_FI_BINDING.client_profile, "android-fr");
         assert_eq!(VINTED_FI_BINDING.portal_header, "fr");
         assert_eq!(VINTED_FI_BINDING.callback_scheme, "vintedfr");

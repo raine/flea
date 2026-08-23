@@ -28,7 +28,9 @@ fn capability_discovery_is_offline_and_marketplace_scoped() {
         capability["name"] == "auth.login" && capability["maturity"] == "validated"
     }));
     assert!(capabilities.iter().any(|capability| {
-        capability["name"] == "search" && capability["maturity"] == "unavailable"
+        capability["name"] == "search"
+            && capability["auth"] == "required"
+            && capability["maturity"] == "source_derived"
     }));
 }
 
@@ -43,14 +45,14 @@ fn unsupported_commands_return_structured_marketplace_errors() {
         "flea marketplaces"
     );
 
-    let (exit_code, unavailable) = run_json(&["vinted", "search", "chair"]);
+    let (exit_code, unavailable) = run_json(&["vinted", "item", "show", "123"]);
     assert_eq!(exit_code, 2);
     assert_eq!(unavailable["context"]["marketplace"], "vinted");
     assert_eq!(
         unavailable["error"]["code"],
         "marketplace.capability_unavailable"
     );
-    assert_eq!(unavailable["error"]["details"]["command"], "search");
+    assert_eq!(unavailable["error"]["details"]["command"], "item");
     assert_eq!(
         unavailable["next_actions"][0]["command"],
         "flea vinted --portal fi capabilities"

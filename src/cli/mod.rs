@@ -12,6 +12,7 @@ pub mod runtime;
 pub mod saved_search;
 pub mod search;
 pub mod skill;
+pub mod vinted_search;
 
 use std::ffi::OsString;
 
@@ -164,6 +165,11 @@ pub enum VintedCommand {
         long_about = "Show Vinted operations, authentication requirements, and implementation maturity without making a network request."
     )]
     Capabilities,
+    #[command(
+        about = "Search Vinted listings (authentication required)",
+        long_about = "Search Vinted listings by text, price, ordering, and page. Authentication is required. Run `flea vinted auth login` first."
+    )]
+    Search(vinted_search::VintedSearchArgs),
     #[command(external_subcommand)]
     Unsupported(Vec<OsString>),
 }

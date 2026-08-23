@@ -258,6 +258,34 @@ impl VintedAuthentication {
         .await
     }
 
+    pub(crate) fn authenticated_request(
+        &self,
+        method: Method,
+        url: String,
+        credentials: &VintedCredentialRecord,
+    ) -> Result<reqwest::RequestBuilder, AppError> {
+        let mut request = self
+            .native_request(
+                method,
+                url,
+                &credentials.device_uuid,
+                &credentials.anonymous_id,
+            )?
+            .bearer_auth(&credentials.access_token)
+            .header(
+                "X-V-Udt",
+                credentials.user_device_token.as_deref().unwrap_or(""),
+            );
+        let jwt = jwt_request_context(&credentials.access_token);
+        if let Some(user_id) = jwt.user_id {
+            request = request.header("X-V-Uid", user_id.expose());
+        }
+        if let Some(session_id) = jwt.session_id {
+            request = request.header("X-V-Sid", session_id.expose());
+        }
+        Ok(request)
+    }
+
     pub async fn validate_credentials(
         &self,
         credentials: &VintedCredentialRecord,
