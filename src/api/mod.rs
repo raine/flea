@@ -1,4 +1,3 @@
-pub mod adinput;
 pub mod auth;
 pub mod client;
 pub mod favorites;

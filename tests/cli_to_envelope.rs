@@ -8,7 +8,6 @@ use std::{
 use flea::{
     Presentation,
     api::{
-        adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
         auth::{
             AuthCredentials, AuthenticatedAccount, AuthenticationApi, OAuthFlow, SchibstedTokens,
             SecretString, ToriSession,
@@ -26,6 +25,7 @@ use flea::{
         category, draft, favorite, item, listing, location, saved_search, search,
     },
     error::AppError,
+    marketplace::tori::adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
     run_with_runtime,
 };
 use reqwest::{StatusCode, header::HeaderMap};

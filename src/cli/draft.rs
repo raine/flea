@@ -13,15 +13,7 @@ use serde::{
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::{
-        adinput::{
-            AdInputApi, CategoryPrediction, CategoryValidation, DeliveryOption, DraftDelivery,
-            DraftImage, DraftState, DraftWorkflow, FieldOption, PublicationRequirement,
-            PublicationValidation, ValidationEvidenceFailure, WorkflowConfig, WorkflowError,
-            completed_steps_have_mutation,
-        },
-        listings::ListingsApi,
-    },
+    api::listings::ListingsApi,
     cli::draft_input,
     domain::{
         envelope::NextAction,
@@ -29,6 +21,12 @@ use crate::{
         observation::Observation,
     },
     error::{AppError, ExitClass},
+    marketplace::tori::adinput::{
+        AdInputApi, CategoryPrediction, CategoryValidation, DeliveryOption, DraftDelivery,
+        DraftImage, DraftState, DraftWorkflow, FieldOption, PublicationRequirement,
+        PublicationValidation, ValidationEvidenceFailure, WorkflowConfig, WorkflowError,
+        completed_steps_have_mutation,
+    },
 };
 
 #[derive(Debug, Args)]

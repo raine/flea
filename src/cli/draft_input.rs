@@ -3,11 +3,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::{
-        adinput::{PreparedImage, normalize_category, prepare_image},
-        listings::{ListingsApi, ListingsApiError, UpstreamCategory},
-    },
+    api::listings::{ListingsApi, ListingsApiError, UpstreamCategory},
     error::{AppError, ExitClass},
+    marketplace::tori::adinput::{PreparedImage, normalize_category, prepare_image},
 };
 
 use super::draft::CollectedInput;

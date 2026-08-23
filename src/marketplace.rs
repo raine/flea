@@ -1,3 +1,4 @@
+pub mod tori;
 pub(crate) mod vinted;
 
 use std::fmt;

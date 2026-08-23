@@ -5,7 +5,6 @@ use serde_json::Value;
 
 use crate::{
     api::{
-        adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
         auth::{GatewaySigner, RefreshRequest, SchibstedToriAuthenticationApi},
         client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
         favorites::HttpFavoritesApi,
@@ -21,7 +20,10 @@ use crate::{
     },
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
-    marketplace::{MarketplaceContext, MarketplaceId, marketplace, marketplaces},
+    marketplace::{
+        MarketplaceContext, MarketplaceId, marketplace, marketplaces,
+        tori::adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
+    },
     storage::{
         StatePaths,
         credentials::{CredentialRecord, CredentialStore, CredentialStoreError},

@@ -5,22 +5,23 @@ use std::{
 };
 
 use flea::{
-    api::adinput::{
+    domain::{
+        field::{FieldStatus, FieldType, Requirement},
+        observation::ObservationState,
+    },
+    marketplace::tori::adinput::{
         AdInputApi, AttachmentRecoveryStatus, DraftWorkflow, HttpAdInputApi, HttpRequest,
         HttpResponse, HttpTransport, ImageRecoveryOperation, ImageState, Method, ObservationStatus,
         ProcessingRecoveryStatus, RecoveryStatus, RequestBody, RetryPolicy, UploadRecoveryStatus,
         WorkflowConfig,
-    },
-    domain::{
-        field::{FieldStatus, FieldType, Requirement},
-        observation::ObservationState,
     },
 };
 use serde_json::{Map, Value, json};
 
 #[derive(Clone)]
 struct FixtureTransport {
-    responses: Arc<Mutex<VecDeque<Result<HttpResponse, flea::api::adinput::ApiError>>>>,
+    responses:
+        Arc<Mutex<VecDeque<Result<HttpResponse, flea::marketplace::tori::adinput::ApiError>>>>,
     search_responses: Arc<Mutex<VecDeque<HttpResponse>>>,
     requests: Arc<Mutex<Vec<HttpRequest>>>,
 }
@@ -48,7 +49,7 @@ impl HttpTransport for FixtureTransport {
     async fn execute(
         &self,
         request: HttpRequest,
-    ) -> Result<HttpResponse, flea::api::adinput::ApiError> {
+    ) -> Result<HttpResponse, flea::marketplace::tori::adinput::ApiError> {
         let is_search = request.path.starts_with("/search?");
         self.requests.lock().unwrap().push(request);
         if is_search {
@@ -143,7 +144,7 @@ impl HttpTransport for HangingPollTransport {
     async fn execute(
         &self,
         request: HttpRequest,
-    ) -> Result<HttpResponse, flea::api::adinput::ApiError> {
+    ) -> Result<HttpResponse, flea::marketplace::tori::adinput::ApiError> {
         if request.path.starts_with("/search?") {
             return Ok(response(200, json!({ "summaries": [], "total": 0 })));
         }
