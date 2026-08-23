@@ -2,13 +2,13 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 
 use crate::{
-    api::listings::{
-        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions, Listings,
-        ListingsApi,
-    },
     cli::outcome::CommandOutcome,
     domain::envelope::NextAction,
     error::AppError,
+    marketplace::tori::listings::{
+        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions, Listings,
+        ListingsApi,
+    },
 };
 
 #[derive(Debug, Args)]

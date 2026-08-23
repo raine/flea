@@ -13,7 +13,6 @@ use serde::{
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::listings::ListingsApi,
     cli::{draft_input, outcome::CommandOutcome},
     domain::{
         envelope::{NextAction, Warning},
@@ -27,6 +26,7 @@ use crate::{
         PublicationValidation, ValidationEvidenceFailure, WorkflowConfig, WorkflowError,
         WorkflowWarning, completed_steps_have_mutation,
     },
+    marketplace::tori::listings::ListingsApi,
 };
 
 #[derive(Debug, Args)]

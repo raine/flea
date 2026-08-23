@@ -10,13 +10,13 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
-    api::listings::{Listings, ListingsApi},
     cli::{
         draft::{ListingInputArgs, TradeType, parse_price},
         outcome::CommandOutcome,
     },
     domain::observation::Observation,
     error::AppError,
+    marketplace::tori::listings::{Listings, ListingsApi},
 };
 
 #[derive(Debug, Args)]

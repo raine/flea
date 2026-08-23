@@ -3,10 +3,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::{
-    api::{
-        favorites::HttpFavoritesApi, listings::HttpListingsApi,
-        saved_searches::HttpSavedSearchesApi,
-    },
+    api::{favorites::HttpFavoritesApi, saved_searches::HttpSavedSearchesApi},
     cli::{
         Command, CommandFuture, CommandRuntime, ToriCommand, VintedCommand,
         auth::{AuthCommandHandler, FileAuthStore, unix_time_now},
@@ -21,6 +18,7 @@ use crate::{
             auth::SchibstedToriAuthenticationApi,
             client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
             item::HttpPublicItemApi,
+            listings::HttpListingsApi,
             search::HttpPublicSearchApi,
             session as tori_session,
         },

@@ -11,7 +11,10 @@ pub mod favorites;
 pub mod item {
     pub use crate::marketplace::tori::item::*;
 }
-pub mod listings;
+/// Compatibility path for Tori listing capabilities.
+pub mod listings {
+    pub use crate::marketplace::tori::listings::*;
+}
 pub mod saved_searches;
 /// Compatibility path for Tori search capabilities.
 pub mod search {

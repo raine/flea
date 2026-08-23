@@ -7,16 +7,16 @@ use std::{
 
 use clap::Parser;
 use flea::{
-    api::listings::{
-        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions,
-        LISTING_PAGE_SIZE, Listings, ListingsApi, ListingsApiError, UpstreamCategory,
-        UpstreamListing, UpstreamListingPage,
-    },
     cli::{
         Cli, Command,
         listing::{ListingCommand, listing_changes},
     },
     domain::listing::{ListingActionName, ListingState},
+    marketplace::tori::listings::{
+        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions,
+        LISTING_PAGE_SIZE, Listings, ListingsApi, ListingsApiError, UpstreamCategory,
+        UpstreamListing, UpstreamListingPage,
+    },
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -162,10 +162,11 @@ async fn discovers_category_roots_children_and_search_paths() {
 
 #[tokio::test]
 async fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
-    let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
-        include_str!("fixtures/listings/category-taxonomy-live.json"),
-    )
-    .unwrap();
+    let taxonomy: flea::marketplace::tori::listings::UpstreamCategoryTaxonomy =
+        serde_json::from_str(include_str!(
+            "fixtures/listings/category-taxonomy-live.json"
+        ))
+        .unwrap();
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(taxonomy.categories);
     let listings = Listings::new(&api);
@@ -209,10 +210,11 @@ async fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
 
 #[tokio::test]
 async fn category_search_bounds_broad_results_and_reports_pagination() {
-    let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
-        include_str!("fixtures/listings/category-taxonomy-live.json"),
-    )
-    .unwrap();
+    let taxonomy: flea::marketplace::tori::listings::UpstreamCategoryTaxonomy =
+        serde_json::from_str(include_str!(
+            "fixtures/listings/category-taxonomy-live.json"
+        ))
+        .unwrap();
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(taxonomy.categories);
     let listings = Listings::new(&api);
@@ -244,10 +246,11 @@ async fn category_search_bounds_broad_results_and_reports_pagination() {
 
 #[tokio::test]
 async fn category_search_resolves_ids_labels_and_finnish_unicode_deterministically() {
-    let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
-        include_str!("fixtures/listings/category-taxonomy-live.json"),
-    )
-    .unwrap();
+    let taxonomy: flea::marketplace::tori::listings::UpstreamCategoryTaxonomy =
+        serde_json::from_str(include_str!(
+            "fixtures/listings/category-taxonomy-live.json"
+        ))
+        .unwrap();
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(taxonomy.categories);
     let listings = Listings::new(&api);
@@ -277,10 +280,11 @@ async fn category_search_resolves_ids_labels_and_finnish_unicode_deterministical
 
 #[tokio::test]
 async fn category_search_filters_bicycle_accessories_by_parent_or_path() {
-    let taxonomy: flea::api::listings::UpstreamCategoryTaxonomy = serde_json::from_str(
-        include_str!("fixtures/listings/category-taxonomy-live.json"),
-    )
-    .unwrap();
+    let taxonomy: flea::marketplace::tori::listings::UpstreamCategoryTaxonomy =
+        serde_json::from_str(include_str!(
+            "fixtures/listings/category-taxonomy-live.json"
+        ))
+        .unwrap();
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(taxonomy.categories);
     let listings = Listings::new(&api);
