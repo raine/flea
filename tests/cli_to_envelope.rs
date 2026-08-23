@@ -69,7 +69,7 @@ struct TestRuntime {
 impl CommandRuntime for TestRuntime {
     fn execute(&self, command: Command) -> CommandFuture<'_> {
         Box::pin(async move {
-            match command {
+            let result = match command {
                 Command::Tori(args) => match args.command {
                     ToriCommand::Auth(args) => match args.command {
                         flea::cli::auth::AuthCommand::Login => {
@@ -140,7 +140,8 @@ impl CommandRuntime for TestRuntime {
                 | Command::Marketplaces
                 | Command::Vinted(_)
                 | Command::Unsupported(_) => unreachable!("command uses the production runtime"),
-            }
+            };
+            result.map(flea::cli::outcome::CommandOutcome::from_legacy_value)
         })
     }
 }

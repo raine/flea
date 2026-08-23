@@ -8,7 +8,7 @@ struct AuthLoginRuntime;
 
 impl CommandRuntime for AuthLoginRuntime {
     fn execute(&self, _command: flea::cli::Command) -> CommandFuture<'_> {
-        Box::pin(async { Ok(json!({ "authenticated": true, "user_id": "42" })) })
+        Box::pin(async { Ok(json!({ "authenticated": true, "user_id": "42" }).into()) })
     }
 }
 

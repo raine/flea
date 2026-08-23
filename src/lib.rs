@@ -18,7 +18,7 @@ use std::{
 
 use clap::{CommandFactory, Parser};
 use diagnostics::{DiagnosticsContext, DiagnosticsSession};
-use domain::envelope::{Envelope, Warning};
+use domain::envelope::Envelope;
 use error::{AppError, ExitClass};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -129,7 +129,7 @@ where
 fn execute_command(
     command: cli::Command,
     runtime: &dyn cli::CommandRuntime,
-) -> Result<serde_json::Value, AppError> {
+) -> Result<cli::outcome::CommandOutcome, AppError> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -172,17 +172,19 @@ fn plain_presentation(format: output::OutputFormat, command: &cli::Command) -> P
 
 fn finish(
     format: output::OutputFormat,
-    result: Result<serde_json::Value, AppError>,
+    result: Result<cli::outcome::CommandOutcome, AppError>,
     diagnostics: Option<&DiagnosticsContext>,
     plain_presentation: PlainPresentation,
     context: Option<marketplace::MarketplaceContext>,
 ) -> RunResult {
     let (envelope, exit_code) = match result {
-        Ok(mut data) => {
+        Ok(outcome) => {
             let plain_document = match plain_presentation {
                 PlainPresentation::Structured => None,
-                PlainPresentation::AuthLogin => Some(output::render_auth_login(&data, context)),
-                PlainPresentation::Skill => Some(output::render_skill(&data)),
+                PlainPresentation::AuthLogin => {
+                    Some(output::render_auth_login(&outcome.data, context))
+                }
+                PlainPresentation::Skill => Some(output::render_skill(&outcome.data)),
             };
             if let Some(document) = plain_document {
                 return match document {
@@ -200,45 +202,11 @@ fn finish(
                     ),
                 };
             }
-            let next_actions = data
-                .as_object_mut()
-                .and_then(|object| object.remove("_next_actions"))
-                .and_then(|value| serde_json::from_value(value).ok())
-                .unwrap_or_default();
-            let observation = data
-                .as_object_mut()
-                .and_then(|object| object.remove("_observation"))
-                .and_then(|value| serde_json::from_value(value).ok());
-            let mut envelope = Envelope::success(data);
+            let mut envelope = Envelope::success(outcome.data);
             envelope.context = context;
-            envelope.next_actions = next_actions;
-            envelope.observation = observation;
-            if let Some(warnings) = envelope
-                .data
-                .as_ref()
-                .and_then(|data| data.get("warnings"))
-                .and_then(serde_json::Value::as_array)
-            {
-                envelope.warnings = warnings
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(|message| Warning {
-                        code: if message.starts_with(
-                            "Tori returned an unrecognized successful mutation response",
-                        ) {
-                            "mutation.response_model_drift"
-                        } else if message
-                            .starts_with("Tori returned an ambiguous mutation response")
-                        {
-                            "mutation.observed_success"
-                        } else {
-                            "workflow.best_effort_failed"
-                        }
-                        .to_owned(),
-                        message: message.to_owned(),
-                    })
-                    .collect();
-            }
+            envelope.next_actions = outcome.next_actions;
+            envelope.observation = outcome.observation;
+            envelope.warnings = outcome.warnings;
             (envelope, ExitClass::Success.code())
         }
         Err(mut error) => {

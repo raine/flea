@@ -7,6 +7,7 @@ pub mod favorite;
 pub mod item;
 pub mod listing;
 pub mod location;
+pub mod outcome;
 pub mod runtime;
 pub mod saved_search;
 pub mod search;
@@ -16,7 +17,6 @@ pub mod vinted_search;
 use std::{ffi::OsString, future::Future, pin::Pin};
 
 use clap::{Args, Parser, Subcommand};
-use serde_json::Value;
 
 use crate::{
     error::AppError,
@@ -173,19 +173,20 @@ pub enum VintedCommand {
     Unsupported(Vec<OsString>),
 }
 
-pub type CommandFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, AppError>> + 'a>>;
+pub type CommandFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<outcome::CommandOutcome, AppError>> + 'a>>;
 
 pub trait CommandRuntime {
     fn execute(&self, command: Command) -> CommandFuture<'_>;
 }
 
-pub async fn dispatch(command: Command) -> Result<Value, AppError> {
+pub async fn dispatch(command: Command) -> Result<outcome::CommandOutcome, AppError> {
     runtime::ProductionRuntime.execute(command).await
 }
 
 pub async fn dispatch_with_runtime(
     command: Command,
     runtime: &dyn CommandRuntime,
-) -> Result<Value, AppError> {
+) -> Result<outcome::CommandOutcome, AppError> {
     runtime.execute(command).await
 }

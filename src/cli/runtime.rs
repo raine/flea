@@ -35,14 +35,15 @@ pub struct ProductionRuntime;
 impl CommandRuntime for ProductionRuntime {
     fn execute(&self, command: Command) -> CommandFuture<'_> {
         Box::pin(async move {
-            match command {
+            let result = match command {
                 Command::Capabilities => capabilities_output(),
                 Command::Marketplaces => marketplaces_output(),
                 Command::Tori(args) => execute_tori(args.command).await,
                 Command::Vinted(args) => execute_vinted(args.portal, args.command).await,
                 Command::Skill(args) => super::skill::dispatch(args),
                 Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
-            }
+            };
+            result.map(super::outcome::CommandOutcome::from_legacy_value)
         })
     }
 }

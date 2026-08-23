@@ -1,6 +1,10 @@
 use flea::{
     Presentation,
-    cli::{Command, CommandFuture, CommandRuntime},
+    cli::{Command, CommandFuture, CommandRuntime, outcome::CommandOutcome},
+    domain::{
+        envelope::{NextAction, Warning},
+        observation::Observation,
+    },
     run_with_runtime,
 };
 use serde_json::{Value, json};
@@ -10,20 +14,13 @@ struct MetadataRuntime;
 impl CommandRuntime for MetadataRuntime {
     fn execute(&self, _command: Command) -> CommandFuture<'_> {
         Box::pin(async {
-            Ok(json!({
-                "result": "kept",
-                "_next_actions": [{ "command": "flea marketplaces" }],
-                "_observation": {
-                    "state": "confirmed_present",
-                    "source": "fixture",
-                    "observed_at": "2026-01-02T03:04:05Z",
-                    "status_evidence": {
-                        "http_status": 200,
-                        "response_received": true,
-                        "model_parsed": true
-                    }
-                }
-            }))
+            let mut observation = Observation::confirmed_present("fixture", Some(200));
+            observation.observed_at = "2026-01-02T03:04:05Z".to_owned();
+            Ok(CommandOutcome::new(json!({ "result": "kept" }))
+                .with_next_actions(vec![NextAction {
+                    command: "flea marketplaces".to_owned(),
+                }])
+                .with_observation(observation))
         })
     }
 }
@@ -33,13 +30,32 @@ struct WarningRuntime;
 impl CommandRuntime for WarningRuntime {
     fn execute(&self, _command: Command) -> CommandFuture<'_> {
         Box::pin(async {
-            Ok(json!({
-                "warnings": [
+            let messages = [
+                (
+                    "mutation.response_model_drift",
                     "Tori returned an unrecognized successful mutation response: fixture",
+                ),
+                (
+                    "mutation.observed_success",
                     "Tori returned an ambiguous mutation response: fixture",
-                    "confirmation tracking failed: fixture"
-                ]
+                ),
+                (
+                    "workflow.best_effort_failed",
+                    "confirmation tracking failed: fixture",
+                ),
+            ];
+            Ok(CommandOutcome::new(json!({
+                "warnings": messages.map(|(_, message)| message)
             }))
+            .with_warnings(
+                messages
+                    .map(|(code, message)| Warning {
+                        code: code.to_owned(),
+                        message: message.to_owned(),
+                    })
+                    .into_iter()
+                    .collect(),
+            ))
         })
     }
 }
@@ -48,7 +64,7 @@ struct InvalidAuthRuntime;
 
 impl CommandRuntime for InvalidAuthRuntime {
     fn execute(&self, _command: Command) -> CommandFuture<'_> {
-        Box::pin(async { Ok(json!({ "authenticated": false })) })
+        Box::pin(async { Ok(json!({ "authenticated": false }).into()) })
     }
 }
 
