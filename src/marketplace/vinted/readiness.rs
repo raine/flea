@@ -2,11 +2,11 @@ use std::{future::Future, pin::Pin};
 
 use reqwest::{Method, StatusCode};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use url::Url;
 
 use crate::{
-    error::{AppError, ExitClass},
+    error::AppError,
     marketplace::vinted::{
         auth::{VintedAuthentication, VintedCredentialRecord},
         binding::VINTED_FI_BINDING,
@@ -140,23 +140,28 @@ impl HttpVintedReadinessApi {
         &self,
         credentials: &VintedCredentialRecord,
     ) -> Result<PublicationReadiness, AppError> {
-        let (status, current_user) = self.get(credentials, "users/current").await?;
-        if !status.is_success() {
-            if let Some(blocker) = classify_prerequisite(&current_user) {
-                return Ok(blocked_report(blocker, "current_user"));
-            }
-            return Err(readiness_http_error(status, &current_user));
-        }
-        let returned_id = current_user
-            .pointer("/user/id")
-            .and_then(value_as_id)
-            .ok_or_else(invalid_response)?;
-        if returned_id != credentials.user_id {
-            return Err(invalid_response());
-        }
-
         let mut checks = unknown_checks();
-        apply_current_user(&mut checks, &current_user);
+        match self.get(credentials, "users/current").await {
+            Ok((status, current_user)) if status.is_success() => {
+                let returned_id = current_user
+                    .pointer("/user/id")
+                    .and_then(value_as_id)
+                    .ok_or_else(invalid_response)?;
+                if returned_id != credentials.user_id {
+                    return Err(invalid_response());
+                }
+                apply_current_user(&mut checks, &current_user);
+            }
+            Ok((_, current_user)) => {
+                if let Some(blocker) = classify_prerequisite(&current_user) {
+                    return Ok(blocked_report(blocker, "current_user"));
+                }
+                self.auth.validate_credentials(credentials).await?;
+            }
+            Err(_) => {
+                self.auth.validate_credentials(credentials).await?;
+            }
+        }
 
         let prompt_path = format!("users/{}/verifications/prompt", credentials.user_id);
         match self.get(credentials, &prompt_path).await {
@@ -682,20 +687,6 @@ fn decode_response(response: TransportResponse) -> Result<(StatusCode, Value), A
     Ok((response.status, value))
 }
 
-fn readiness_http_error(status: StatusCode, value: &Value) -> AppError {
-    let message = value
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("Vinted readiness inspection failed");
-    let exit_class = if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
-        ExitClass::Authentication
-    } else {
-        ExitClass::Upstream
-    };
-    AppError::new("vinted.readiness_failed", message, exit_class)
-        .with_details(json!({ "http_status": status.as_u16() }))
-}
-
 fn invalid_response() -> AppError {
     AppError::upstream(
         "vinted.readiness_invalid_response",
@@ -725,6 +716,7 @@ fn execution_error(error: TransportError) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn maps_every_known_prerequisite_class() {
