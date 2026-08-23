@@ -506,6 +506,93 @@ async fn transparently_paginates_the_fifty_item_cap_and_normalizes_results() {
 }
 
 #[tokio::test]
+async fn collection_scan_rejects_a_total_that_changes_between_pages() {
+    let mut api = MockListingsApi::fixtures();
+    api.pages = Mutex::new(VecDeque::from([
+        serde_json::from_value(json!({
+            "summaries": [{ "id": "1000", "data": { "title": "first" } }],
+            "total": 2
+        }))
+        .unwrap(),
+        serde_json::from_value(json!({
+            "summaries": [{ "id": "1001", "data": { "title": "second" } }],
+            "total": 3
+        }))
+        .unwrap(),
+    ]));
+
+    let error = Listings::new(&api).list().await.unwrap_err();
+
+    assert_eq!(error.code, "upstream.unexpected_response");
+    assert_eq!(
+        *api.page_calls.lock().unwrap(),
+        [(0, LISTING_PAGE_SIZE), (1, LISTING_PAGE_SIZE)]
+    );
+}
+
+#[tokio::test]
+async fn collection_scan_rejects_an_empty_page_before_the_reported_total() {
+    let mut api = MockListingsApi::fixtures();
+    api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
+        "summaries": [],
+        "total": 1
+    }))
+    .unwrap()]));
+
+    let error = Listings::new(&api).list().await.unwrap_err();
+
+    assert_eq!(error.code, "upstream.unexpected_response");
+    assert_eq!(*api.page_calls.lock().unwrap(), [(0, LISTING_PAGE_SIZE)]);
+}
+
+#[tokio::test]
+async fn collection_scan_rejects_duplicate_listing_ids() {
+    let mut api = MockListingsApi::fixtures();
+    api.pages = Mutex::new(VecDeque::from([serde_json::from_value(json!({
+        "summaries": [
+            { "id": "1000", "data": { "title": "first" } },
+            { "id": "1000", "data": { "title": "duplicate" } }
+        ],
+        "total": 2
+    }))
+    .unwrap()]));
+
+    let error = Listings::new(&api).list().await.unwrap_err();
+
+    assert_eq!(error.code, "upstream.unexpected_response");
+}
+
+#[tokio::test]
+async fn identity_reconciliation_scans_later_collection_pages() {
+    let mut api = MockListingsApi::fixtures();
+    api.listing_errors = Mutex::new(VecDeque::from([ListingsApiError::NotFound]));
+    api.pages = Mutex::new(VecDeque::from([
+        serde_json::from_value(json!({
+            "summaries": [{ "id": "other", "data": { "title": "other" } }],
+            "total": 2
+        }))
+        .unwrap(),
+        serde_json::from_value(json!({
+            "summaries": [{
+                "id": "46031010",
+                "state": { "type": "ACTIVE" },
+                "data": { "title": "target" }
+            }],
+            "total": 2
+        }))
+        .unwrap(),
+    ]));
+
+    let detail = Listings::new(&api).show("46031010").await.unwrap();
+
+    assert_eq!(detail.listing_id, "46031010");
+    assert_eq!(
+        *api.page_calls.lock().unwrap(),
+        [(0, LISTING_PAGE_SIZE), (1, LISTING_PAGE_SIZE)]
+    );
+}
+
+#[tokio::test]
 async fn show_normalizes_complete_fields_statistics_and_actions() {
     let api = MockListingsApi::fixtures();
     let detail = Listings::new(&api).show("36443414").await.unwrap();

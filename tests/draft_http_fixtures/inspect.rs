@@ -54,6 +54,68 @@ async fn unavailable_collection_cannot_confirm_detail_absence() {
     );
 }
 #[tokio::test]
+async fn listing_reconciliation_rejects_a_changing_collection_total() {
+    let transport = FixtureTransport::new([]).with_search_responses([
+        response(200, json!({ "summaries": [{ "id": "other" }], "total": 2 })),
+        response(
+            200,
+            json!({ "summaries": [{ "id": "target" }], "total": 3 }),
+        ),
+    ]);
+    let api = HttpAdInputApi::new(transport.clone());
+
+    let error = api.active_listing("missing").await.unwrap_err();
+
+    assert_eq!(error.code, "upstream.unrecognized_model");
+    assert_eq!(
+        error.details.unwrap()["response_model"],
+        "collection_total_changed"
+    );
+    assert_eq!(transport.requests().len(), 2);
+}
+
+#[tokio::test]
+async fn listing_reconciliation_rejects_a_premature_empty_page() {
+    let transport = FixtureTransport::new([])
+        .with_search_responses([response(200, json!({ "summaries": [], "total": 1 }))]);
+    let api = HttpAdInputApi::new(transport.clone());
+
+    let error = api.active_listing("missing").await.unwrap_err();
+
+    assert_eq!(error.code, "upstream.unrecognized_model");
+    assert_eq!(
+        error.details.unwrap()["response_model"],
+        "collection_pagination_incomplete"
+    );
+    assert_eq!(transport.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn listing_reconciliation_finds_ids_on_later_pages() {
+    let transport = FixtureTransport::new([]).with_search_responses([
+        response(200, json!({ "summaries": [{ "id": "other" }], "total": 2 })),
+        response(
+            200,
+            json!({
+                "summaries": [{
+                    "id": "target",
+                    "state": { "type": "ACTIVE" },
+                    "data": {}
+                }],
+                "total": 2
+            }),
+        ),
+    ]);
+    let api = HttpAdInputApi::new(transport.clone());
+
+    let listing = api.active_listing("target").await.unwrap().unwrap();
+
+    assert_eq!(listing["listing_id"], "target");
+    assert_eq!(transport.requests().len(), 2);
+    assert_eq!(transport.requests()[1].path, "/search?limit=50&offset=1");
+}
+
+#[tokio::test]
 async fn a_later_detail_read_resolves_collection_consistency() {
     let transport = FixtureTransport::new([
         response(404, json!({ "message": "missing" })),
