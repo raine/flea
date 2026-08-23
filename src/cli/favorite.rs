@@ -2,9 +2,8 @@ use clap::{Args, Subcommand};
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome, FavoriteFoldersOutput},
-    domain::observation::Observation,
     error::AppError,
-    marketplace::tori::favorites::{Favorites, FavoritesApi},
+    marketplace::tori::favorites::{FavoriteRequest, FavoriteResult, Favorites, FavoritesApi},
 };
 
 #[derive(Debug, Args)]
@@ -69,45 +68,34 @@ pub async fn dispatch(
     args: FavoriteArgs,
     api: &dyn FavoritesApi,
 ) -> Result<CommandOutcome, AppError> {
-    let favorites = Favorites::new(api);
-    match args.command {
-        FavoriteCommand::Folders => {
-            let folders = favorites.folders().await?;
-            Ok(
-                CommandOutcome::new(CommandData::FavoriteFolders(FavoriteFoldersOutput {
-                    folders,
-                }))
-                .with_observation(Observation::confirmed_present("favorites_folders", None)),
-            )
-        }
-        FavoriteCommand::Status { listing_id } => {
-            let status = favorites.status(&listing_id).await?;
-            let observation = if status.favorite {
-                Observation::confirmed_present("favorites_minimal", None)
-            } else {
-                Observation::confirmed_absent("favorites_minimal", None)
-            };
-            Ok(CommandOutcome::new(CommandData::FavoriteStatus(status))
-                .with_observation(observation))
-        }
-        FavoriteCommand::Add { listing_id, folder } => {
-            let mutation = favorites.add(&listing_id, folder).await?;
-            mutation_outcome(mutation)
-        }
-        FavoriteCommand::Remove { listing_id, folder } => {
-            let mutation = favorites.remove(&listing_id, folder).await?;
-            mutation_outcome(mutation)
-        }
-    }
-}
-
-fn mutation_outcome(
-    mutation: crate::marketplace::tori::favorites::FavoriteMutation,
-) -> Result<CommandOutcome, AppError> {
-    let observation = if mutation.favorite {
-        Observation::confirmed_present("favorite_mutation_response", None)
-    } else {
-        Observation::confirmed_absent("favorite_mutation_response", None)
+    let request = match args.command {
+        FavoriteCommand::Folders => FavoriteRequest::Folders,
+        FavoriteCommand::Status { listing_id } => FavoriteRequest::Status { listing_id },
+        FavoriteCommand::Add { listing_id, folder } => FavoriteRequest::Add {
+            listing_id,
+            folder_id: folder,
+        },
+        FavoriteCommand::Remove { listing_id, folder } => FavoriteRequest::Remove {
+            listing_id,
+            folder_id: folder,
+        },
     };
-    Ok(CommandOutcome::new(CommandData::FavoriteMutation(mutation)).with_observation(observation))
+    let (data, observation) = match Favorites::new(api).execute(request).await? {
+        FavoriteResult::Folders {
+            folders,
+            observation,
+        } => (
+            CommandData::FavoriteFolders(FavoriteFoldersOutput { folders }),
+            observation,
+        ),
+        FavoriteResult::Status {
+            status,
+            observation,
+        } => (CommandData::FavoriteStatus(status), observation),
+        FavoriteResult::Mutation {
+            mutation,
+            observation,
+        } => (CommandData::FavoriteMutation(mutation), observation),
+    };
+    Ok(CommandOutcome::new(data).with_observation(observation))
 }

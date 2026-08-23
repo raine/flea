@@ -222,6 +222,38 @@ pub struct FavoriteFolder {
     pub share_id: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FavoriteRequest {
+    Folders,
+    Status {
+        listing_id: String,
+    },
+    Add {
+        listing_id: String,
+        folder_id: Option<u64>,
+    },
+    Remove {
+        listing_id: String,
+        folder_id: Option<u64>,
+    },
+}
+
+#[derive(Debug, PartialEq)]
+pub enum FavoriteResult {
+    Folders {
+        folders: Vec<FavoriteFolder>,
+        observation: Observation,
+    },
+    Status {
+        status: FavoriteStatus,
+        observation: Observation,
+    },
+    Mutation {
+        mutation: FavoriteMutation,
+        observation: Observation,
+    },
+}
+
 pub struct Favorites<'a> {
     api: &'a dyn FavoritesApi,
 }
@@ -229,6 +261,41 @@ pub struct Favorites<'a> {
 impl<'a> Favorites<'a> {
     pub fn new(api: &'a dyn FavoritesApi) -> Self {
         Self { api }
+    }
+
+    pub async fn execute(&self, request: FavoriteRequest) -> Result<FavoriteResult, AppError> {
+        match request {
+            FavoriteRequest::Folders => Ok(FavoriteResult::Folders {
+                folders: self.folders().await?,
+                observation: Observation::confirmed_present("favorites_folders", None),
+            }),
+            FavoriteRequest::Status { listing_id } => {
+                let status = self.status(&listing_id).await?;
+                let observation = if status.favorite {
+                    Observation::confirmed_present("favorites_minimal", None)
+                } else {
+                    Observation::confirmed_absent("favorites_minimal", None)
+                };
+                Ok(FavoriteResult::Status {
+                    status,
+                    observation,
+                })
+            }
+            FavoriteRequest::Add {
+                listing_id,
+                folder_id,
+            } => {
+                let mutation = self.add(&listing_id, folder_id).await?;
+                Ok(favorite_mutation_result(mutation))
+            }
+            FavoriteRequest::Remove {
+                listing_id,
+                folder_id,
+            } => {
+                let mutation = self.remove(&listing_id, folder_id).await?;
+                Ok(favorite_mutation_result(mutation))
+            }
+        }
     }
 
     pub async fn folders(&self) -> Result<Vec<FavoriteFolder>, AppError> {
@@ -322,6 +389,18 @@ pub struct FavoriteMutation {
     pub listing_id: u64,
     pub folder_id: u64,
     pub favorite: bool,
+}
+
+fn favorite_mutation_result(mutation: FavoriteMutation) -> FavoriteResult {
+    let observation = if mutation.favorite {
+        Observation::confirmed_present("favorite_mutation_response", None)
+    } else {
+        Observation::confirmed_absent("favorite_mutation_response", None)
+    };
+    FavoriteResult::Mutation {
+        mutation,
+        observation,
+    }
 }
 
 fn parse_listing_id(value: &str) -> Result<u64, AppError> {
