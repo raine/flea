@@ -146,6 +146,11 @@ pub enum SearchApiError {
     Unexpected(Sensitive<String>),
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocationSearchRequest {
+    pub query: Option<String>,
+}
+
 pub struct PublicSearch<'a> {
     api: &'a dyn PublicSearchApi,
 }
@@ -173,6 +178,13 @@ impl<'a> PublicSearch<'a> {
         let raw = self.api.search(request).await.map_err(search_error)?;
         let normalized = normalize_search(&raw, request, resolved_location, resolved_area)?;
         Ok((normalized, raw))
+    }
+
+    pub async fn search_locations(
+        &self,
+        request: LocationSearchRequest,
+    ) -> Result<LocationCollection, AppError> {
+        self.locations(request.query.as_deref().unwrap_or("")).await
     }
 
     pub async fn locations(&self, query: &str) -> Result<LocationCollection, AppError> {

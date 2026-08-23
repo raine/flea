@@ -1,7 +1,7 @@
 use crate::{
     domain::search::LocationCollection,
     error::AppError,
-    marketplace::tori::search::{PublicSearch, PublicSearchApi},
+    marketplace::tori::search::{LocationSearchRequest, PublicSearch, PublicSearchApi},
 };
 use clap::{Args, Subcommand};
 
@@ -35,11 +35,8 @@ pub async fn dispatch(
     args: LocationArgs,
     api: &dyn PublicSearchApi,
 ) -> Result<LocationCollection, AppError> {
-    let search = PublicSearch::new(api);
-    let result = match args.command {
-        LocationCommand::Search { query } => {
-            search.locations(query.as_deref().unwrap_or("")).await?
-        }
+    let request = match args.command {
+        LocationCommand::Search { query } => LocationSearchRequest { query },
     };
-    Ok(result)
+    PublicSearch::new(api).search_locations(request).await
 }
