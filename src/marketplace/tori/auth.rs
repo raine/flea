@@ -984,7 +984,7 @@ mod tests {
         }
 
         let cases: Vec<CallbackCase> =
-            serde_json::from_str(include_str!("../../tests/fixtures/oauth/callbacks.json"))
+            serde_json::from_str(include_str!("../../../tests/fixtures/oauth/callbacks.json"))
                 .unwrap();
         for case in cases {
             let result = validate_callback(&case.callback, "expected");

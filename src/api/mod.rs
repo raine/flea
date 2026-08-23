@@ -1,4 +1,7 @@
-pub mod auth;
+/// Compatibility path for the Tori authentication protocol.
+pub mod auth {
+    pub use crate::marketplace::tori::auth::*;
+}
 /// Compatibility path for the Tori HTTP client and transport seams.
 pub mod client {
     pub use crate::marketplace::tori::client::*;

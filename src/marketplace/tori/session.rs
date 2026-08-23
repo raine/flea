@@ -1,11 +1,11 @@
 use serde::Serialize;
 
 use crate::{
-    api::auth::{GatewaySigner, RefreshRequest, SchibstedToriAuthenticationApi},
     cli::outcome::CommandOutcome,
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::MarketplaceContext,
+    marketplace::tori::auth::{GatewaySigner, RefreshRequest, SchibstedToriAuthenticationApi},
     marketplace::tori::client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
     storage::{
         StatePaths,

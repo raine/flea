@@ -7,8 +7,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    api::auth::{AuthCredentials, AuthenticationApi, BrowserAuth, OAuthFlow},
     error::{AppError, ExitClass},
+    marketplace::tori::auth::{AuthCredentials, AuthenticationApi, BrowserAuth, OAuthFlow},
     storage::{
         StatePaths,
         auth_flow::{AuthFlowStore, AuthFlowStoreError},
@@ -301,7 +301,7 @@ fn storage_error(source: AppError) -> AppError {
 mod tests {
     use std::sync::Mutex;
 
-    use crate::api::auth::{AuthenticatedAccount, SecretString};
+    use crate::marketplace::tori::auth::{AuthenticatedAccount, SecretString};
 
     use super::*;
 
@@ -313,12 +313,14 @@ mod tests {
             &self,
             _code: &str,
             _pkce_verifier: &str,
-        ) -> Result<crate::api::auth::SchibstedTokens, AppError> {
-            Ok(crate::api::auth::SchibstedTokens::new_for_adapter(
-                "access".into(),
-                "refresh".into(),
-                "id".into(),
-            ))
+        ) -> Result<crate::marketplace::tori::auth::SchibstedTokens, AppError> {
+            Ok(
+                crate::marketplace::tori::auth::SchibstedTokens::new_for_adapter(
+                    "access".into(),
+                    "refresh".into(),
+                    "id".into(),
+                ),
+            )
         }
 
         async fn exchange_spid_code(&self, _access_token: &str) -> Result<SecretString, AppError> {
@@ -332,14 +334,16 @@ mod tests {
             _device_id: &str,
             _installation_id: &str,
             _ab_test_device_id: &str,
-        ) -> Result<crate::api::auth::ToriSession, AppError> {
-            Ok(crate::api::auth::ToriSession::new_for_adapter(
-                AuthenticatedAccount {
-                    user_id: "42".into(),
-                }
-                .user_id,
-                "bearer".into(),
-            ))
+        ) -> Result<crate::marketplace::tori::auth::ToriSession, AppError> {
+            Ok(
+                crate::marketplace::tori::auth::ToriSession::new_for_adapter(
+                    AuthenticatedAccount {
+                        user_id: "42".into(),
+                    }
+                    .user_id,
+                    "bearer".into(),
+                ),
+            )
         }
     }
 

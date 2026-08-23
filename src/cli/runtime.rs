@@ -4,9 +4,8 @@ use serde_json::Value;
 
 use crate::{
     api::{
-        auth::SchibstedToriAuthenticationApi, favorites::HttpFavoritesApi, item::HttpPublicItemApi,
-        listings::HttpListingsApi, saved_searches::HttpSavedSearchesApi,
-        search::HttpPublicSearchApi,
+        favorites::HttpFavoritesApi, item::HttpPublicItemApi, listings::HttpListingsApi,
+        saved_searches::HttpSavedSearchesApi, search::HttpPublicSearchApi,
     },
     cli::{
         Command, CommandFuture, CommandRuntime, ToriCommand, VintedCommand,
@@ -19,6 +18,7 @@ use crate::{
         MarketplaceContext, MarketplaceId, marketplace, marketplaces,
         tori::{
             adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
+            auth::SchibstedToriAuthenticationApi,
             client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
             session as tori_session,
         },

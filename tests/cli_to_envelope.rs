@@ -8,10 +8,6 @@ use std::{
 use flea::{
     Presentation,
     api::{
-        auth::{
-            AuthCredentials, AuthenticatedAccount, AuthenticationApi, OAuthFlow, SchibstedTokens,
-            SecretString, ToriSession,
-        },
         favorites::{FavoritesApi, HttpFavoritesApi},
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
@@ -26,6 +22,10 @@ use flea::{
     error::AppError,
     marketplace::tori::{
         adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
+        auth::{
+            AuthCredentials, AuthenticatedAccount, AuthenticationApi, OAuthFlow, SchibstedTokens,
+            SecretString, ToriSession,
+        },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
     },
     run_with_runtime,
