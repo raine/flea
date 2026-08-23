@@ -76,7 +76,7 @@ fn structured(runtime: &dyn CommandRuntime, format: &str) -> flea::RunResult {
 }
 
 #[test]
-fn reserved_metadata_fields_produce_the_exact_json_envelope() {
+fn typed_metadata_produces_the_exact_json_envelope() {
     let result = structured(&MetadataRuntime, "json");
 
     assert_eq!(result.exit_code, 0);
@@ -103,7 +103,7 @@ fn reserved_metadata_fields_produce_the_exact_json_envelope() {
 }
 
 #[test]
-fn reserved_metadata_fields_produce_the_exact_toon_envelope() {
+fn typed_metadata_produces_the_exact_toon_envelope() {
     let result = structured(&MetadataRuntime, "toon");
 
     assert_eq!(result.exit_code, 0);
@@ -130,7 +130,7 @@ fn reserved_metadata_fields_produce_the_exact_toon_envelope() {
 }
 
 #[test]
-fn warning_messages_map_to_the_exact_envelope_codes() {
+fn typed_warnings_produce_the_exact_envelope_codes() {
     let result = structured(&WarningRuntime, "json");
     let envelope: Value = serde_json::from_str(&result.document).unwrap();
 

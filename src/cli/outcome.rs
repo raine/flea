@@ -39,35 +39,6 @@ impl CommandOutcome {
         self.warnings = warnings;
         self
     }
-
-    pub fn from_legacy_value(mut data: Value) -> Self {
-        let next_actions = data
-            .as_object_mut()
-            .and_then(|object| object.remove("_next_actions"))
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default();
-        let observation = data
-            .as_object_mut()
-            .and_then(|object| object.remove("_observation"))
-            .and_then(|value| serde_json::from_value(value).ok());
-        let warnings = data
-            .get("warnings")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(|message| Warning {
-                code: legacy_warning_code(message).to_owned(),
-                message: message.to_owned(),
-            })
-            .collect();
-        Self {
-            data,
-            next_actions,
-            observation,
-            warnings,
-        }
-    }
 }
 
 impl From<Value> for CommandOutcome {
@@ -93,15 +64,5 @@ impl DerefMut for CommandOutcome {
 impl PartialEq<Value> for CommandOutcome {
     fn eq(&self, other: &Value) -> bool {
         self.data == *other
-    }
-}
-
-fn legacy_warning_code(message: &str) -> &'static str {
-    if message.starts_with("Tori returned an unrecognized successful mutation response") {
-        "mutation.response_model_drift"
-    } else if message.starts_with("Tori returned an ambiguous mutation response") {
-        "mutation.observed_success"
-    } else {
-        "workflow.best_effort_failed"
     }
 }

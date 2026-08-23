@@ -78,7 +78,7 @@ impl CommandRuntime for TestRuntime {
                         command => AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
                             .dispatch(command)
                             .await
-                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value),
+                            .map(Into::into),
                     },
                     ToriCommand::Capabilities => {
                         unreachable!("capabilities use the production runtime")
