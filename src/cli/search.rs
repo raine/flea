@@ -10,14 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::{
-        item::{PublicItemApi, PublicItems},
-        search::{
-            PublicSearch, PublicSearchApi, SEARCH_AREA_LOCATION_MAX, SEARCH_FACET_OPTION_LIMIT,
-            SEARCH_FACET_OPTION_LIMIT_MAX, SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX, SEARCH_PAGE_MAX,
-            SEARCH_RADIUS_MAX_KM, UpstreamSearchRequest,
-        },
-    },
+    api::item::{PublicItemApi, PublicItems},
     cli::outcome::CommandOutcome,
     domain::{
         envelope::NextAction,
@@ -26,6 +19,11 @@ use crate::{
         },
     },
     error::AppError,
+    marketplace::tori::search::{
+        PublicSearch, PublicSearchApi, SEARCH_AREA_LOCATION_MAX, SEARCH_FACET_OPTION_LIMIT,
+        SEARCH_FACET_OPTION_LIMIT_MAX, SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX, SEARCH_PAGE_MAX,
+        SEARCH_RADIUS_MAX_KM, UpstreamSearchRequest,
+    },
 };
 
 pub const SEARCH_EXPLAIN_LIMIT_MAX: usize = 20;

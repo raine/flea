@@ -2,8 +2,8 @@ use clap::{Args, Subcommand};
 use serde_json::Value;
 
 use crate::{
-    api::search::{PublicSearch, PublicSearchApi},
     error::AppError,
+    marketplace::tori::search::{PublicSearch, PublicSearchApi},
 };
 
 #[derive(Debug, Args)]

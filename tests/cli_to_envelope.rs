@@ -12,7 +12,6 @@ use flea::{
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
         saved_searches::HttpSavedSearchesApi,
-        search::HttpPublicSearchApi,
     },
     cli::{
         Command, CommandFuture, CommandRuntime, ToriCommand,
@@ -27,6 +26,7 @@ use flea::{
             SecretString, ToriSession,
         },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
+        search::HttpPublicSearchApi,
     },
     run_with_runtime,
 };
