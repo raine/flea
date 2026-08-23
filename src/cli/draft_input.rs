@@ -7,7 +7,7 @@ use crate::{
     domain::envelope::Warning,
     error::{AppError, ExitClass},
     marketplace::tori::adinput::{PreparedImage, normalize_category, prepare_image},
-    marketplace::tori::listings::{ListingsApi, ListingsApiError, UpstreamCategory},
+    marketplace::tori::listings::{ListingsApiError, TaxonomyApi, UpstreamCategory},
 };
 
 use super::draft::CollectedInput;
@@ -50,7 +50,7 @@ pub fn normalize(input: CollectedInput, process_images: bool) -> Result<Normaliz
 pub async fn preview(
     input: CollectedInput,
     verify_category: bool,
-    taxonomy: Option<&dyn ListingsApi>,
+    taxonomy: Option<&dyn TaxonomyApi>,
 ) -> Result<CommandOutcome, AppError> {
     let normalized = normalize(input, true)?;
     let category_machine_value = category_machine_value(normalized.values.get("category"));
@@ -566,7 +566,7 @@ fn prepare_images(paths: &[PathBuf]) -> Result<Vec<PreparedImage>, AppError> {
 
 async fn verify_remote_category(
     requested: bool,
-    taxonomy: Option<&dyn ListingsApi>,
+    taxonomy: Option<&dyn TaxonomyApi>,
     category: Option<&str>,
     unverifiable: &mut Vec<String>,
     warnings: &mut Vec<Warning>,

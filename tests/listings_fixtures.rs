@@ -14,8 +14,8 @@ use flea::{
     domain::listing::{ListingActionName, ListingState},
     marketplace::tori::listings::{
         CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions,
-        LISTING_PAGE_SIZE, Listings, ListingsApi, ListingsApiError, UpstreamCategory,
-        UpstreamListing, UpstreamListingPage,
+        LISTING_PAGE_SIZE, Listings, ListingsApi, ListingsApiError, Taxonomy, TaxonomyApi,
+        UpstreamCategory, UpstreamListing, UpstreamListingPage,
     },
 };
 use serde::de::DeserializeOwned;
@@ -54,7 +54,7 @@ impl MockListingsApi {
     }
 }
 
-impl ListingsApi for MockListingsApi {
+impl TaxonomyApi for MockListingsApi {
     fn categories(
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<UpstreamCategory>, ListingsApiError>> + Send + '_>>
@@ -62,7 +62,9 @@ impl ListingsApi for MockListingsApi {
         let categories = self.categories.clone();
         Box::pin(async move { categories })
     }
+}
 
+impl ListingsApi for MockListingsApi {
     fn listing_page(
         &self,
         offset: usize,
@@ -141,7 +143,7 @@ impl ListingsApi for MockListingsApi {
 #[tokio::test]
 async fn discovers_category_roots_children_and_search_paths() {
     let api = MockListingsApi::fixtures();
-    let listings = Listings::new(&api);
+    let listings = Taxonomy::new(&api);
 
     let roots = listings.categories(None).await.unwrap();
     assert_eq!(roots.categories.len(), 2);
@@ -169,7 +171,7 @@ async fn live_taxonomy_fixture_flattens_and_matches_finnish_queries() {
         .unwrap();
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(taxonomy.categories);
-    let listings = Listings::new(&api);
+    let listings = Taxonomy::new(&api);
 
     let cycling = listings.search_categories("polkupyörä").await.unwrap();
     assert_eq!(cycling.categories.len(), 2);
@@ -217,7 +219,7 @@ async fn category_search_bounds_broad_results_and_reports_pagination() {
         .unwrap();
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(taxonomy.categories);
-    let listings = Listings::new(&api);
+    let listings = Taxonomy::new(&api);
 
     let first = listings.search_categories("tarvikkeet").await.unwrap();
     assert_eq!(first.limit, CATEGORY_SEARCH_LIMIT_DEFAULT);
@@ -253,7 +255,7 @@ async fn category_search_resolves_ids_labels_and_finnish_unicode_deterministical
         .unwrap();
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(taxonomy.categories);
-    let listings = Listings::new(&api);
+    let listings = Taxonomy::new(&api);
 
     let id = listings.search_categories("258").await.unwrap();
     assert_eq!(id.categories.len(), 1);
@@ -287,7 +289,7 @@ async fn category_search_filters_bicycle_accessories_by_parent_or_path() {
         .unwrap();
     let mut api = MockListingsApi::fixtures();
     api.categories = Ok(taxonomy.categories);
-    let listings = Listings::new(&api);
+    let listings = Taxonomy::new(&api);
 
     let by_parent = listings
         .search_categories_with_options(
@@ -358,7 +360,7 @@ async fn category_ranking_orders_exact_prefix_token_context_and_substring_matche
             children: Vec::new(),
         },
     ]);
-    let results = Listings::new(&api)
+    let results = Taxonomy::new(&api)
         .search_categories("pyöräily")
         .await
         .unwrap();
@@ -411,7 +413,7 @@ async fn category_search_breaks_equal_relevance_ties_by_path_and_id() {
             ],
         },
     ]);
-    let results = Listings::new(&api)
+    let results = Taxonomy::new(&api)
         .search_categories("tarvikkeet")
         .await
         .unwrap();
@@ -427,7 +429,7 @@ async fn category_search_breaks_equal_relevance_ties_by_path_and_id() {
 #[tokio::test]
 async fn category_search_rejects_limits_outside_the_documented_bound() {
     let api = MockListingsApi::fixtures();
-    let listings = Listings::new(&api);
+    let listings = Taxonomy::new(&api);
     for limit in [0, CATEGORY_SEARCH_LIMIT_MAX + 1] {
         let error = listings
             .search_categories_with_options(
@@ -448,7 +450,7 @@ async fn category_search_rejects_limits_outside_the_documented_bound() {
 async fn category_failures_distinguish_collection_parent_and_protocol_errors() {
     let mut api = MockListingsApi::fixtures();
     api.categories = Err(ListingsApiError::NotFound);
-    let endpoint = Listings::new(&api)
+    let endpoint = Taxonomy::new(&api)
         .search_categories("pyöräily")
         .await
         .unwrap_err();
@@ -456,7 +458,7 @@ async fn category_failures_distinguish_collection_parent_and_protocol_errors() {
     assert_eq!(endpoint.exit_class.code(), 40);
 
     let api = MockListingsApi::fixtures();
-    let parent = Listings::new(&api)
+    let parent = Taxonomy::new(&api)
         .categories(Some("missing"))
         .await
         .unwrap_err();
@@ -471,7 +473,7 @@ async fn category_failures_distinguish_collection_parent_and_protocol_errors() {
         selectable: Some(true),
         children: Vec::new(),
     }]);
-    let malformed = Listings::new(&api).categories(None).await.unwrap_err();
+    let malformed = Taxonomy::new(&api).categories(None).await.unwrap_err();
     assert_eq!(malformed.code, "category.protocol_drift");
 }
 

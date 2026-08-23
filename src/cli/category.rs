@@ -6,8 +6,8 @@ use crate::{
     domain::envelope::NextAction,
     error::AppError,
     marketplace::tori::listings::{
-        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions, Listings,
-        ListingsApi,
+        CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions, Taxonomy,
+        TaxonomyApi,
     },
 };
 
@@ -71,9 +71,9 @@ impl CategoryCommand {
 
 pub async fn dispatch(
     command: CategoryArgs,
-    api: &dyn ListingsApi,
+    api: &dyn TaxonomyApi,
 ) -> Result<CommandOutcome, AppError> {
-    let listings = Listings::new(api);
+    let taxonomy = Taxonomy::new(api);
     match command.command {
         CategoryCommand::Search {
             query,
@@ -82,7 +82,7 @@ pub async fn dispatch(
             limit,
             offset,
         } => {
-            let result = listings
+            let result = taxonomy
                 .search_categories_with_options(
                     &query,
                     CategorySearchOptions {
@@ -111,7 +111,7 @@ pub async fn dispatch(
             Ok(CommandOutcome::new(value).with_next_actions(next_actions))
         }
         CategoryCommand::List { parent } => {
-            serde_json::to_value(listings.categories(parent.as_deref()).await?)
+            serde_json::to_value(taxonomy.categories(parent.as_deref()).await?)
                 .map(CommandOutcome::new)
                 .map_err(|error| AppError::output(error.to_string()))
         }

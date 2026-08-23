@@ -26,7 +26,7 @@ use crate::{
         PublicationValidation, ValidationEvidenceFailure, WorkflowConfig, WorkflowError,
         WorkflowWarning, completed_steps_have_mutation,
     },
-    marketplace::tori::listings::ListingsApi,
+    marketplace::tori::listings::TaxonomyApi,
 };
 
 #[derive(Debug, Args)]
@@ -718,7 +718,7 @@ fn selected_delivery(delivery: &DraftDelivery) -> SelectedDelivery {
 
 pub async fn execute_preview(
     command: DraftCommand,
-    taxonomy: Option<&dyn ListingsApi>,
+    taxonomy: Option<&dyn TaxonomyApi>,
 ) -> Result<CommandOutcome, AppError> {
     let DraftCommand::Preview {
         verify_category,
