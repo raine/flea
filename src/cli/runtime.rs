@@ -20,16 +20,13 @@ use crate::{
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::{
-        MarketplaceContext, MarketplaceId, PortalId, marketplace, marketplaces,
+        MarketplaceContext, MarketplaceId, marketplace, marketplaces,
         tori::{
             adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
             session as tori_session,
         },
     },
-    storage::{
-        StatePaths,
-        credentials::{VintedCredentialRecord, VintedCredentialStore},
-    },
+    storage::StatePaths,
 };
 
 #[derive(Default)]
@@ -115,11 +112,23 @@ fn execute_vinted(
 ) -> Result<Value, AppError> {
     match command {
         VintedCommand::Auth(args) => {
-            crate::marketplace::vinted::interactive::execute_command(portal, args)
+            use crate::marketplace::vinted::session::{self, AuthOperation};
+
+            let operation = match args.command {
+                super::auth::AuthCommand::Login => AuthOperation::Login,
+                super::auth::AuthCommand::Status => AuthOperation::Status,
+                super::auth::AuthCommand::Logout => AuthOperation::Logout,
+                super::auth::AuthCommand::Callback { .. } => {
+                    return Err(AppError::unexpected(
+                        "the Vinted callback receiver does not use the CLI callback command",
+                    ));
+                }
+            };
+            session::execute_auth(portal, operation)
         }
         VintedCommand::Capabilities => marketplace_capabilities(MarketplaceId::Vinted),
         VintedCommand::Search(args) => {
-            let credentials = vinted_credentials(portal)?;
+            let credentials = crate::marketplace::vinted::session::credentials(portal)?;
             block_on(vinted_search::dispatch(args, &credentials))
         }
         VintedCommand::Unsupported(parts) => Err(capability_unavailable(
@@ -279,48 +288,6 @@ fn public_client() -> HttpClient<ReqwestTransport> {
         },
         None,
     )
-}
-
-fn vinted_credentials(portal: PortalId) -> Result<VintedCredentialRecord, AppError> {
-    if portal != PortalId::Fi {
-        return Err(AppError::usage("the selected Vinted portal is unavailable"));
-    }
-    let paths = StatePaths::discover(MarketplaceContext::VINTED_FI)
-        .map_err(|error| vinted_auth_storage(error, "discover"))?;
-    let credentials = VintedCredentialStore::new(paths)
-        .load()
-        .map_err(|error| vinted_auth_storage(error, "read"))?
-        .ok_or_else(vinted_auth_required)?;
-    if credentials.access_expires_at_unix <= unix_time_now()? {
-        return Err(vinted_auth_required());
-    }
-    Ok(credentials)
-}
-
-fn vinted_auth_storage(
-    error: impl std::error::Error + Send + Sync + 'static,
-    operation: &'static str,
-) -> AppError {
-    let mut result = AppError::new(
-        "vinted_auth.storage_failed",
-        "Vinted authentication credential storage is unavailable",
-        ExitClass::Authentication,
-    )
-    .with_details(serde_json::json!({ "operation": operation }))
-    .with_source(error);
-    result.next_actions.push(NextAction {
-        command: crate::invocation::vinted_fi("auth status"),
-    });
-    result
-}
-
-fn vinted_auth_required() -> AppError {
-    let mut error =
-        AppError::authentication("vinted_auth.required", "Vinted authentication is required");
-    error.next_actions.push(NextAction {
-        command: crate::invocation::vinted_fi("auth login"),
-    });
-    error
 }
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
