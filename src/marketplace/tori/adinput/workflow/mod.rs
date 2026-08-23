@@ -14,7 +14,7 @@ use super::normalization::attach_delivery_model;
 use super::recovery::{
     AddImagesResult, CreateRecoveryContract, CreateResult, ImageRecoveryOperation,
     ListingCopyReport, ObservationStatus, PublishResult, Recovery, RecoveryObservation,
-    RecoveryStatus, UpdateResult, WorkflowConfig, WorkflowError, bounded_recovery_text,
+    RecoveryStatus, WorkflowConfig, WorkflowError, bounded_recovery_text,
     completed_steps_have_mutation, recovery_scalar,
 };
 use super::types::{
@@ -37,6 +37,7 @@ use std::path::Path;
 use std::time::Duration;
 
 mod inspect;
+mod update;
 
 fn reconciled_mutation_warning(fields: &[String], response_model_drift: bool) -> String {
     let response = if response_model_drift {
@@ -1474,73 +1475,9 @@ impl<A: AdInputApi> DraftWorkflow<A> {
     }
 }
 
+impl<A: AdInputApi> DraftWorkflow<A> {}
+
 impl<A: AdInputApi> DraftWorkflow<A> {
-    pub async fn update(
-        &self,
-        draft_id: &str,
-        patch: &Map<String, Value>,
-    ) -> Result<UpdateResult, WorkflowError> {
-        let current = self
-            .api
-            .get_draft(draft_id)
-            .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, true))?;
-        let mut completed = vec!["fetch_draft".to_owned()];
-        let mut requested_values = current.values.clone();
-        requested_values.extend(patch.clone());
-        requested_values.remove("delivery");
-        if patch.contains_key("price") {
-            requested_sale_price(&requested_values)
-                .map_err(|error| WorkflowError::for_draft(draft_id, &completed, error, false))?;
-        }
-        let requested_delivery = patch
-            .get("delivery")
-            .and_then(delivery_values)
-            .unwrap_or_default();
-        let applied = self
-            .apply_field_mutations(
-                current.clone(),
-                ordered_field_mutations(patch.clone()),
-                &mut completed,
-                "draft_update",
-                None,
-            )
-            .await?;
-        let mut requested_fields = patch
-            .iter()
-            .flat_map(|(key, value)| {
-                if key == "attributes" {
-                    value
-                        .as_object()
-                        .into_iter()
-                        .flatten()
-                        .map(|(attribute, _)| format!("attributes.{attribute}"))
-                        .collect::<Vec<_>>()
-                } else {
-                    vec![key.clone()]
-                }
-            })
-            .collect::<Vec<_>>();
-        requested_fields.sort();
-        Ok(UpdateResult {
-            etag_changed: applied.draft.etag != current.etag,
-            draft: applied.draft,
-            requested_fields,
-            requested_delivery,
-            persisted_fields: applied.progress.persisted,
-            ignored_fields: applied.progress.absent,
-            completed_steps: completed,
-            warnings: applied.warnings,
-        })
-    }
-
-    pub async fn delete(&self, draft_id: &str) -> Result<(), WorkflowError> {
-        self.api
-            .delete_draft(draft_id)
-            .await
-            .map_err(|error| WorkflowError::for_draft(draft_id, &[], error, false))
-    }
-
     pub async fn add_images(
         &self,
         draft_id: &str,
