@@ -1,8 +1,8 @@
-use std::fmt;
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac};
 use sha2::Sha512;
+
+use crate::sensitive::Sensitive;
 
 pub(crate) const GATEWAY_SIGNING_KEY: &[u8] = b"3b535f36-79be-424b-a6fd-116c6e69f137";
 
@@ -13,19 +13,13 @@ pub struct SigningContext<'a> {
     pub body: &'a [u8],
 }
 
-/// A gateway signature whose formatting implementations never reveal its value.
-#[derive(Clone, Eq, PartialEq)]
-pub struct GatewaySignature(String);
+/// A gateway signature whose `Debug` representation never reveals its value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GatewaySignature(Sensitive<String>);
 
 impl GatewaySignature {
     pub fn as_header_value(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for GatewaySignature {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("GatewaySignature([REDACTED])")
+        self.0.expose()
     }
 }
 
@@ -49,7 +43,7 @@ pub fn sign(context: SigningContext<'_>) -> GatewaySignature {
         .expect("HMAC accepts keys of any length");
     mac.update(prefix.as_bytes());
     mac.update(context.body);
-    GatewaySignature(STANDARD.encode(mac.finalize().into_bytes()))
+    GatewaySignature(STANDARD.encode(mac.finalize().into_bytes()).into())
 }
 
 #[cfg(test)]
