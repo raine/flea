@@ -1,6 +1,7 @@
 pub mod adinput;
 pub mod auth;
 pub mod client;
+pub mod favorites;
 pub mod item;
 pub mod listings;
 pub mod search;

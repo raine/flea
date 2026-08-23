@@ -6,7 +6,10 @@ pub mod auth {
 pub mod client {
     pub use crate::marketplace::tori::client::*;
 }
-pub mod favorites;
+/// Compatibility path for Tori favorite capabilities.
+pub mod favorites {
+    pub use crate::marketplace::tori::favorites::*;
+}
 /// Compatibility path for Tori item capabilities.
 pub mod item {
     pub use crate::marketplace::tori::item::*;

@@ -7,10 +7,7 @@ use std::{
 
 use flea::{
     Presentation,
-    api::{
-        favorites::{FavoritesApi, HttpFavoritesApi},
-        saved_searches::HttpSavedSearchesApi,
-    },
+    api::saved_searches::HttpSavedSearchesApi,
     cli::{
         Command, CommandFuture, CommandRuntime, ToriCommand,
         auth::{AuthCommandHandler, AuthStore},
@@ -24,6 +21,7 @@ use flea::{
             SecretString, ToriSession,
         },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
+        favorites::{FavoritesApi, HttpFavoritesApi},
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
         search::HttpPublicSearchApi,

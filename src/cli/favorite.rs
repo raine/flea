@@ -2,10 +2,10 @@ use clap::{Args, Subcommand};
 use serde_json::json;
 
 use crate::{
-    api::favorites::{Favorites, FavoritesApi},
     cli::outcome::CommandOutcome,
     domain::observation::Observation,
     error::AppError,
+    marketplace::tori::favorites::{Favorites, FavoritesApi},
 };
 
 #[derive(Debug, Args)]
@@ -90,7 +90,7 @@ pub async fn dispatch_with_api(
 }
 
 fn mutation_outcome(
-    mutation: crate::api::favorites::FavoriteMutation,
+    mutation: crate::marketplace::tori::favorites::FavoriteMutation,
 ) -> Result<CommandOutcome, AppError> {
     let value = serde_json::to_value(&mutation).map_err(|error| {
         AppError::output("failed to serialize favorite output").with_source(error)
