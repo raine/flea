@@ -36,7 +36,7 @@ pub mod compatibility {
     pub const SERVICE_ADINPUT: &str = "APPS-ADINPUT";
     pub const SERVICE_ITEM_CREATION: &str = "RC-ITEM-CREATION-FLOW-API";
     pub const SERVICE_DELIVERY: &str = "TJT-API";
-    pub const SERVICE_AD_ACTION: &str = "AD-ACTION";
+    pub const SERVICE_AD_ACTION: &str = "ITEM-ACTION";
     pub const SERVICE_AD_SUMMARIES: &str = "AD-SUMMARIES";
     pub const SERVICE_ADVIEW: &str = "ADVIEW-PROVIDER-RC";
     pub const SERVICE_BILLING_TRACKING: &str = "BILLING-TRACKING-SERVICE";

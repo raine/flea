@@ -1866,10 +1866,18 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                     })
             }
             Err(error) => {
+                let context = diagnostics::WorkflowContext {
+                    workflow: "draft_image_remove",
+                    step: "remove_images",
+                    draft_id: Some(draft_id),
+                    listing_id: None,
+                    fields: &[],
+                };
+                record_mutation_response_drift(&context, &error);
                 let workflow =
                     WorkflowError::for_draft(draft_id, &["fetch_draft".to_owned()], error, false);
                 let intent = RecoveryImageIntent::removals(remove);
-                Err(self
+                let reconciled = self
                     .recover_after_failure(
                         workflow,
                         draft_id,
@@ -1879,7 +1887,23 @@ impl<A: AdInputApi> DraftWorkflow<A> {
                         None,
                         None,
                     )
-                    .await)
+                    .await;
+                let removed = reconciled.recovery.as_ref().is_some_and(|recovery| {
+                    recovery.fresh_state.as_ref().is_some_and(|fresh| {
+                        remove.iter().all(|image_id| {
+                            fresh.images.iter().all(|image| image.image_id != *image_id)
+                        })
+                    })
+                });
+                if removed {
+                    diagnostics::workflow_step(&context, "reconciled");
+                    Ok(reconciled
+                        .recovery
+                        .and_then(|recovery| recovery.fresh_state)
+                        .expect("reconciled image removal has authoritative state"))
+                } else {
+                    Err(reconciled)
+                }
             }
         }
     }

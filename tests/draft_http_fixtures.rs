@@ -826,6 +826,14 @@ async fn html_5xx_with_confirmed_field_persistence_continues_without_replaying()
             .count(),
         1
     );
+    assert!(requests.iter().any(|request| {
+        matches!(
+            &request.body,
+            RequestBody::Json(body)
+                if body.pointer("/location/0/postal-code") == Some(&json!("00100"))
+                    && body.get("postal_code").is_none()
+        )
+    }));
 }
 
 #[tokio::test]
@@ -2777,6 +2785,30 @@ async fn uncertain_image_removal_reports_only_retained_images_as_safe_work() {
 }
 
 #[tokio::test]
+async fn image_removal_accepts_authoritative_success_after_unrecognized_response() {
+    let removed = "https://img.tori.net/dynamic/default/removed.jpg".to_owned();
+    let mut uncertain = response(200, Value::Null);
+    uncertain.body_is_unparseable = true;
+    let transport = FixtureTransport::new([
+        response(
+            200,
+            draft(
+                "one",
+                json!({ "images": [image("removed", 0, "ready", 4, 6)] }),
+            ),
+        ),
+        uncertain,
+        response(200, draft("observed", json!({ "images": [] }))),
+    ]);
+    let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport), config());
+
+    let state = workflow.remove_images("draft-1", &[removed]).await.unwrap();
+
+    assert!(state.images.is_empty());
+    assert_eq!(state.etag, "observed");
+}
+
+#[tokio::test]
 async fn remove_and_delete_use_ordered_non_retried_mutations() {
     let transport = FixtureTransport::new([
         response(
@@ -2816,8 +2848,23 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
                 }),
             ),
         ),
+        response(200, draft("pre-delete", json!({}))),
         response(204, Value::Null),
-    ]);
+    ])
+    .with_search_responses([response(
+        200,
+        json!({
+            "summaries": [{
+                "id": "draft-1",
+                "actions": [{
+                    "method": "DELETE",
+                    "name": "DELETE",
+                    "path": "/items/draft-1"
+                }]
+            }],
+            "total": 1
+        }),
+    )]);
     let workflow = DraftWorkflow::new(HttpAdInputApi::new(transport.clone()), config());
 
     let state = workflow
@@ -2844,8 +2891,21 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
     assert_eq!(requests[1].retry, RetryPolicy::Never);
     assert_eq!(requests[2].method, Method::Get);
     assert_eq!(requests[2].retry, RetryPolicy::BoundedRead);
-    assert_eq!(requests[3].method, Method::Delete);
-    assert_eq!(requests[3].retry, RetryPolicy::Never);
+    assert_eq!(requests[3].method, Method::Get);
+    assert_eq!(requests[3].path, "/adinput/ad/withModel/draft-1");
+    assert_eq!(requests[4].method, Method::Get);
+    assert_eq!(requests[4].path, "/search?facet=DRAFT&limit=50&offset=0");
+    assert_eq!(
+        requests[4].service,
+        Some(flea::api::client::compatibility::SERVICE_AD_SUMMARIES)
+    );
+    assert_eq!(requests[5].method, Method::Delete);
+    assert_eq!(requests[5].path, "/items/draft-1");
+    assert_eq!(requests[5].retry, RetryPolicy::Never);
+    assert_eq!(
+        requests[5].service,
+        Some(flea::api::client::compatibility::SERVICE_AD_ACTION)
+    );
 }
 
 #[tokio::test]
@@ -4130,6 +4190,7 @@ fn request_debug_redacts_targets_raw_bytes_and_secret_json_values() {
     let image = HttpRequest {
         method: Method::Post,
         path: "/images".to_owned(),
+        service: None,
         if_match: None,
         retry: RetryPolicy::Never,
         body: RequestBody::Image {
@@ -4143,6 +4204,7 @@ fn request_debug_redacts_targets_raw_bytes_and_secret_json_values() {
     let json = HttpRequest {
         method: Method::Post,
         path: "/drafts".to_owned(),
+        service: None,
         if_match: None,
         retry: RetryPolicy::Never,
         body: RequestBody::Json(json!({ "access_token": "token-secret" })),
@@ -4150,6 +4212,7 @@ fn request_debug_redacts_targets_raw_bytes_and_secret_json_values() {
     let delivery = HttpRequest {
         method: Method::Get,
         path: "/ui/addelivery/shipping?name=Private+Seller".to_owned(),
+        service: None,
         if_match: None,
         retry: RetryPolicy::BoundedRead,
         body: RequestBody::Empty,

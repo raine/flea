@@ -189,7 +189,23 @@ pub(super) fn field_is_persisted(state: &DraftState, mutation: &FieldMutation) -
             .as_ref()
             .is_some_and(|delivery| delivery.selected == requested);
     }
-    let observed = state.values.get(&mutation.key);
+    let observed = if mutation.key == "postal_code" {
+        state.values.get("postal_code").or_else(|| {
+            state
+                .values
+                .get("location")
+                .and_then(Value::as_array)
+                .and_then(|locations| locations.first())
+                .and_then(Value::as_object)
+                .and_then(|location| {
+                    ["postal_code", "postal-code", "postalCode"]
+                        .into_iter()
+                        .find_map(|key| location.get(key))
+                })
+        })
+    } else {
+        state.values.get(&mutation.key)
+    };
     if mutation.value.is_null() {
         return observed.is_none_or(Value::is_null);
     }

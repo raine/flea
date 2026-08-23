@@ -79,6 +79,7 @@ impl fmt::Debug for RequestBody {
 pub struct HttpRequest {
     pub method: Method,
     pub path: String,
+    pub service: Option<&'static str>,
     pub if_match: Option<String>,
     pub retry: RetryPolicy,
     pub body: RequestBody,
@@ -102,6 +103,7 @@ impl HttpRequest {
         Self {
             method: Method::Get,
             path: path.into(),
+            service: None,
             if_match: None,
             retry: RetryPolicy::BoundedRead,
             body: RequestBody::Empty,
@@ -112,10 +114,16 @@ impl HttpRequest {
         Self {
             method,
             path: path.into(),
+            service: None,
             if_match: None,
             retry: RetryPolicy::Never,
             body,
         }
+    }
+
+    pub(super) fn with_service(mut self, service: &'static str) -> Self {
+        self.service = Some(service);
+        self
     }
 
     pub(super) fn retry_context(&self) -> RetryContext {
@@ -281,7 +289,9 @@ impl<C> ClientTransport<C> {
 
 impl<C: ToriClient> HttpTransport for ClientTransport<C> {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
-        let service = service_for_path(&request.path);
+        let service = request
+            .service
+            .unwrap_or_else(|| service_for_path(&request.path));
         let observation_source = super::adapter::observation_source(&request.path);
         let retry_context = request.retry_context();
         let method = match request.method {
@@ -296,7 +306,7 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
             spec = spec.adinput();
         }
         spec = match request.body {
-            RequestBody::Empty if spec.method == ReqwestMethod::POST => spec.empty_body(),
+            RequestBody::Empty if request.method.is_mutation() => spec.empty_body(),
             RequestBody::Empty => spec,
             RequestBody::Json(value) => spec.body(
                 serde_json::to_vec(&value).map_err(|error| {

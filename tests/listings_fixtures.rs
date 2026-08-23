@@ -495,14 +495,10 @@ fn show_merges_normalized_summary_values_into_partial_detail_models() {
     let detail = Listings::new(&api).show("46031010").unwrap();
 
     assert_eq!(detail.fields["title"], "Bicycle lock cable");
-    assert_eq!(
-        detail.trade_type,
-        flea::domain::commerce::TradeType::Unknown
-    );
-    assert_eq!(
-        detail.price.kind,
-        flea::domain::commerce::PriceKind::Unavailable
-    );
+    assert_eq!(detail.trade_type, flea::domain::commerce::TradeType::Sell);
+    assert_eq!(detail.price.kind, flea::domain::commerce::PriceKind::Fixed);
+    assert_eq!(detail.price.amount, Some(json!(5)));
+    assert_eq!(detail.price.currency.as_deref(), Some("EUR"));
     assert_eq!(detail.price.display.as_deref(), Some("Tori myydään 5 €"));
     assert_eq!(detail.fields["image"], "https://img.example/lock.jpg");
     assert_eq!(

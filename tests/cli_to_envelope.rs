@@ -14,7 +14,7 @@ use flea::{
             SecretString, ToriSession,
         },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
-        favorites::HttpFavoritesApi,
+        favorites::{FavoritesApi, HttpFavoritesApi},
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
         saved_searches::HttpSavedSearchesApi,
@@ -356,6 +356,23 @@ fn invalid_create_and_update_inputs_fail_before_transport_access() {
     }
 
     assert!(client.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn favorite_mutations_send_an_explicit_empty_body() {
+    let client = MockClient::with_responses([response(StatusCode::NO_CONTENT, Value::Null)]);
+    let api = HttpFavoritesApi::new(Arc::new(client.clone()));
+
+    api.add(1131149, 25085448).unwrap();
+
+    let requests = client.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path_and_query, "/favorites/1131149/Ad/25085448");
+    assert!(requests[0].content_length_zero);
+    assert!(matches!(
+        &requests[0].body,
+        flea::api::client::RequestBody::Bytes(bytes) if bytes.is_empty()
+    ));
 }
 
 #[test]

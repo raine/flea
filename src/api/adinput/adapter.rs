@@ -270,6 +270,120 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
         ))
     }
 
+    async fn draft_delete_action(&self, draft_id: &str) -> Result<String, ApiError> {
+        const PAGE_SIZE: usize = 50;
+        const PAGE_LIMIT: usize = 10_000;
+        const ACTION_ATTEMPTS: usize = 6;
+        for action_attempt in 0..ACTION_ATTEMPTS {
+            let mut offset = 0;
+            let mut expected_total = None;
+            for _ in 0..PAGE_LIMIT {
+                let request = HttpRequest::read(format!(
+                    "/search?facet=DRAFT&limit={PAGE_SIZE}&offset={offset}"
+                ))
+                .with_service(compatibility::SERVICE_AD_SUMMARIES);
+                let response = self.json(request).await?;
+                let summaries = response
+                    .body
+                    .get("summaries")
+                    .or_else(|| response.body.get("listings"))
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| {
+                        listing_observation_model_error(
+                            response.status,
+                            "draft_collection_unrecognized",
+                        )
+                    })?;
+                let total = response
+                    .body
+                    .get("total")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| {
+                        listing_observation_model_error(
+                            response.status,
+                            "draft_collection_total_invalid",
+                        )
+                    })?;
+                let stable_total = *expected_total.get_or_insert(total);
+                if total != stable_total {
+                    return Err(listing_observation_model_error(
+                        response.status,
+                        "draft_collection_total_changed",
+                    ));
+                }
+                for summary in summaries {
+                    if !listing_value_id_matches(summary.get("id"), draft_id) {
+                        continue;
+                    }
+                    let action = summary
+                        .get("actions")
+                        .and_then(Value::as_array)
+                        .and_then(|actions| {
+                            actions.iter().find(|action| {
+                                action
+                                    .get("name")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|name| name.eq_ignore_ascii_case("DELETE"))
+                                    && action
+                                        .get("method")
+                                        .or_else(|| action.get("httpMethod"))
+                                        .and_then(Value::as_str)
+                                        .is_some_and(|method| method.eq_ignore_ascii_case("DELETE"))
+                            })
+                        })
+                        .ok_or_else(|| {
+                            listing_observation_model_error(
+                                response.status,
+                                "draft_delete_action_missing",
+                            )
+                        })?;
+                    let path = action
+                        .get("path")
+                        .or_else(|| action.get("urlPath"))
+                        .or_else(|| action.get("url_path"))
+                        .and_then(Value::as_str)
+                        .filter(|path| !path.is_empty())
+                        .ok_or_else(|| {
+                            listing_observation_model_error(
+                                response.status,
+                                "draft_delete_action_path_invalid",
+                            )
+                        })?;
+                    if !path.starts_with('/')
+                        || path.starts_with("//")
+                        || path.contains(['#', '\\'])
+                        || path.chars().any(char::is_control)
+                    {
+                        return Err(listing_observation_model_error(
+                            response.status,
+                            "draft_delete_action_path_invalid",
+                        ));
+                    }
+                    return Ok(path.to_owned());
+                }
+                offset += summaries.len();
+                if offset >= total {
+                    break;
+                }
+                if summaries.is_empty() {
+                    return Err(listing_observation_model_error(
+                        response.status,
+                        "draft_collection_pagination_incomplete",
+                    ));
+                }
+            }
+            if action_attempt + 1 < ACTION_ATTEMPTS {
+                let delay_ms = 250 * (1_u64 << action_attempt);
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            }
+        }
+        Err(listing_observation_model_error(
+            200,
+            "draft_delete_action_unavailable",
+        ))
+    }
+
     async fn reconcile_missing_draft(&self, draft_id: &str, detail_error: ApiError) -> ApiError {
         let detail_observation = detail_error
             .observation
@@ -556,11 +670,12 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
 
     async fn delete_draft(&self, draft_id: &str) -> Result<(), ApiError> {
         validate_resource_id(draft_id, "draft")?;
-        self.json(HttpRequest::mutation(
-            Method::Delete,
-            format!("/drafts/{draft_id}"),
-            RequestBody::Empty,
-        ))
+        self.get_draft(draft_id).await?;
+        let path = self.draft_delete_action(draft_id).await?;
+        self.json(
+            HttpRequest::mutation(Method::Delete, path, RequestBody::Empty)
+                .with_service(compatibility::SERVICE_AD_ACTION),
+        )
         .await
         .map(|_| ())
     }
@@ -1212,6 +1327,28 @@ fn numeric_string(value: &Value) -> Value {
 
 fn composer_values(values: &Map<String, Value>) -> Result<Map<String, Value>, ApiError> {
     let mut encoded = values.clone();
+    if let Some(postal_code) = encoded.remove("postal_code") {
+        let locations = encoded
+            .entry("location".to_owned())
+            .or_insert_with(|| Value::Array(vec![Value::Object(Map::new())]))
+            .as_array_mut()
+            .ok_or_else(|| {
+                ApiError::new(
+                    "upstream.unrecognized_model",
+                    "Tori returned an unsupported location representation",
+                )
+            })?;
+        if locations.is_empty() {
+            locations.push(Value::Object(Map::new()));
+        }
+        let location = locations[0].as_object_mut().ok_or_else(|| {
+            ApiError::new(
+                "upstream.unrecognized_model",
+                "Tori returned an unsupported location representation",
+            )
+        })?;
+        location.insert("postal-code".to_owned(), postal_code);
+    }
     if let Some(trade_type) = encoded.get_mut("trade_type") {
         *trade_type = normalized_select_to_machine("trade_type", trade_type).ok_or_else(|| {
             ApiError::new(

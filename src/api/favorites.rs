@@ -51,11 +51,9 @@ impl HttpFavoritesApi {
     }
 
     fn mutate(&self, method: Method, path: String) -> Result<(), FavoritesApiError> {
-        let response = self.execute(RequestSpec::new(
-            method,
-            path,
-            compatibility::SERVICE_FAVORITES,
-        ))?;
+        let response = self.execute(
+            RequestSpec::new(method, path, compatibility::SERVICE_FAVORITES).empty_body(),
+        )?;
         ensure_success(response.status)
     }
 }

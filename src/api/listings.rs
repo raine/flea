@@ -12,7 +12,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::{
     api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
     domain::{
-        commerce::{Price, TradeType, normalize_commerce_fields},
+        commerce::{Price, PriceKind, TradeType, normalize_commerce_fields},
         listing::{
             Category, CategoryList, CategorySearchContext, CategorySearchResult, ListingAction,
             ListingActionName, ListingCollection, ListingCopySource, ListingDetail, ListingFacet,
@@ -1085,10 +1085,11 @@ fn flatten_categories(roots: &[UpstreamCategory]) -> Result<Vec<Category>, Strin
 
 fn normalize_summary(
     raw: UpstreamListingSummary,
-    trade_type: TradeType,
+    mut trade_type: TradeType,
     mut price: Price,
 ) -> Result<ListingSummary, AppError> {
     let listing_id = value_id(&raw.id)?;
+    enrich_commerce_from_tori_subtitle(&raw.data.subtitle, &mut trade_type, &mut price);
     if price.display.is_none() {
         price.display = nonempty(raw.data.subtitle.clone());
     }
@@ -1119,7 +1120,8 @@ fn normalize_listing_detail_for_id(
         return Err(unexpected("listing detail returned a different ID"));
     }
     merge_summary_fields(&mut raw.fields, &raw.data, &listing_id);
-    let (trade_type, price) = commerce_from_fields(&raw.fields);
+    let (mut trade_type, mut price) = commerce_from_fields(&raw.fields);
+    enrich_commerce_from_tori_subtitle(&raw.data.subtitle, &mut trade_type, &mut price);
     let fields = display_fields(&raw.fields);
     Ok(ListingDetail {
         listing_id,
@@ -1130,6 +1132,75 @@ fn normalize_listing_detail_for_id(
         statistics: normalize_statistics(&raw.external_data),
         actions: raw.actions.into_iter().map(normalize_action).collect(),
     })
+}
+
+fn enrich_commerce_from_tori_subtitle(
+    subtitle: &str,
+    trade_type: &mut TradeType,
+    price: &mut Price,
+) {
+    let mut parts = subtitle.split_whitespace();
+    let Some(marketplace) = parts.next() else {
+        return;
+    };
+    let Some(trade_label) = parts.next() else {
+        return;
+    };
+    if !marketplace.eq_ignore_ascii_case("Tori") {
+        return;
+    }
+    let inferred_trade =
+        crate::domain::commerce::normalize_trade_type(Some(&Value::String(trade_label.to_owned())));
+    if inferred_trade == TradeType::Unknown {
+        return;
+    }
+    let amount_text = parts.collect::<Vec<_>>().join(" ");
+    let amount = euro_amount(&amount_text);
+    let mut fields = serde_json::Map::new();
+    fields.insert(
+        "trade_type".to_owned(),
+        Value::String(
+            inferred_trade
+                .normalized_value()
+                .expect("recognized trade type has a normalized value")
+                .to_owned(),
+        ),
+    );
+    if let Some(amount) = amount {
+        fields.insert("price".to_owned(), Value::Number(amount));
+        fields.insert("currency".to_owned(), Value::String("EUR".to_owned()));
+    }
+    fields.insert(
+        "price_display".to_owned(),
+        Value::String(subtitle.to_owned()),
+    );
+    let (inferred_trade, inferred_price) = normalize_commerce_fields(&fields);
+    if *trade_type == TradeType::Unknown {
+        *trade_type = inferred_trade;
+    }
+    if price.kind == PriceKind::Unavailable {
+        *price = inferred_price;
+    }
+}
+
+fn euro_amount(value: &str) -> Option<serde_json::Number> {
+    let value = value.trim().strip_suffix('€')?.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let normalized = value
+        .chars()
+        .filter(|character| !matches!(character, ' ' | '\u{a0}' | '\u{202f}'))
+        .map(|character| if character == ',' { '.' } else { character })
+        .collect::<String>();
+    if !normalized
+        .chars()
+        .all(|character| character.is_ascii_digit() || character == '.')
+        || normalized.matches('.').count() > 1
+    {
+        return None;
+    }
+    normalized.parse().ok()
 }
 
 fn summary_detail(summary: ListingSummary) -> ListingDetail {
