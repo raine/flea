@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::{
     api::{
-        favorites::HttpFavoritesApi, item::HttpPublicItemApi, listings::HttpListingsApi,
+        favorites::HttpFavoritesApi, listings::HttpListingsApi,
         saved_searches::HttpSavedSearchesApi,
     },
     cli::{
@@ -20,6 +20,7 @@ use crate::{
             adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
             auth::SchibstedToriAuthenticationApi,
             client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
+            item::HttpPublicItemApi,
             search::HttpPublicSearchApi,
             session as tori_session,
         },

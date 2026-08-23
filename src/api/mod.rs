@@ -7,7 +7,10 @@ pub mod client {
     pub use crate::marketplace::tori::client::*;
 }
 pub mod favorites;
-pub mod item;
+/// Compatibility path for Tori item capabilities.
+pub mod item {
+    pub use crate::marketplace::tori::item::*;
+}
 pub mod listings;
 pub mod saved_searches;
 /// Compatibility path for Tori search capabilities.

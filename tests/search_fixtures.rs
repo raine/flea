@@ -2,8 +2,8 @@ use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Mutex};
 
 use clap::Parser;
 use flea::{
-    api::item::{PublicItemApi, PublicItemApiError},
     cli::{Cli, Command, ToriCommand, search},
+    marketplace::tori::item::{PublicItemApi, PublicItemApiError},
     marketplace::tori::search::{
         PublicSearch, PublicSearchApi, SEARCH_FACET_OPTION_LIMIT, SearchApiError,
         UpstreamSearchRequest,

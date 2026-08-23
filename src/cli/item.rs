@@ -1,10 +1,10 @@
 use clap::{Args, Subcommand};
 
 use crate::{
-    api::item::{PublicItemApi, PublicItems},
     cli::outcome::CommandOutcome,
     domain::observation::Observation,
     error::AppError,
+    marketplace::tori::item::{PublicItemApi, PublicItems},
 };
 
 #[derive(Debug, Args)]

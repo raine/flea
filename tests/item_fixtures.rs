@@ -2,8 +2,8 @@ use std::{future::Future, pin::Pin, sync::Mutex};
 
 use clap::Parser;
 use flea::{
-    api::item::{PublicItemApi, PublicItemApiError, PublicItems},
     cli::{Cli, Command, ToriCommand, item},
+    marketplace::tori::item::{PublicItemApi, PublicItemApiError, PublicItems},
 };
 use serde_json::{Value, json};
 

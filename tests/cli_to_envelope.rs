@@ -9,7 +9,6 @@ use flea::{
     Presentation,
     api::{
         favorites::{FavoritesApi, HttpFavoritesApi},
-        item::HttpPublicItemApi,
         listings::HttpListingsApi,
         saved_searches::HttpSavedSearchesApi,
     },
@@ -26,6 +25,7 @@ use flea::{
             SecretString, ToriSession,
         },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
+        item::HttpPublicItemApi,
         search::HttpPublicSearchApi,
     },
     run_with_runtime,
