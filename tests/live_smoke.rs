@@ -91,6 +91,7 @@ fn invoke(arguments: &[&str]) -> Value {
         "the automated live harness must never publish"
     );
     let output = Command::new(env!("CARGO_BIN_EXE_flea"))
+        .arg("tori")
         .args(arguments)
         .args(["--format", "json"])
         .output()
