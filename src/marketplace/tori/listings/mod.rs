@@ -1,7 +1,14 @@
+mod gateway;
+mod normalization;
 pub(crate) mod observation;
 mod scan;
 mod taxonomy;
 
+pub use gateway::{
+    HttpListingsApi, ListingsApi, ListingsApiError, UpstreamAction, UpstreamFacet, UpstreamListing,
+    UpstreamListingPage, UpstreamListingSummary, UpstreamState, UpstreamStatistic,
+    UpstreamStatistics, UpstreamSummaryData,
+};
 pub use taxonomy::{
     CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategorySearchOptions, Taxonomy,
     TaxonomyApi, UpstreamCategory, UpstreamCategoryTaxonomy,
@@ -9,66 +16,35 @@ pub use taxonomy::{
 
 use std::{
     collections::{BTreeMap, HashSet},
-    fmt,
-    future::Future,
     ops::ControlFlow,
-    pin::Pin,
-    sync::Arc,
 };
 
+use normalization::{
+    collect_image_urls, commerce_from_fields, detail_observation_status, normalize_facet,
+    normalize_listing_detail_for_id, normalize_listing_for_id, normalize_summary, summary_detail,
+    summary_id, value_id,
+};
 use scan::{
     COLLECTION_PAGE_SIZE, CollectionPage, CollectionPageSource, CollectionScan,
     CollectionScanError, scan_collection,
 };
 
-use reqwest::{Method, StatusCode, header::HeaderValue};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
     domain::{
-        commerce::{Price, PriceKind, TradeType, normalize_commerce_fields},
+        commerce::{Price, TradeType},
         listing::{
-            ListingAction, ListingActionName, ListingCollection, ListingCopySource, ListingDetail,
-            ListingFacet, ListingMutation, ListingRef, ListingSnapshot, ListingState,
-            ListingStatistics, ListingSummary,
+            ListingCollection, ListingCopySource, ListingDetail, ListingMutation, ListingRef,
+            ListingSnapshot, ListingState, ListingSummary,
         },
         observation::{Observation, ObservationOperation},
     },
     error::{AppError, ExitClass},
-    marketplace::tori::client::{
-        HttpFailure, RequestSpec, ToriClient, compatibility, map_http_error,
-    },
     retry::{FailureKind, OperationMethod, RetryContext, classify},
 };
 
 pub const LISTING_PAGE_SIZE: usize = COLLECTION_PAGE_SIZE;
-
-pub trait ListingsApi: Send + Sync {
-    fn listing_page(
-        &self,
-        offset: usize,
-        limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListingPage, ListingsApiError>> + Send + '_>>;
-    fn listing<'a>(
-        &'a self,
-        listing_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>>;
-    fn update_listing<'a>(
-        &'a self,
-        listing_id: &'a str,
-        etag: &'a str,
-        fields: &'a BTreeMap<String, Value>,
-    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>>;
-    fn dispose_listing<'a>(
-        &'a self,
-        listing_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>>;
-    fn delete_listing<'a>(
-        &'a self,
-        listing_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>>;
-}
 
 struct ListingCollectionSource<'a> {
     api: &'a dyn ListingsApi,
@@ -94,312 +70,6 @@ impl CollectionPageSource for ListingCollectionSource<'_> {
                 status: None,
             })
     }
-}
-
-pub struct HttpListingsApi {
-    client: Arc<dyn ToriClient>,
-}
-
-impl HttpListingsApi {
-    pub fn new(client: Arc<dyn ToriClient>) -> Self {
-        Self { client }
-    }
-
-    async fn request<T: DeserializeOwned>(
-        &self,
-        method: Method,
-        path: String,
-        body: Option<Value>,
-        etag: Option<&str>,
-    ) -> Result<T, ListingsApiError> {
-        let mut request = RequestSpec::new(method, path, compatibility::SERVICE_AD_SUMMARIES);
-        if let Some(body) = body {
-            request = request.body(
-                serde_json::to_vec(&body)
-                    .map_err(|error| ListingsApiError::UnexpectedResponse(error.to_string()))?,
-                HeaderValue::from_static("application/json"),
-            );
-        }
-        if let Some(etag) = etag {
-            request = request
-                .if_match(HeaderValue::from_str(etag).map_err(|_| {
-                    ListingsApiError::UnexpectedResponse("invalid ETag".to_owned())
-                })?);
-        }
-        let response = self
-            .client
-            .execute(request)
-            .await
-            .map_err(map_http_error::<ListingsApiError>)?;
-        decode_response(response.status, &response.body)
-    }
-
-    async fn request_with_service<T: DeserializeOwned>(
-        &self,
-        method: Method,
-        path: String,
-        service: &str,
-    ) -> Result<T, ListingsApiError> {
-        let request = RequestSpec::new(method, path, service);
-        let response = self
-            .client
-            .execute(request)
-            .await
-            .map_err(map_http_error::<ListingsApiError>)?;
-        decode_response(response.status, &response.body)
-    }
-
-    async fn empty(&self, method: Method, path: String) -> Result<(), ListingsApiError> {
-        self.request::<Value>(method, path, None, None)
-            .await
-            .map(|_| ())
-    }
-}
-
-impl From<HttpFailure> for ListingsApiError {
-    fn from(failure: HttpFailure) -> Self {
-        match failure {
-            HttpFailure::Transport(_) => Self::Transport,
-            HttpFailure::Local(_) => Self::UnexpectedResponse("HTTP adapter failed".to_owned()),
-        }
-    }
-}
-
-fn decode_response<T: DeserializeOwned>(
-    status: StatusCode,
-    body: &[u8],
-) -> Result<T, ListingsApiError> {
-    match status {
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            return Err(ListingsApiError::Authentication);
-        }
-        StatusCode::NOT_FOUND => return Err(ListingsApiError::NotFound),
-        StatusCode::PRECONDITION_FAILED | StatusCode::CONFLICT => {
-            return Err(ListingsApiError::Conflict);
-        }
-        status if !status.is_success() => {
-            return Err(ListingsApiError::Upstream(status.as_u16()));
-        }
-        _ => {}
-    }
-    if body.is_empty() {
-        serde_json::from_value(Value::Null)
-    } else {
-        serde_json::from_slice(body)
-    }
-    .map_err(|error| ListingsApiError::UnexpectedResponse(error.to_string()))
-}
-
-impl TaxonomyApi for HttpListingsApi {
-    fn categories(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<UpstreamCategory>, ListingsApiError>> + Send + '_>>
-    {
-        Box::pin(async move {
-            self.request_with_service::<UpstreamCategoryTaxonomy>(
-                Method::GET,
-                "/categories/taxonomy".to_owned(),
-                compatibility::SERVICE_ITEM_CREATION,
-            )
-            .await
-            .map(|taxonomy| taxonomy.categories)
-        })
-    }
-}
-
-impl ListingsApi for HttpListingsApi {
-    fn listing_page(
-        &self,
-        offset: usize,
-        limit: usize,
-    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListingPage, ListingsApiError>> + Send + '_>>
-    {
-        Box::pin(self.request(
-            Method::GET,
-            format!("/search?limit={limit}&offset={offset}"),
-            None,
-            None,
-        ))
-    }
-
-    fn listing<'a>(
-        &'a self,
-        listing_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>> {
-        Box::pin(self.request(Method::GET, format!("/{listing_id}"), None, None))
-    }
-
-    fn update_listing<'a>(
-        &'a self,
-        listing_id: &'a str,
-        etag: &'a str,
-        fields: &'a BTreeMap<String, Value>,
-    ) -> Pin<Box<dyn Future<Output = Result<UpstreamListing, ListingsApiError>> + Send + 'a>> {
-        Box::pin(self.request(
-            Method::PUT,
-            format!("/my/listings/{listing_id}"),
-            Some(Value::Object(fields.clone().into_iter().collect())),
-            Some(etag),
-        ))
-    }
-
-    fn dispose_listing<'a>(
-        &'a self,
-        listing_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>> {
-        Box::pin(self.empty(Method::POST, format!("/my/listings/{listing_id}/dispose")))
-    }
-
-    fn delete_listing<'a>(
-        &'a self,
-        listing_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ListingsApiError>> + Send + 'a>> {
-        Box::pin(self.empty(Method::DELETE, format!("/my/listings/{listing_id}")))
-    }
-}
-
-#[derive(Clone, thiserror::Error, PartialEq)]
-pub enum ListingsApiError {
-    #[error("authentication failed")]
-    Authentication,
-    #[error("resource was not found")]
-    NotFound,
-    #[error("the resource changed remotely")]
-    Conflict,
-    #[error("listing validation failed: {message}")]
-    Validation {
-        message: String,
-        fields: BTreeMap<String, String>,
-    },
-    #[error("listing transport failed")]
-    Transport,
-    #[error("Tori listing service returned HTTP {0}")]
-    Upstream(u16),
-    #[error("unexpected upstream response: {0}")]
-    UnexpectedResponse(String),
-}
-
-impl fmt::Debug for ListingsApiError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Authentication => formatter.write_str("Authentication"),
-            Self::NotFound => formatter.write_str("NotFound"),
-            Self::Conflict => formatter.write_str("Conflict"),
-            Self::Validation { fields, .. } => formatter
-                .debug_struct("Validation")
-                .field("message", &"[REDACTED]")
-                .field("field_names", &fields.keys().collect::<Vec<_>>())
-                .finish(),
-            Self::Transport => formatter.write_str("Transport"),
-            Self::Upstream(status) => formatter.debug_tuple("Upstream").field(status).finish(),
-            Self::UnexpectedResponse(_) => formatter.write_str("UnexpectedResponse([REDACTED])"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct UpstreamListingPage {
-    #[serde(default, alias = "listings")]
-    pub summaries: Vec<UpstreamListingSummary>,
-    pub total: usize,
-    #[serde(default)]
-    pub facets: Vec<UpstreamFacet>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct UpstreamListingSummary {
-    pub id: Value,
-    #[serde(default)]
-    pub created: Option<String>,
-    #[serde(default)]
-    pub updated: Option<String>,
-    #[serde(default)]
-    pub expires: Option<String>,
-    #[serde(default, rename = "daysUntilExpires", alias = "days_until_expires")]
-    pub days_until_expires: Option<u64>,
-    #[serde(default)]
-    pub state: UpstreamState,
-    #[serde(default)]
-    pub actions: Vec<UpstreamAction>,
-    #[serde(default)]
-    pub data: UpstreamSummaryData,
-    #[serde(default, rename = "externalData", alias = "external_data")]
-    pub external_data: UpstreamStatistics,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct UpstreamState {
-    #[serde(default)]
-    pub label: String,
-    #[serde(default, rename = "type")]
-    pub state_type: String,
-    #[serde(default)]
-    pub display: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct UpstreamSummaryData {
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub subtitle: String,
-    #[serde(default)]
-    pub image: String,
-    #[serde(default, alias = "area", alias = "place")]
-    pub location: String,
-    #[serde(default, alias = "url", alias = "publicUrl")]
-    pub public_url: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct UpstreamStatistics {
-    #[serde(default, alias = "views")]
-    pub clicks: UpstreamStatistic,
-    #[serde(default)]
-    pub favorites: UpstreamStatistic,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct UpstreamStatistic {
-    #[serde(default)]
-    pub label: String,
-    #[serde(default)]
-    pub value: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct UpstreamAction {
-    #[serde(default)]
-    pub label: String,
-    #[serde(default)]
-    pub method: String,
-    #[serde(default)]
-    pub name: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-pub struct UpstreamFacet {
-    #[serde(default)]
-    pub label: String,
-    pub name: String,
-    pub total: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-pub struct UpstreamListing {
-    pub id: Value,
-    #[serde(default)]
-    pub etag: String,
-    #[serde(default)]
-    pub state: UpstreamState,
-    #[serde(default)]
-    pub fields: BTreeMap<String, Value>,
-    #[serde(default)]
-    pub data: UpstreamSummaryData,
-    #[serde(default)]
-    pub actions: Vec<UpstreamAction>,
-    #[serde(default, rename = "externalData", alias = "external_data")]
-    pub external_data: UpstreamStatistics,
 }
 
 pub struct Listings<'a> {
@@ -676,340 +346,6 @@ impl<'a> Listings<'a> {
     }
 }
 
-fn normalize_summary(
-    raw: UpstreamListingSummary,
-    mut trade_type: TradeType,
-    mut price: Price,
-) -> Result<ListingSummary, AppError> {
-    let listing_id = value_id(&raw.id)?;
-    enrich_commerce_from_tori_subtitle(&raw.data.subtitle, &mut trade_type, &mut price);
-    if price.display.is_none() {
-        price.display = nonempty(raw.data.subtitle.clone());
-    }
-    Ok(ListingSummary {
-        public_url: public_listing_url(&listing_id, &raw.data.public_url),
-        listing_id,
-        title: raw.data.title,
-        trade_type,
-        price,
-        state: normalize_state(&raw.state),
-        location: nonempty(raw.data.location),
-        image_url: nonempty(raw.data.image),
-        created_at: raw.created,
-        updated_at: raw.updated,
-        expires_at: raw.expires,
-        days_until_expires: raw.days_until_expires,
-        statistics: normalize_statistics(&raw.external_data),
-        actions: raw.actions.into_iter().map(normalize_action).collect(),
-    })
-}
-
-fn normalize_listing_detail_for_id(
-    mut raw: UpstreamListing,
-    expected_id: &str,
-) -> Result<ListingDetail, AppError> {
-    let listing_id = value_id(&raw.id)?;
-    if listing_id != expected_id {
-        return Err(unexpected("listing detail returned a different ID"));
-    }
-    merge_summary_fields(&mut raw.fields, &raw.data, &listing_id);
-    let (mut trade_type, mut price) = commerce_from_fields(&raw.fields);
-    enrich_commerce_from_tori_subtitle(&raw.data.subtitle, &mut trade_type, &mut price);
-    let fields = display_fields(&raw.fields);
-    Ok(ListingDetail {
-        listing_id,
-        state: normalize_state(&raw.state),
-        trade_type,
-        price,
-        fields,
-        statistics: normalize_statistics(&raw.external_data),
-        actions: raw.actions.into_iter().map(normalize_action).collect(),
-    })
-}
-
-fn enrich_commerce_from_tori_subtitle(
-    subtitle: &str,
-    trade_type: &mut TradeType,
-    price: &mut Price,
-) {
-    let mut parts = subtitle.split_whitespace();
-    let Some(marketplace) = parts.next() else {
-        return;
-    };
-    let Some(trade_label) = parts.next() else {
-        return;
-    };
-    if !marketplace.eq_ignore_ascii_case("Tori") {
-        return;
-    }
-    let inferred_trade =
-        crate::domain::commerce::normalize_trade_type(Some(&Value::String(trade_label.to_owned())));
-    if inferred_trade == TradeType::Unknown {
-        return;
-    }
-    let amount_text = parts.collect::<Vec<_>>().join(" ");
-    let amount = euro_amount(&amount_text);
-    let mut fields = serde_json::Map::new();
-    fields.insert(
-        "trade_type".to_owned(),
-        Value::String(
-            inferred_trade
-                .normalized_value()
-                .expect("recognized trade type has a normalized value")
-                .to_owned(),
-        ),
-    );
-    if let Some(amount) = amount {
-        fields.insert("price".to_owned(), Value::Number(amount));
-        fields.insert("currency".to_owned(), Value::String("EUR".to_owned()));
-    }
-    fields.insert(
-        "price_display".to_owned(),
-        Value::String(subtitle.to_owned()),
-    );
-    let (inferred_trade, inferred_price) = normalize_commerce_fields(&fields);
-    if *trade_type == TradeType::Unknown {
-        *trade_type = inferred_trade;
-    }
-    if price.kind == PriceKind::Unavailable {
-        *price = inferred_price;
-    }
-}
-
-fn euro_amount(value: &str) -> Option<serde_json::Number> {
-    let value = value.trim().strip_suffix('€')?.trim();
-    if value.is_empty() {
-        return None;
-    }
-    let normalized = value
-        .chars()
-        .filter(|character| !matches!(character, ' ' | '\u{a0}' | '\u{202f}'))
-        .map(|character| if character == ',' { '.' } else { character })
-        .collect::<String>();
-    if !normalized
-        .chars()
-        .all(|character| character.is_ascii_digit() || character == '.')
-        || normalized.matches('.').count() > 1
-    {
-        return None;
-    }
-    normalized.parse().ok()
-}
-
-fn summary_detail(summary: ListingSummary) -> ListingDetail {
-    let mut fields = BTreeMap::new();
-    fields.insert("title".to_owned(), Value::String(summary.title));
-    if let Some(location) = summary.location {
-        fields.insert("location".to_owned(), Value::String(location));
-    }
-    if let Some(image) = summary.image_url {
-        fields.insert("image".to_owned(), Value::String(image));
-    }
-    fields.insert("public_url".to_owned(), Value::String(summary.public_url));
-    ListingDetail {
-        listing_id: summary.listing_id,
-        state: summary.state,
-        trade_type: summary.trade_type,
-        price: summary.price,
-        fields,
-        statistics: summary.statistics,
-        actions: summary.actions,
-    }
-}
-
-fn merge_summary_fields(
-    fields: &mut BTreeMap<String, Value>,
-    data: &UpstreamSummaryData,
-    listing_id: &str,
-) {
-    for (key, value) in [
-        ("title", data.title.as_str()),
-        ("price_display", data.subtitle.as_str()),
-        ("location", data.location.as_str()),
-        ("image", data.image.as_str()),
-    ] {
-        if !value.is_empty() {
-            fields
-                .entry(key.to_owned())
-                .or_insert_with(|| Value::String(value.to_owned()));
-        }
-    }
-    fields
-        .entry("public_url".to_owned())
-        .or_insert_with(|| Value::String(public_listing_url(listing_id, &data.public_url)));
-}
-
-fn public_listing_url(listing_id: &str, upstream: &str) -> String {
-    if upstream.starts_with("https://www.tori.fi/") {
-        upstream.to_owned()
-    } else {
-        format!("https://www.tori.fi/recommerce/forsale/item/{listing_id}")
-    }
-}
-
-fn detail_observation_status(error: &ListingsApiError) -> &'static str {
-    match error {
-        ListingsApiError::NotFound => "not_found",
-        ListingsApiError::UnexpectedResponse(_) => "unrecognized_model",
-        ListingsApiError::Transport | ListingsApiError::Upstream(_) => "unavailable",
-        _ => "rejected",
-    }
-}
-
-fn summary_id(value: &Value) -> Result<String, ListingsApiError> {
-    match value {
-        Value::String(value) if !value.is_empty() => Ok(value.clone()),
-        Value::Number(value) => Ok(value.to_string()),
-        _ => Err(ListingsApiError::UnexpectedResponse(
-            "listing summary has an invalid ID".to_owned(),
-        )),
-    }
-}
-
-fn normalize_listing_for_id(
-    raw: UpstreamListing,
-    expected_id: &str,
-) -> Result<ListingSnapshot, AppError> {
-    let snapshot = normalize_listing(raw)?;
-    if snapshot.detail.listing_id != expected_id {
-        return Err(unexpected("listing detail returned a different ID"));
-    }
-    Ok(snapshot)
-}
-
-fn normalize_listing(raw: UpstreamListing) -> Result<ListingSnapshot, AppError> {
-    if raw.etag.trim().is_empty() {
-        return Err(unexpected("listing detail omitted its ETag"));
-    }
-    let source_fields = raw.fields;
-    let (trade_type, price) = commerce_from_fields(&source_fields);
-    Ok(ListingSnapshot {
-        detail: ListingDetail {
-            listing_id: value_id(&raw.id)?,
-            state: normalize_state(&raw.state),
-            trade_type,
-            price,
-            fields: display_fields(&source_fields),
-            statistics: normalize_statistics(&raw.external_data),
-            actions: raw.actions.into_iter().map(normalize_action).collect(),
-        },
-        etag: raw.etag,
-        source_fields,
-    })
-}
-
-fn commerce_from_fields(fields: &BTreeMap<String, Value>) -> (TradeType, Price) {
-    let object = fields
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    normalize_commerce_fields(&object)
-}
-
-fn display_fields(fields: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
-    fields
-        .iter()
-        .filter(|(key, _)| {
-            !matches!(
-                key.as_str(),
-                "price"
-                    | "price_amount"
-                    | "priceAmount"
-                    | "currency"
-                    | "currencyCode"
-                    | "currency_code"
-                    | "trade_type"
-                    | "tradeType"
-                    | "adViewTypeLabel"
-                    | "price_display"
-                    | "priceText"
-                    | "price_text"
-                    | "subtitle"
-            )
-        })
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
-}
-
-fn normalize_facet(raw: UpstreamFacet) -> ListingFacet {
-    ListingFacet {
-        state: normalize_state_name(&raw.name),
-        label: raw.label,
-        total: raw.total,
-    }
-}
-
-fn normalize_state(raw: &UpstreamState) -> ListingState {
-    let value = [&raw.state_type, &raw.display, &raw.label]
-        .into_iter()
-        .find(|value| !value.trim().is_empty())
-        .map_or("", String::as_str);
-    normalize_state_name(value)
-}
-
-fn normalize_state_name(value: &str) -> ListingState {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "all" => ListingState::All,
-        "active" | "published" => ListingState::Active,
-        "pending" | "review" => ListingState::Pending,
-        "expired" => ListingState::Expired,
-        "disposed" | "sold" => ListingState::Disposed,
-        "draft" => ListingState::Draft,
-        _ => ListingState::Unknown,
-    }
-}
-
-fn normalize_action(raw: UpstreamAction) -> ListingAction {
-    let name = match raw.name.trim().to_ascii_lowercase().as_str() {
-        "edit" => ListingActionName::Edit,
-        "dispose" => ListingActionName::Dispose,
-        "delete" => ListingActionName::Delete,
-        "republish" | "recreate" => ListingActionName::Republish,
-        "undispose" | "activate" => ListingActionName::Undispose,
-        "view" | "show" => ListingActionName::View,
-        _ => ListingActionName::Unknown,
-    };
-    ListingAction {
-        name,
-        label: raw.label,
-        method: raw.method.to_ascii_uppercase(),
-    }
-}
-
-fn normalize_statistics(raw: &UpstreamStatistics) -> ListingStatistics {
-    ListingStatistics {
-        views: parse_statistic(&raw.clicks.value),
-        favorites: parse_statistic(&raw.favorites.value),
-    }
-}
-
-fn parse_statistic(value: &str) -> Option<u64> {
-    let digits: String = value.chars().filter(char::is_ascii_digit).collect();
-    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
-}
-
-fn collect_image_urls(value: &Value, output: &mut Vec<String>) {
-    match value {
-        Value::String(url) if !url.is_empty() => output.push(url.clone()),
-        Value::Array(values) => {
-            for value in values {
-                collect_image_urls(value, output);
-            }
-        }
-        Value::Object(object) => {
-            for key in ["url", "uri", "src", "image_url"] {
-                if let Some(Value::String(url)) = object.get(key)
-                    && !url.is_empty()
-                {
-                    output.push(url.clone());
-                    break;
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 fn validate_changes(changes: &BTreeMap<String, Value>) -> Result<(), AppError> {
     if let Some(value) = changes.get("trade_type") {
         let valid = matches!(value.as_str(), Some("sell" | "give_away" | "wanted"));
@@ -1080,18 +416,6 @@ fn validate_id(listing_id: &str) -> Result<(), AppError> {
     } else {
         Ok(())
     }
-}
-
-fn value_id(value: &Value) -> Result<String, AppError> {
-    match value {
-        Value::String(value) if !value.is_empty() => Ok(value.clone()),
-        Value::Number(value) => Ok(value.to_string()),
-        _ => Err(unexpected("listing has an invalid ID")),
-    }
-}
-
-fn nonempty(value: String) -> Option<String> {
-    (!value.is_empty()).then_some(value)
 }
 
 fn validation_error(field: &str, message: &str) -> AppError {
@@ -1294,7 +618,7 @@ fn reconciliation_scan_error(error: CollectionScanError<ListingsApiError>) -> Li
     }
 }
 
-fn unexpected(message: &str) -> AppError {
+pub(super) fn unexpected(message: &str) -> AppError {
     upstream_error(
         ListingsApiError::UnexpectedResponse(message.to_owned()),
         RetryContext::read(OperationMethod::Get),
