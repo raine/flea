@@ -73,7 +73,7 @@ where
         let result = catch_unwind(AssertUnwindSafe(|| {
             finish(
                 cli.format,
-                cli::dispatch_with_runtime(cli.command, &runtime),
+                execute_command(cli.command, &runtime),
                 Some(session.context()),
                 plain_presentation,
                 context,
@@ -109,7 +109,7 @@ where
     catch_unwind(AssertUnwindSafe(|| {
         finish(
             cli.format,
-            cli::dispatch_with_runtime(cli.command, runtime),
+            execute_command(cli.command, runtime),
             None,
             plain_presentation,
             context,
@@ -124,6 +124,17 @@ where
             context,
         )
     })
+}
+
+fn execute_command(
+    command: cli::Command,
+    runtime: &dyn cli::CommandRuntime,
+) -> Result<serde_json::Value, AppError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the Tokio runtime uses static configuration")
+        .block_on(cli::dispatch_with_runtime(command, runtime))
 }
 
 fn clap_presentation(error: clap::Error) -> RunResult {

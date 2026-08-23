@@ -13,7 +13,7 @@ pub mod search;
 pub mod skill;
 pub mod vinted_search;
 
-use std::ffi::OsString;
+use std::{ffi::OsString, future::Future, pin::Pin};
 
 use clap::{Args, Parser, Subcommand};
 use serde_json::Value;
@@ -173,17 +173,19 @@ pub enum VintedCommand {
     Unsupported(Vec<OsString>),
 }
 
+pub type CommandFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, AppError>> + 'a>>;
+
 pub trait CommandRuntime {
-    fn execute(&self, command: Command) -> Result<Value, AppError>;
+    fn execute(&self, command: Command) -> CommandFuture<'_>;
 }
 
-pub fn dispatch(command: Command) -> Result<Value, AppError> {
-    runtime::ProductionRuntime.execute(command)
+pub async fn dispatch(command: Command) -> Result<Value, AppError> {
+    runtime::ProductionRuntime.execute(command).await
 }
 
-pub fn dispatch_with_runtime(
+pub async fn dispatch_with_runtime(
     command: Command,
     runtime: &dyn CommandRuntime,
 ) -> Result<Value, AppError> {
-    runtime.execute(command)
+    runtime.execute(command).await
 }

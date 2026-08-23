@@ -13,7 +13,7 @@ use crate::{
         search::HttpPublicSearchApi,
     },
     cli::{
-        Command, CommandRuntime, ToriCommand, VintedCommand,
+        Command, CommandFuture, CommandRuntime, ToriCommand, VintedCommand,
         auth::{AuthCommandHandler, FileAuthStore, unix_time_now},
         auth_callback, category, draft, favorite, listing, saved_search, vinted_search,
     },
@@ -33,24 +33,26 @@ use crate::{
 pub struct ProductionRuntime;
 
 impl CommandRuntime for ProductionRuntime {
-    fn execute(&self, command: Command) -> Result<Value, AppError> {
-        match command {
-            Command::Capabilities => capabilities_output(),
-            Command::Marketplaces => marketplaces_output(),
-            Command::Tori(args) => execute_tori(args.command),
-            Command::Vinted(args) => execute_vinted(args.portal, args.command),
-            Command::Skill(args) => super::skill::dispatch(args),
-            Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
-        }
+    fn execute(&self, command: Command) -> CommandFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::Capabilities => capabilities_output(),
+                Command::Marketplaces => marketplaces_output(),
+                Command::Tori(args) => execute_tori(args.command).await,
+                Command::Vinted(args) => execute_vinted(args.portal, args.command).await,
+                Command::Skill(args) => super::skill::dispatch(args),
+                Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
+            }
+        })
     }
 }
 
-fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
+async fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
     match command {
-        ToriCommand::Auth(args) => execute_tori_auth(args),
+        ToriCommand::Auth(args) => execute_tori_auth(args).await,
         ToriCommand::Capabilities => marketplace_capabilities(MarketplaceId::Tori),
         ToriCommand::Category(args) => {
-            let client = tori_session::authenticated_client()?;
+            let client = tori_session::authenticated_client().await?;
             let api = HttpListingsApi::new(Arc::new(client));
             category::dispatch_with_api(args, &api)
         }
@@ -63,18 +65,18 @@ fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
                 verify_category: true,
                 ..
             } => {
-                let client = tori_session::authenticated_client()?;
+                let client = tori_session::authenticated_client().await?;
                 let api = HttpListingsApi::new(Arc::new(client));
                 draft::execute_preview(command, Some(&api))
             }
             command => {
-                let client = tori_session::authenticated_client()?;
+                let client = tori_session::authenticated_client().await?;
                 let api = HttpAdInputApi::new(ClientTransport::new(client));
-                block_on(draft::execute(command, api, WorkflowConfig::default()))
+                draft::execute(command, api, WorkflowConfig::default()).await
             }
         },
         ToriCommand::Favorite(args) => {
-            let client = tori_session::authenticated_client()?;
+            let client = tori_session::authenticated_client().await?;
             let api = HttpFavoritesApi::new(Arc::new(client));
             favorite::dispatch_with_api(args, &api)
         }
@@ -83,7 +85,7 @@ fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
             super::item::dispatch_with_api(args, &api)
         }
         ToriCommand::Listing(args) => {
-            let client = tori_session::authenticated_client()?;
+            let client = tori_session::authenticated_client().await?;
             let api = HttpListingsApi::new(Arc::new(client));
             listing::dispatch_with_api(args, &api)
         }
@@ -94,7 +96,7 @@ fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
         }
         ToriCommand::SavedSearch(args) => {
             let client: Arc<dyn crate::api::client::ToriClient> =
-                Arc::new(tori_session::authenticated_client()?);
+                Arc::new(tori_session::authenticated_client().await?);
             let api = HttpSavedSearchesApi::new(Arc::clone(&client));
             let search_api = HttpPublicSearchApi::new(client);
             saved_search::dispatch_with_apis(*args, &api, &search_api)
@@ -106,7 +108,7 @@ fn execute_tori(command: ToriCommand) -> Result<Value, AppError> {
     }
 }
 
-fn execute_vinted(
+async fn execute_vinted(
     portal: crate::marketplace::PortalId,
     command: VintedCommand,
 ) -> Result<Value, AppError> {
@@ -124,12 +126,12 @@ fn execute_vinted(
                     ));
                 }
             };
-            session::execute_auth(portal, operation)
+            session::execute_auth(portal, operation).await
         }
         VintedCommand::Capabilities => marketplace_capabilities(MarketplaceId::Vinted),
         VintedCommand::Search(args) => {
             let credentials = crate::marketplace::vinted::session::credentials(portal)?;
-            block_on(vinted_search::dispatch(args, &credentials))
+            vinted_search::dispatch(args, &credentials).await
         }
         VintedCommand::Unsupported(parts) => Err(capability_unavailable(
             MarketplaceContext::VINTED_FI,
@@ -217,7 +219,7 @@ fn first_external_command(parts: &[std::ffi::OsString]) -> &str {
         .unwrap_or("unknown")
 }
 
-fn execute_tori_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
+async fn execute_tori_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
     let command = match args.command {
         super::auth::AuthCommand::Callback {
             state_root,
@@ -232,19 +234,19 @@ fn execute_tori_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
     };
     let paths = tori_session::state_paths()?;
     match command {
-        super::auth::AuthCommand::Login => execute_interactive_login(paths),
-        super::auth::AuthCommand::Status => tori_session::status(),
+        super::auth::AuthCommand::Login => execute_interactive_login(paths).await,
+        super::auth::AuthCommand::Status => tori_session::status().await,
         command => {
             let store = FileAuthStore::new(paths);
             let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
-            block_on(handler.dispatch(command))
+            handler.dispatch(command).await
         }
     }
 }
 
-fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError> {
+async fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError> {
     auth_callback::prepare(&paths)?;
-    let result = (|| {
+    let result = async {
         let store = FileAuthStore::new(paths.clone());
         let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
         let started = handler.start(unix_time_now()?)?;
@@ -257,8 +259,11 @@ fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError> {
                 AppError::unexpected("authentication start returned an invalid expiry")
             })?;
         let callback = auth_callback::open_and_wait(&paths, login_url, expires_at_unix)?;
-        block_on(handler.complete(&flow_id, &callback, unix_time_now()?))
-    })();
+        handler
+            .complete(&flow_id, &callback, unix_time_now()?)
+            .await
+    }
+    .await;
     let cleared = auth_callback::clear(&paths);
     match result {
         Ok(value) => cleared.map(|()| value),
@@ -288,12 +293,4 @@ fn public_client() -> HttpClient<ReqwestTransport> {
         },
         None,
     )
-}
-
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("the Tokio runtime uses static configuration")
-        .block_on(future)
 }

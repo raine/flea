@@ -20,20 +20,23 @@ pub(crate) enum AuthOperation {
     Logout,
 }
 
-pub(crate) fn execute_auth(portal: PortalId, operation: AuthOperation) -> Result<Value, AppError> {
+pub(crate) async fn execute_auth(
+    portal: PortalId,
+    operation: AuthOperation,
+) -> Result<Value, AppError> {
     if portal != PortalId::Fi {
         return Err(AppError::usage("the selected Vinted portal is unavailable"));
     }
     let paths = StatePaths::discover(MarketplaceContext::VINTED_FI)
         .map_err(|error| storage_error(error, "discover"))?;
     match operation {
-        AuthOperation::Login => execute_login(paths),
-        AuthOperation::Status => execute_status(paths),
+        AuthOperation::Login => execute_login(paths).await,
+        AuthOperation::Status => execute_status(paths).await,
         AuthOperation::Logout => execute_logout(paths),
     }
 }
 
-fn execute_login(paths: StatePaths) -> Result<Value, AppError> {
+async fn execute_login(paths: StatePaths) -> Result<Value, AppError> {
     let auth = VintedAuthentication::new();
     let (flow, start) = auth.start(unix_time_now()?)?;
     let callback = super::interactive::open_and_capture_callback(
@@ -41,7 +44,7 @@ fn execute_login(paths: StatePaths) -> Result<Value, AppError> {
         &start.login_url,
         start.expires_at_unix,
     )?;
-    let completion = block_on(auth.complete(&flow, &callback, unix_time_now()?))?;
+    let completion = auth.complete(&flow, &callback, unix_time_now()?).await?;
     VintedCredentialStore::new(paths)
         .save(&completion.credentials)
         .map_err(|error| storage_error(error, "write"))?;
@@ -67,7 +70,7 @@ struct VintedAuthStatus {
     next_actions: Vec<NextAction>,
 }
 
-fn execute_status(paths: StatePaths) -> Result<Value, AppError> {
+async fn execute_status(paths: StatePaths) -> Result<Value, AppError> {
     let now = unix_time_now()?;
     let Some(credentials) = VintedCredentialStore::new(paths)
         .load()
@@ -88,7 +91,9 @@ fn execute_status(paths: StatePaths) -> Result<Value, AppError> {
         );
     }
 
-    let (_, login) = match block_on(VintedAuthentication::new().validate_credentials(&credentials))
+    let (_, login) = match VintedAuthentication::new()
+        .validate_credentials(&credentials)
+        .await
     {
         Ok(account) => account,
         Err(error) => {
@@ -254,14 +259,6 @@ fn unix_time_now() -> Result<u64, AppError> {
         })
 }
 
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("the Tokio runtime uses static configuration")
-        .block_on(future)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,15 +277,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn missing_status_preserves_the_exact_auth_document() {
+    #[tokio::test]
+    async fn missing_status_preserves_the_exact_auth_document() {
         let temporary = tempfile::tempdir().unwrap();
         let paths = StatePaths::from_root(
             temporary.path().join("state"),
             MarketplaceContext::VINTED_FI,
         );
 
-        let status = execute_status(paths).unwrap();
+        let status = execute_status(paths).await.unwrap();
 
         assert_eq!(
             status,

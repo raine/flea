@@ -20,7 +20,7 @@ use flea::{
         search::HttpPublicSearchApi,
     },
     cli::{
-        Command, CommandRuntime, ToriCommand,
+        Command, CommandFuture, CommandRuntime, ToriCommand,
         auth::{AuthCommandHandler, AuthStore},
         category, draft, favorite, item, listing, location, saved_search, search,
     },
@@ -67,75 +67,81 @@ struct TestRuntime {
 }
 
 impl CommandRuntime for TestRuntime {
-    fn execute(&self, command: Command) -> Result<Value, AppError> {
-        match command {
-            Command::Tori(args) => match args.command {
-                ToriCommand::Auth(args) => match args.command {
-                    flea::cli::auth::AuthCommand::Login => {
-                        Ok(json!({ "authenticated": true, "user_id": "user-1" }))
+    fn execute(&self, command: Command) -> CommandFuture<'_> {
+        Box::pin(async move {
+            match command {
+                Command::Tori(args) => match args.command {
+                    ToriCommand::Auth(args) => match args.command {
+                        flea::cli::auth::AuthCommand::Login => {
+                            Ok(json!({ "authenticated": true, "user_id": "user-1" }))
+                        }
+                        command => {
+                            AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
+                                .dispatch(command)
+                                .await
+                        }
+                    },
+                    ToriCommand::Capabilities => {
+                        unreachable!("capabilities use the production runtime")
                     }
-                    command => block_on(
-                        AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
-                            .dispatch(command),
-                    ),
-                },
-                ToriCommand::Capabilities => {
-                    unreachable!("capabilities use the production runtime")
-                }
-                ToriCommand::Category(args) => {
-                    let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                    category::dispatch_with_api(args, &api)
-                }
-                ToriCommand::Draft(args) => match args.command {
-                    command @ flea::cli::draft::DraftCommand::Preview {
-                        verify_category: false,
-                        ..
-                    } => draft::execute_preview(command, None),
-                    command @ flea::cli::draft::DraftCommand::Preview {
-                        verify_category: true,
-                        ..
-                    } => {
+                    ToriCommand::Category(args) => {
                         let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                        draft::execute_preview(command, Some(&api))
+                        category::dispatch_with_api(args, &api)
                     }
-                    command => block_on(draft::execute(
-                        command,
-                        HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
-                        WorkflowConfig::default(),
-                    )),
+                    ToriCommand::Draft(args) => match args.command {
+                        command @ flea::cli::draft::DraftCommand::Preview {
+                            verify_category: false,
+                            ..
+                        } => draft::execute_preview(command, None),
+                        command @ flea::cli::draft::DraftCommand::Preview {
+                            verify_category: true,
+                            ..
+                        } => {
+                            let api = HttpListingsApi::new(Arc::new(self.client.clone()));
+                            draft::execute_preview(command, Some(&api))
+                        }
+                        command => {
+                            draft::execute(
+                                command,
+                                HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
+                                WorkflowConfig::default(),
+                            )
+                            .await
+                        }
+                    },
+                    ToriCommand::Favorite(args) => {
+                        let api = HttpFavoritesApi::new(Arc::new(self.client.clone()));
+                        favorite::dispatch_with_api(args, &api)
+                    }
+                    ToriCommand::Item(args) => {
+                        let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
+                        item::dispatch_with_api(args, &api)
+                    }
+                    ToriCommand::Listing(args) => {
+                        let api = HttpListingsApi::new(Arc::new(self.client.clone()));
+                        listing::dispatch_with_api(args, &api)
+                    }
+                    ToriCommand::Search(args) => {
+                        let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
+                        search::dispatch_with_api(*args, &api)
+                    }
+                    ToriCommand::SavedSearch(args) => {
+                        let api = HttpSavedSearchesApi::new(Arc::new(self.client.clone()));
+                        let search_api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
+                        saved_search::dispatch_with_apis(*args, &api, &search_api)
+                    }
+                    ToriCommand::Location(args) => {
+                        let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
+                        location::dispatch_with_api(args, &api)
+                    }
                 },
-                ToriCommand::Favorite(args) => {
-                    let api = HttpFavoritesApi::new(Arc::new(self.client.clone()));
-                    favorite::dispatch_with_api(args, &api)
-                }
-                ToriCommand::Item(args) => {
-                    let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
-                    item::dispatch_with_api(args, &api)
-                }
-                ToriCommand::Listing(args) => {
-                    let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                    listing::dispatch_with_api(args, &api)
-                }
-                ToriCommand::Search(args) => {
-                    let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                    search::dispatch_with_api(*args, &api)
-                }
-                ToriCommand::SavedSearch(args) => {
-                    let api = HttpSavedSearchesApi::new(Arc::new(self.client.clone()));
-                    let search_api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                    saved_search::dispatch_with_apis(*args, &api, &search_api)
-                }
-                ToriCommand::Location(args) => {
-                    let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                    location::dispatch_with_api(args, &api)
-                }
-            },
-            Command::Skill(args) => flea::cli::skill::dispatch(args),
-            Command::Capabilities
-            | Command::Marketplaces
-            | Command::Vinted(_)
-            | Command::Unsupported(_) => unreachable!("command uses the production runtime"),
-        }
+                Command::Skill(args) => flea::cli::skill::dispatch(args),
+                Command::Capabilities
+                | Command::Marketplaces
+                | Command::Vinted(_)
+                | Command::Unsupported(_) => unreachable!("command uses the production runtime"),
+            }
+        })
     }
 }
 
@@ -1798,12 +1804,4 @@ fn draft_with_images(etag: &str, state: &str) -> Value {
             "mime_type": "image/png"
         }]
     })
-}
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(future)
 }

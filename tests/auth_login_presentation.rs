@@ -1,11 +1,14 @@
-use flea::{Presentation, cli::CommandRuntime, error::AppError};
+use flea::{
+    Presentation,
+    cli::{CommandFuture, CommandRuntime},
+};
 use serde_json::{Value, json};
 
 struct AuthLoginRuntime;
 
 impl CommandRuntime for AuthLoginRuntime {
-    fn execute(&self, _command: flea::cli::Command) -> Result<Value, AppError> {
-        Ok(json!({ "authenticated": true, "user_id": "42" }))
+    fn execute(&self, _command: flea::cli::Command) -> CommandFuture<'_> {
+        Box::pin(async { Ok(json!({ "authenticated": true, "user_id": "42" })) })
     }
 }
 

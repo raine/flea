@@ -15,20 +15,22 @@ use crate::{
     },
 };
 
-pub(crate) fn authenticated_client() -> Result<HttpClient<ReqwestTransport>, AppError> {
+pub(crate) async fn authenticated_client() -> Result<HttpClient<ReqwestTransport>, AppError> {
     authenticated_client_with(
         state_paths()?,
         &SchibstedToriAuthenticationApi::new(),
         unix_time_now()?,
     )
+    .await
 }
 
-pub(crate) fn status() -> Result<Value, AppError> {
+pub(crate) async fn status() -> Result<Value, AppError> {
     auth_status(
         state_paths()?,
         &SchibstedToriAuthenticationApi::new(),
         unix_time_now()?,
     )
+    .await
 }
 
 const MINIMUM_BEARER_LIFETIME_SECONDS: u64 = 30;
@@ -70,12 +72,13 @@ struct AuthStatusOutput {
     next_actions: Vec<NextAction>,
 }
 
-fn authenticated_client_with<S: GatewaySigner>(
+async fn authenticated_client_with<S: GatewaySigner>(
     paths: StatePaths,
     api: &SchibstedToriAuthenticationApi<S>,
     now: u64,
 ) -> Result<HttpClient<ReqwestTransport>, AppError> {
     let resolved = resolve_credentials_with(paths, api, now)
+        .await
         .map_err(|failure| *failure.error)?
         .ok_or_else(auth_required)?;
     let record = resolved.record;
@@ -89,7 +92,7 @@ fn authenticated_client_with<S: GatewaySigner>(
     ))
 }
 
-fn resolve_credentials_with<S: GatewaySigner>(
+async fn resolve_credentials_with<S: GatewaySigner>(
     paths: StatePaths,
     api: &SchibstedToriAuthenticationApi<S>,
     now: u64,
@@ -118,28 +121,30 @@ fn resolve_credentials_with<S: GatewaySigner>(
     let device_id = record.device_id.clone();
     let installation_id = record.installation_id.clone();
     let ab_test_device_id = record.ab_test_device_id.clone();
-    let credentials = block_on(api.refresh_credentials(
-        RefreshRequest {
-            refresh_token: &refresh_token,
-            id_token: id_token.as_deref(),
-            device_id: &device_id,
-            installation_id: &installation_id,
-            ab_test_device_id: &ab_test_device_id,
-            now_unix: now,
-        },
-        |rotated_refresh_token, refreshed_id_token| {
-            record.refresh_token = rotated_refresh_token.to_owned();
-            record.id_token = refreshed_id_token.map(str::to_owned);
-            locked
-                .save(&record)
-                .map_err(|error| auth_storage(error, "write_rotation"))
-        },
-    ))
-    .map_err(|error| CredentialResolutionFailure {
-        error: Box::new(error),
-        stored_bearer_state: Some(stored_bearer_state),
-        bearer_expires_at_unix: Some(expires_at),
-    })?;
+    let credentials = api
+        .refresh_credentials(
+            RefreshRequest {
+                refresh_token: &refresh_token,
+                id_token: id_token.as_deref(),
+                device_id: &device_id,
+                installation_id: &installation_id,
+                ab_test_device_id: &ab_test_device_id,
+                now_unix: now,
+            },
+            |rotated_refresh_token, refreshed_id_token| {
+                record.refresh_token = rotated_refresh_token.to_owned();
+                record.id_token = refreshed_id_token.map(str::to_owned);
+                locked
+                    .save(&record)
+                    .map_err(|error| auth_storage(error, "write_rotation"))
+            },
+        )
+        .await
+        .map_err(|error| CredentialResolutionFailure {
+            error: Box::new(error),
+            stored_bearer_state: Some(stored_bearer_state),
+            bearer_expires_at_unix: Some(expires_at),
+        })?;
     record = serde_json::to_value(credentials)
         .and_then(serde_json::from_value)
         .map_err(|error| CredentialResolutionFailure {
@@ -169,12 +174,12 @@ fn bearer_state(record: &CredentialRecord, now: u64) -> StoredBearerState {
     }
 }
 
-fn auth_status<S: GatewaySigner>(
+async fn auth_status<S: GatewaySigner>(
     paths: StatePaths,
     api: &SchibstedToriAuthenticationApi<S>,
     now: u64,
 ) -> Result<Value, AppError> {
-    let output = match resolve_credentials_with(paths, api, now) {
+    let output = match resolve_credentials_with(paths, api, now).await {
         Ok(Some(resolved)) => AuthStatusOutput {
             authenticated: true,
             health: if resolved.refreshed_from.is_some() {
@@ -325,14 +330,6 @@ fn unix_time_now() -> Result<u64, AppError> {
         })
 }
 
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("the Tokio runtime uses static configuration")
-        .block_on(future)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -429,8 +426,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn concurrent_clients_share_one_rotating_refresh() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_clients_share_one_rotating_refresh() {
         let temporary = tempdir().unwrap();
         let paths = StatePaths::from_root(
             temporary.path().join("state"),
@@ -449,15 +446,17 @@ mod tests {
                 let api = Arc::clone(&api);
                 let paths = paths.clone();
                 let barrier = Arc::clone(&barrier);
-                thread::spawn(move || {
+                tokio::spawn(async move {
                     barrier.wait();
-                    authenticated_client_with(paths, api.as_ref(), 1_000).unwrap();
+                    authenticated_client_with(paths, api.as_ref(), 1_000)
+                        .await
+                        .unwrap();
                 })
             })
             .collect::<Vec<_>>();
         barrier.wait();
         for worker in workers {
-            worker.join().unwrap();
+            worker.await.unwrap();
         }
         server.join().unwrap();
 
@@ -468,15 +467,17 @@ mod tests {
         assert_eq!(stored.bearer_expires_at_unix, 4_600);
     }
 
-    #[test]
-    fn status_reports_missing_credentials_with_login_action() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn status_reports_missing_credentials_with_login_action() {
         let temporary = tempdir().unwrap();
         let paths = StatePaths::from_root(
             temporary.path().join("state"),
             crate::marketplace::MarketplaceContext::TORI_FI,
         );
 
-        let status = auth_status(paths, &SchibstedToriAuthenticationApi::new(), 1_000).unwrap();
+        let status = auth_status(paths, &SchibstedToriAuthenticationApi::new(), 1_000)
+            .await
+            .unwrap();
 
         assert_eq!(
             status,
@@ -490,8 +491,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn status_reports_locally_valid_credentials_without_network_access() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn status_reports_locally_valid_credentials_without_network_access() {
         let temporary = tempdir().unwrap();
         let paths = StatePaths::from_root(
             temporary.path().join("state"),
@@ -503,7 +504,9 @@ mod tests {
             .save(&credentials)
             .unwrap();
 
-        let status = auth_status(paths, &SchibstedToriAuthenticationApi::new(), 1_000).unwrap();
+        let status = auth_status(paths, &SchibstedToriAuthenticationApi::new(), 1_000)
+            .await
+            .unwrap();
 
         assert_eq!(status["authenticated"], true);
         assert_eq!(status["health"], "valid");
@@ -513,8 +516,8 @@ mod tests {
         assert_eq!(status["user_id"], "user");
     }
 
-    #[test]
-    fn status_refreshes_near_expiry_and_expired_credentials() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn status_refreshes_near_expiry_and_expired_credentials() {
         for (expires_at, expected_state) in [(1_030, "near_expiry"), (999, "expired")] {
             let temporary = tempdir().unwrap();
             let paths = StatePaths::from_root(
@@ -530,7 +533,7 @@ mod tests {
             let api =
                 SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url);
 
-            let status = auth_status(paths.clone(), &api, 1_000).unwrap();
+            let status = auth_status(paths.clone(), &api, 1_000).await.unwrap();
             server.join().unwrap();
 
             assert_eq!(status["authenticated"], true);
@@ -550,8 +553,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn status_distinguishes_refresh_rejection_without_exposing_secrets() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn status_distinguishes_refresh_rejection_without_exposing_secrets() {
         let temporary = tempdir().unwrap();
         let paths = StatePaths::from_root(
             temporary.path().join("state"),
@@ -567,7 +570,7 @@ mod tests {
         )]);
         let api = SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url);
 
-        let status = auth_status(paths, &api, 1_000).unwrap();
+        let status = auth_status(paths, &api, 1_000).await.unwrap();
         server.join().unwrap();
         let rendered = status.to_string();
 
@@ -583,8 +586,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn status_distinguishes_malformed_refresh_and_stored_credentials() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn status_distinguishes_malformed_refresh_and_stored_credentials() {
         let temporary = tempdir().unwrap();
         let paths = StatePaths::from_root(
             temporary.path().join("state"),
@@ -597,7 +600,7 @@ mod tests {
             serve_responses(vec![("/oauth/token", "200 OK", r#"{"access_token":""}"#)]);
         let api = SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url);
 
-        let refresh_status = auth_status(paths, &api, 1_000).unwrap();
+        let refresh_status = auth_status(paths, &api, 1_000).await.unwrap();
         server.join().unwrap();
         assert_eq!(refresh_status["health"], "malformed");
         assert_eq!(refresh_status["stored_bearer_state"], "expired");
@@ -625,14 +628,15 @@ mod tests {
             &SchibstedToriAuthenticationApi::new(),
             1_000,
         )
+        .await
         .unwrap();
         assert_eq!(stored_status["authenticated"], false);
         assert_eq!(stored_status["health"], "malformed");
         assert!(!stored_status.to_string().contains("not-json-secret"));
     }
 
-    #[test]
-    fn status_marks_network_failure_as_temporarily_unavailable() {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn status_marks_network_failure_as_temporarily_unavailable() {
         let temporary = tempdir().unwrap();
         let paths = StatePaths::from_root(
             temporary.path().join("state"),
@@ -646,7 +650,7 @@ mod tests {
         drop(listener);
         let api = SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url);
 
-        let status = auth_status(paths, &api, 1_000).unwrap();
+        let status = auth_status(paths, &api, 1_000).await.unwrap();
 
         assert_eq!(status["authenticated"], false);
         assert_eq!(status["health"], "temporarily_unavailable");
