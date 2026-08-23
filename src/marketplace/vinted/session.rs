@@ -6,13 +6,13 @@ use crate::{
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::{
-        CapabilityMaturity, MarketplaceContext, PortalId, vinted::auth::VintedAuthentication,
+        CapabilityMaturity, MarketplaceContext, PortalId,
+        vinted::auth::{VintedAuthentication, VintedCredentialRecord},
     },
-    storage::{
-        StatePaths,
-        credentials::{VintedCredentialRecord, VintedCredentialStore},
-    },
+    storage::{StatePaths, credentials::TypedCredentialStore},
 };
+
+type VintedCredentialStore = TypedCredentialStore<VintedCredentialRecord>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuthOperation {
@@ -136,7 +136,7 @@ fn unavailable_status(health: &'static str, validation: &'static str) -> VintedA
 }
 
 fn validation_failure_status(
-    credentials: &crate::storage::credentials::VintedCredentialRecord,
+    credentials: &VintedCredentialRecord,
     error: &AppError,
 ) -> VintedAuthStatus {
     let rejected = error.code == "vinted_auth.validation_rejected";

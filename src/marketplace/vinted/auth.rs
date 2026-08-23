@@ -12,8 +12,65 @@ use crate::{
     error::{AppError, ExitClass},
     marketplace::{PortalId, vinted::binding::VINTED_FI_BINDING},
     oauth::{SecretString, pkce_challenge, random_secret, random_uuid_secret, states_equal},
-    storage::credentials::VintedCredentialRecord,
+    storage::credentials::{CredentialStoreError, StoredCredential},
 };
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct VintedCredentialRecord {
+    pub(crate) portal: PortalId,
+    pub(crate) user_id: String,
+    #[serde(default)]
+    pub(crate) login: Option<String>,
+    pub(crate) access_token: String,
+    pub(crate) refresh_token: String,
+    pub(crate) access_expires_at_unix: u64,
+    pub(crate) device_uuid: String,
+    pub(crate) anonymous_id: String,
+    #[serde(default)]
+    pub(crate) user_device_token: Option<String>,
+}
+
+impl std::fmt::Debug for VintedCredentialRecord {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VintedCredentialRecord")
+            .field("portal", &self.portal)
+            .field("user_id", &"[REDACTED]")
+            .field("login", &"[REDACTED]")
+            .field("access_token", &"[REDACTED]")
+            .field("refresh_token", &"[REDACTED]")
+            .field("access_expires_at_unix", &self.access_expires_at_unix)
+            .field("device_uuid", &"[REDACTED]")
+            .field("anonymous_id", &"[REDACTED]")
+            .field("user_device_token", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl StoredCredential for VintedCredentialRecord {
+    fn account_id(&self) -> &str {
+        &self.user_id
+    }
+
+    fn validate(&self) -> Result<(), CredentialStoreError> {
+        let required = [
+            self.user_id.as_str(),
+            self.access_token.as_str(),
+            self.refresh_token.as_str(),
+            self.device_uuid.as_str(),
+            self.anonymous_id.as_str(),
+        ];
+        if self.portal != PortalId::Fi
+            || required.iter().any(|value| value.is_empty())
+            || self.login.as_deref() == Some("")
+            || self.user_device_token.as_deref() == Some("")
+            || self.access_expires_at_unix == 0
+        {
+            return Err(CredentialStoreError::MissingRequiredValue);
+        }
+        Ok(())
+    }
+}
 
 const PORTAL_BASE_URL: &str = VINTED_FI_BINDING.host;
 const CLIENT_ID: &str = VINTED_FI_BINDING.client_id;

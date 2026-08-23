@@ -1,76 +1,17 @@
-use std::{fmt, fs, io, marker::PhantomData, path::Path};
+use std::{fs, io, marker::PhantomData, path::Path};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use fs2::FileExt;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use crate::marketplace::PortalId;
-
 use super::{
     StatePaths,
     atomic_file::{AtomicFile, AtomicFileStore, set_private_file_mode, sync_directory},
 };
-
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct VintedCredentialRecord {
-    pub portal: PortalId,
-    pub user_id: String,
-    #[serde(default)]
-    pub login: Option<String>,
-    pub access_token: String,
-    pub refresh_token: String,
-    pub access_expires_at_unix: u64,
-    pub device_uuid: String,
-    pub anonymous_id: String,
-    #[serde(default)]
-    pub user_device_token: Option<String>,
-}
-
-impl fmt::Debug for VintedCredentialRecord {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("VintedCredentialRecord")
-            .field("portal", &self.portal)
-            .field("user_id", &"[REDACTED]")
-            .field("login", &"[REDACTED]")
-            .field("access_token", &"[REDACTED]")
-            .field("refresh_token", &"[REDACTED]")
-            .field("access_expires_at_unix", &self.access_expires_at_unix)
-            .field("device_uuid", &"[REDACTED]")
-            .field("anonymous_id", &"[REDACTED]")
-            .field("user_device_token", &"[REDACTED]")
-            .finish()
-    }
-}
-
-impl StoredCredential for VintedCredentialRecord {
-    fn account_id(&self) -> &str {
-        &self.user_id
-    }
-
-    fn validate(&self) -> Result<(), CredentialStoreError> {
-        let required = [
-            self.user_id.as_str(),
-            self.access_token.as_str(),
-            self.refresh_token.as_str(),
-            self.device_uuid.as_str(),
-            self.anonymous_id.as_str(),
-        ];
-        if self.portal != PortalId::Fi
-            || required.iter().any(|value| value.is_empty())
-            || self.login.as_deref() == Some("")
-            || self.user_device_token.as_deref() == Some("")
-            || self.access_expires_at_unix == 0
-        {
-            return Err(CredentialStoreError::MissingRequiredValue);
-        }
-        Ok(())
-    }
-}
 
 pub trait StoredCredential: Serialize + DeserializeOwned {
     fn account_id(&self) -> &str;
@@ -102,8 +43,6 @@ pub struct TypedCredentialStore<R, W = AtomicFile> {
     writer: W,
     marker: PhantomData<R>,
 }
-
-pub type VintedCredentialStore<W = AtomicFile> = TypedCredentialStore<VintedCredentialRecord, W>;
 
 impl<R: StoredCredential> TypedCredentialStore<R, AtomicFile> {
     pub fn new(paths: StatePaths) -> Self {
@@ -307,11 +246,15 @@ mod tests {
 
     use super::*;
     use crate::{
-        marketplace::{MarketplaceContext, tori::session::CredentialRecord},
+        marketplace::{
+            MarketplaceContext, PortalId, tori::session::CredentialRecord,
+            vinted::auth::VintedCredentialRecord,
+        },
         storage::atomic_file::{AtomicFile, AtomicFileStore},
     };
 
     type CredentialStore<W = AtomicFile> = TypedCredentialStore<CredentialRecord, W>;
+    type VintedCredentialStore<W = AtomicFile> = TypedCredentialStore<VintedCredentialRecord, W>;
 
     struct FailingWriter;
 

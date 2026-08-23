@@ -10,8 +10,10 @@ use crate::{
         search::{SearchCollection, SearchListing, SearchPagination, SearchPrice},
     },
     error::{AppError, ExitClass},
-    marketplace::vinted::{auth::VintedAuthentication, binding::VINTED_FI_BINDING},
-    storage::credentials::VintedCredentialRecord,
+    marketplace::vinted::{
+        auth::{VintedAuthentication, VintedCredentialRecord},
+        binding::VINTED_FI_BINDING,
+    },
 };
 
 pub const SEARCH_LIMIT_DEFAULT: usize = 20;

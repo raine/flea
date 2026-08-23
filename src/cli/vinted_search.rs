@@ -4,8 +4,10 @@ use serde_json::Value;
 
 use crate::{
     error::AppError,
-    marketplace::vinted::search::{SEARCH_LIMIT_DEFAULT, SearchRequest, SearchSort, VintedSearch},
-    storage::credentials::VintedCredentialRecord,
+    marketplace::vinted::{
+        auth::VintedCredentialRecord,
+        search::{SEARCH_LIMIT_DEFAULT, SearchRequest, SearchSort, VintedSearch},
+    },
 };
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, ValueEnum)]
