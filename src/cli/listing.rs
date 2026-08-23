@@ -70,6 +70,18 @@ pub enum ListingCommand {
     },
 }
 
+impl ListingCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::List => "listing list",
+            Self::Show { .. } => "listing show",
+            Self::Update { .. } => "listing update",
+            Self::Dispose { .. } => "listing dispose",
+            Self::Delete { .. } => "listing delete",
+        }
+    }
+}
+
 pub async fn dispatch_with_api(
     command: ListingArgs,
     api: &dyn ListingsApi,

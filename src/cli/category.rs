@@ -60,6 +60,15 @@ pub enum CategoryCommand {
     },
 }
 
+impl CategoryCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::Search { .. } => "category search",
+            Self::List { .. } => "category list",
+        }
+    }
+}
+
 pub async fn dispatch_with_api(
     command: CategoryArgs,
     api: &dyn ListingsApi,

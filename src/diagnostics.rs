@@ -1,5 +1,4 @@
 use std::{
-    ffi::OsString,
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
@@ -808,71 +807,6 @@ pub fn http_event(context: &HttpContext<'_>) {
     );
 }
 
-pub fn command_name(args: &[OsString]) -> String {
-    let arguments: Vec<&str> = args
-        .iter()
-        .skip(1)
-        .filter_map(|argument| argument.to_str())
-        .collect();
-    let marketplace = arguments
-        .iter()
-        .copied()
-        .find(|argument| matches!(*argument, "tori" | "vinted"));
-    let Some(root_index) = arguments.iter().position(|argument| {
-        matches!(
-            *argument,
-            "auth" | "category" | "draft" | "item" | "listing" | "search" | "location"
-        )
-    }) else {
-        let Some(command) = arguments
-            .iter()
-            .copied()
-            .find(|argument| matches!(*argument, "capabilities" | "marketplaces" | "skill"))
-        else {
-            return "unknown".to_owned();
-        };
-        return match marketplace {
-            Some(marketplace) if command == "capabilities" => {
-                format!("{marketplace} {command}")
-            }
-            _ => command.to_owned(),
-        };
-    };
-    let qualify = |command: String| match marketplace {
-        Some(marketplace) => format!("{marketplace} {command}"),
-        None => command,
-    };
-    let root = arguments[root_index];
-    let leaves: &[&str] = match root {
-        "auth" => &["login", "status", "logout"],
-        "category" => &["search", "list"],
-        "draft" => &["create", "show", "update", "publish", "delete", "image"],
-        "item" => &["show"],
-        "listing" => &["list", "show", "update", "dispose", "delete"],
-        "location" => &["search"],
-        "search" => &[],
-        _ => unreachable!("the root command is matched above"),
-    };
-    let leaf = arguments[root_index + 1..]
-        .iter()
-        .copied()
-        .find(|argument| leaves.contains(argument));
-    let Some(leaf) = leaf else {
-        return qualify(root.to_owned());
-    };
-    if root == "draft" && leaf == "image" {
-        let operation = arguments[root_index + 1..]
-            .iter()
-            .copied()
-            .find(|argument| matches!(*argument, "add" | "remove"));
-        return qualify(operation.map_or_else(
-            || "draft image".to_owned(),
-            |operation| format!("draft image {operation}"),
-        ));
-    }
-    qualify(format!("{root} {leaf}"))
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1054,50 +988,6 @@ mod tests {
             })
             .count();
         assert_eq!(archives, 0);
-    }
-
-    #[test]
-    fn command_name_recognizes_public_auth_commands() {
-        for command in ["login", "status", "logout"] {
-            let args = [
-                OsString::from("flea"),
-                OsString::from("vinted"),
-                OsString::from("auth"),
-                OsString::from(command),
-            ];
-            assert_eq!(command_name(&args), format!("vinted auth {command}"));
-        }
-
-        let item = [
-            OsString::from("flea"),
-            OsString::from("tori"),
-            OsString::from("item"),
-            OsString::from("show"),
-            OsString::from("42346404"),
-        ];
-        assert_eq!(command_name(&item), "tori item show");
-
-        let capabilities = [
-            OsString::from("flea"),
-            OsString::from("vinted"),
-            OsString::from("--portal"),
-            OsString::from("fi"),
-            OsString::from("capabilities"),
-        ];
-        assert_eq!(command_name(&capabilities), "vinted capabilities");
-    }
-
-    #[test]
-    fn search_command_name_excludes_query_and_coordinates() {
-        let args = [
-            OsString::from("flea"),
-            OsString::from("tori"),
-            OsString::from("search"),
-            OsString::from("private query"),
-            OsString::from("--latitude"),
-            OsString::from("60.1699"),
-        ];
-        assert_eq!(command_name(&args), "tori search");
     }
 
     #[test]

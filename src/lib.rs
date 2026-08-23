@@ -52,7 +52,7 @@ where
         Ok(cli) => cli,
         Err(error) => return clap_presentation(error),
     };
-    let command = diagnostics::command_name(&args);
+    let command = cli.command.telemetry_name();
     let context = cli.command.context();
 
     let session = match DiagnosticsSession::initialize() {

@@ -79,6 +79,17 @@ impl Command {
             Self::Capabilities | Self::Marketplaces | Self::Skill(_) | Self::Unsupported(_) => None,
         }
     }
+
+    pub fn telemetry_name(&self) -> String {
+        match self {
+            Self::Capabilities => "capabilities".to_owned(),
+            Self::Marketplaces => "marketplaces".to_owned(),
+            Self::Tori(args) => args.command.telemetry_name(),
+            Self::Vinted(args) => args.command.telemetry_name(),
+            Self::Skill(_) => "skill".to_owned(),
+            Self::Unsupported(_) => "unknown".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -152,6 +163,24 @@ pub struct VintedArgs {
     pub command: VintedCommand,
 }
 
+impl ToriCommand {
+    pub fn telemetry_name(&self) -> String {
+        let command = match self {
+            Self::Auth(args) => args.command.telemetry_name(),
+            Self::Capabilities => return "tori capabilities".to_owned(),
+            Self::Category(args) => args.command.telemetry_name(),
+            Self::Draft(args) => args.command.telemetry_name(),
+            Self::Favorite(args) => args.command.telemetry_name(),
+            Self::Item(args) => args.command.telemetry_name(),
+            Self::Listing(args) => args.command.telemetry_name(),
+            Self::Search(_) => return "tori search".to_owned(),
+            Self::SavedSearch(args) => args.command.telemetry_name(),
+            Self::Location(args) => args.command.telemetry_name(),
+        };
+        format!("tori {command}")
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum VintedCommand {
     #[command(
@@ -173,6 +202,17 @@ pub enum VintedCommand {
     Unsupported(Vec<OsString>),
 }
 
+impl VintedCommand {
+    pub fn telemetry_name(&self) -> String {
+        match self {
+            Self::Auth(args) => format!("vinted {}", args.command.telemetry_name()),
+            Self::Capabilities => "vinted capabilities".to_owned(),
+            Self::Search(_) => "vinted search".to_owned(),
+            Self::Unsupported(_) => "unknown".to_owned(),
+        }
+    }
+}
+
 pub type CommandFuture<'a> =
     Pin<Box<dyn Future<Output = Result<outcome::CommandOutcome, AppError>> + 'a>>;
 
@@ -189,4 +229,151 @@ pub async fn dispatch_with_runtime(
     runtime: &dyn CommandRuntime,
 ) -> Result<outcome::CommandOutcome, AppError> {
     runtime.execute(command).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsed_command_variants_have_stable_telemetry_names() {
+        let cases: &[(&[&str], &str)] = &[
+            (&["capabilities"], "capabilities"),
+            (&["marketplaces"], "marketplaces"),
+            (&["skill"], "skill"),
+            (&["skill", "install"], "skill"),
+            (&["tori", "auth", "login"], "tori auth login"),
+            (
+                &[
+                    "tori",
+                    "auth",
+                    "callback",
+                    "--state-root",
+                    "/tmp/flea",
+                    "https://example.com/callback",
+                ],
+                "tori auth callback",
+            ),
+            (&["tori", "auth", "status"], "tori auth status"),
+            (&["tori", "auth", "logout"], "tori auth logout"),
+            (&["tori", "capabilities"], "tori capabilities"),
+            (
+                &["tori", "category", "search", "chairs"],
+                "tori category search",
+            ),
+            (&["tori", "category", "list"], "tori category list"),
+            (&["tori", "draft", "create"], "tori draft create"),
+            (&["tori", "draft", "preview"], "tori draft preview"),
+            (&["tori", "draft", "show", "draft-1"], "tori draft show"),
+            (&["tori", "draft", "update", "draft-1"], "tori draft update"),
+            (
+                &["tori", "draft", "image", "add", "draft-1", "photo.jpg"],
+                "tori draft image add",
+            ),
+            (
+                &["tori", "draft", "image", "remove", "draft-1", "image-1"],
+                "tori draft image remove",
+            ),
+            (
+                &["tori", "draft", "validate", "draft-1"],
+                "tori draft validate",
+            ),
+            (
+                &[
+                    "tori",
+                    "draft",
+                    "publish",
+                    "draft-1",
+                    "--if-revision",
+                    "revision-1",
+                ],
+                "tori draft publish",
+            ),
+            (&["tori", "draft", "delete", "draft-1"], "tori draft delete"),
+            (&["tori", "favorite", "folders"], "tori favorite folders"),
+            (
+                &["tori", "favorite", "status", "123"],
+                "tori favorite status",
+            ),
+            (&["tori", "favorite", "add", "123"], "tori favorite add"),
+            (
+                &["tori", "favorite", "remove", "123"],
+                "tori favorite remove",
+            ),
+            (&["tori", "item", "show", "123"], "tori item show"),
+            (&["tori", "listing", "list"], "tori listing list"),
+            (
+                &["tori", "listing", "show", "listing-1"],
+                "tori listing show",
+            ),
+            (
+                &["tori", "listing", "update", "listing-1"],
+                "tori listing update",
+            ),
+            (
+                &["tori", "listing", "dispose", "listing-1"],
+                "tori listing dispose",
+            ),
+            (
+                &["tori", "listing", "delete", "listing-1"],
+                "tori listing delete",
+            ),
+            (&["tori", "search", "private query"], "tori search"),
+            (&["tori", "saved-search", "list"], "tori saved-search list"),
+            (
+                &["tori", "saved-search", "show", "search-1"],
+                "tori saved-search show",
+            ),
+            (
+                &[
+                    "tori",
+                    "saved-search",
+                    "create",
+                    "--name",
+                    "chairs",
+                    "--no-notifications",
+                ],
+                "tori saved-search create",
+            ),
+            (
+                &["tori", "saved-search", "update", "search-1"],
+                "tori saved-search update",
+            ),
+            (
+                &["tori", "saved-search", "delete", "search-1"],
+                "tori saved-search delete",
+            ),
+            (
+                &["tori", "location", "search", "Helsinki"],
+                "tori location search",
+            ),
+            (&["vinted", "auth", "login"], "vinted auth login"),
+            (
+                &[
+                    "vinted",
+                    "auth",
+                    "callback",
+                    "--state-root",
+                    "/tmp/flea",
+                    "https://example.com/callback",
+                ],
+                "vinted auth callback",
+            ),
+            (&["vinted", "auth", "status"], "vinted auth status"),
+            (&["vinted", "auth", "logout"], "vinted auth logout"),
+            (
+                &["vinted", "--portal", "fi", "capabilities"],
+                "vinted capabilities",
+            ),
+            (&["vinted", "search", "private query"], "vinted search"),
+            (&["unsupported"], "unknown"),
+            (&["vinted", "unsupported"], "unknown"),
+        ];
+
+        for (args, expected) in cases {
+            let cli = Cli::try_parse_from(std::iter::once("flea").chain(args.iter().copied()))
+                .unwrap_or_else(|error| panic!("failed to parse {args:?}: {error}"));
+            assert_eq!(cli.command.telemetry_name(), *expected, "args: {args:?}");
+        }
+    }
 }

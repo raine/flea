@@ -174,6 +174,21 @@ pub enum DraftCommand {
     },
 }
 
+impl DraftCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::Create { .. } => "draft create",
+            Self::Preview { .. } => "draft preview",
+            Self::Show { .. } => "draft show",
+            Self::Update { .. } => "draft update",
+            Self::Image(args) => args.command.telemetry_name(),
+            Self::Validate { .. } => "draft validate",
+            Self::Publish { .. } => "draft publish",
+            Self::Delete { .. } => "draft delete",
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct DraftInspectionOutput {
     draft_id: String,
@@ -266,6 +281,15 @@ pub enum ImageCommand {
         #[arg(required = true)]
         image_ids: Vec<String>,
     },
+}
+
+impl ImageCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::Add { .. } => "draft image add",
+            Self::Remove { .. } => "draft image remove",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

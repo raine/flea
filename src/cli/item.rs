@@ -29,6 +29,14 @@ pub enum ItemCommand {
     },
 }
 
+impl ItemCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::Show { .. } => "item show",
+        }
+    }
+}
+
 pub async fn dispatch_with_api(
     args: ItemArgs,
     api: &dyn PublicItemApi,

@@ -101,6 +101,18 @@ pub enum SavedSearchCommand {
     },
 }
 
+impl SavedSearchCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::List { .. } => "saved-search list",
+            Self::Show { .. } => "saved-search show",
+            Self::Create { .. } => "saved-search create",
+            Self::Update { .. } => "saved-search update",
+            Self::Delete { .. } => "saved-search delete",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum NotificationState {
     On,

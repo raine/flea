@@ -24,6 +24,14 @@ pub enum LocationCommand {
     },
 }
 
+impl LocationCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::Search { .. } => "location search",
+        }
+    }
+}
+
 pub async fn dispatch_with_api(
     args: LocationArgs,
     api: &dyn PublicSearchApi,

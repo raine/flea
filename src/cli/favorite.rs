@@ -55,6 +55,17 @@ pub enum FavoriteCommand {
     },
 }
 
+impl FavoriteCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::Folders => "favorite folders",
+            Self::Status { .. } => "favorite status",
+            Self::Add { .. } => "favorite add",
+            Self::Remove { .. } => "favorite remove",
+        }
+    }
+}
+
 pub async fn dispatch_with_api(
     args: FavoriteArgs,
     api: &dyn FavoritesApi,

@@ -50,6 +50,17 @@ pub enum AuthCommand {
     Logout,
 }
 
+impl AuthCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::Login => "auth login",
+            Self::Callback { .. } => "auth callback",
+            Self::Status => "auth status",
+            Self::Logout => "auth logout",
+        }
+    }
+}
+
 impl std::fmt::Debug for AuthCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
