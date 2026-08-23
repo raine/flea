@@ -11,8 +11,10 @@ use crate::{
         observation::{Observation, ObservationOperation},
     },
     error::{AppError, ExitClass},
-    marketplace::tori::client::{
-        HttpFailure, RequestSpec, ToriClient, compatibility, map_http_error,
+    marketplace::tori::{
+        client::{HttpFailure, RequestSpec, ToriClient, compatibility, map_http_error},
+        discovery::{SearchRequest, ToriDiscovery},
+        search::PublicSearchApi,
     },
     retry::RetryClassification,
 };
@@ -246,6 +248,85 @@ pub struct CreateSavedSearch {
     pub parameters: BTreeMap<String, Vec<String>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotificationState {
+    On,
+    Off,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NotificationSelection {
+    email: bool,
+    push: bool,
+    notification_center: bool,
+}
+
+impl NotificationSelection {
+    pub fn new(
+        email: bool,
+        push: bool,
+        notification_center: bool,
+        no_notifications: bool,
+    ) -> Result<Self, AppError> {
+        if !no_notifications && !email && !push && !notification_center {
+            return Err(AppError::usage(
+                "choose --email, --push, --notification-center, or --no-notifications",
+            ));
+        }
+        Ok(Self {
+            email,
+            push,
+            notification_center,
+        })
+    }
+
+    fn values(&self) -> Vec<String> {
+        notification_list(self.email, self.push, self.notification_center)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SavedSearchRequest {
+    List {
+        limit: Option<usize>,
+    },
+    Show {
+        id: String,
+    },
+    Create {
+        name: String,
+        notifications: NotificationSelection,
+        search: SearchRequest,
+    },
+    Update {
+        id: String,
+        name: Option<String>,
+        email: Option<NotificationState>,
+        push: Option<NotificationState>,
+        notification_center: Option<NotificationState>,
+    },
+    Delete {
+        id: String,
+    },
+}
+
+#[derive(Debug, PartialEq)]
+pub enum SavedSearchResult {
+    List {
+        saved_searches: Vec<SavedSearch>,
+        count: usize,
+        observation: Observation,
+    },
+    Search {
+        saved_search: SavedSearch,
+        observation: Observation,
+    },
+    Deleted {
+        deleted: DeletedSavedSearch,
+        observation: Observation,
+    },
+}
+
 pub struct SavedSearches<'a> {
     api: &'a dyn SavedSearchesApi,
 }
@@ -253,6 +334,80 @@ pub struct SavedSearches<'a> {
 impl<'a> SavedSearches<'a> {
     pub fn new(api: &'a dyn SavedSearchesApi) -> Self {
         Self { api }
+    }
+
+    pub async fn execute(
+        &self,
+        request: SavedSearchRequest,
+        search_api: &dyn PublicSearchApi,
+    ) -> Result<SavedSearchResult, AppError> {
+        match request {
+            SavedSearchRequest::List { limit } => {
+                if limit.is_some_and(|limit| !(1..=1000).contains(&limit)) {
+                    return Err(AppError::usage("--limit must be between 1 and 1000"));
+                }
+                let saved_searches = self.list(limit).await?;
+                let count = saved_searches.len();
+                Ok(SavedSearchResult::List {
+                    saved_searches,
+                    count,
+                    observation: Observation::confirmed_present("saved_search_list", Some(200)),
+                })
+            }
+            SavedSearchRequest::Show { id } => Ok(SavedSearchResult::Search {
+                saved_search: self.show(&id).await?,
+                observation: Observation::confirmed_present("saved_search_show", Some(200)),
+            }),
+            SavedSearchRequest::Create {
+                name,
+                notifications,
+                search,
+            } => {
+                let parameters = ToriDiscovery::new(search_api, None)
+                    .saved_search_parameters(search)
+                    .await?;
+                Ok(SavedSearchResult::Search {
+                    saved_search: self
+                        .create(CreateSavedSearch {
+                            name,
+                            notifications: notifications.values(),
+                            parameters,
+                        })
+                        .await?,
+                    observation: Observation::confirmed_present("saved_search_show", Some(200)),
+                })
+            }
+            SavedSearchRequest::Update {
+                id,
+                name,
+                email,
+                push,
+                notification_center,
+            } => {
+                if name.is_none()
+                    && email.is_none()
+                    && push.is_none()
+                    && notification_center.is_none()
+                {
+                    return Err(AppError::usage(
+                        "provide --name or a notification channel state",
+                    ));
+                }
+                let current = self.show(&id).await?;
+                let mut notifications = current.notifications;
+                apply_notification(&mut notifications, "EMAIL", email);
+                apply_notification(&mut notifications, "PUSH", push);
+                apply_notification(&mut notifications, "NC", notification_center);
+                Ok(SavedSearchResult::Search {
+                    saved_search: self.update(&id, name, Some(notifications)).await?,
+                    observation: Observation::confirmed_present("saved_search_show", Some(200)),
+                })
+            }
+            SavedSearchRequest::Delete { id } => Ok(SavedSearchResult::Deleted {
+                deleted: self.delete(&id).await?,
+                observation: Observation::confirmed_absent("saved_search_show", Some(200)),
+            }),
+        }
     }
 
     pub async fn list(&self, rows: Option<usize>) -> Result<Vec<SavedSearch>, AppError> {
@@ -407,6 +562,32 @@ impl<'a> SavedSearches<'a> {
 pub struct DeletedSavedSearch {
     pub id: String,
     pub deleted: bool,
+}
+
+fn notification_list(email: bool, push: bool, notification_center: bool) -> Vec<String> {
+    [
+        (email, "EMAIL"),
+        (push, "PUSH"),
+        (notification_center, "NC"),
+    ]
+    .into_iter()
+    .filter(|(enabled, _)| *enabled)
+    .map(|(_, value)| value.to_owned())
+    .collect()
+}
+
+fn apply_notification(
+    notifications: &mut Vec<String>,
+    value: &str,
+    state: Option<NotificationState>,
+) {
+    match state {
+        Some(NotificationState::On) if !notifications.iter().any(|existing| existing == value) => {
+            notifications.push(value.to_owned())
+        }
+        Some(NotificationState::Off) => notifications.retain(|existing| existing != value),
+        _ => {}
+    }
 }
 
 fn create_body(input: &CreateSavedSearch) -> Value {

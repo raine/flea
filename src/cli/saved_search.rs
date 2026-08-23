@@ -2,15 +2,17 @@ use clap::{Args, Subcommand, ValueEnum};
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome, SavedSearchListOutput},
-    domain::observation::Observation,
     error::AppError,
     marketplace::tori::{
-        saved_searches::{CreateSavedSearch, SavedSearches, SavedSearchesApi},
+        saved_searches::{
+            NotificationSelection, NotificationState as ToriNotificationState, SavedSearchRequest,
+            SavedSearchResult, SavedSearches, SavedSearchesApi,
+        },
         search::PublicSearchApi,
     },
 };
 
-use super::search::{SearchArgs, saved_search_parameters};
+use super::search::{SearchArgs, request_from_args};
 
 #[derive(Debug, Args)]
 pub struct SavedSearchArgs {
@@ -123,33 +125,9 @@ pub async fn dispatch(
     api: &dyn SavedSearchesApi,
     search_api: &dyn PublicSearchApi,
 ) -> Result<CommandOutcome, AppError> {
-    let saved = SavedSearches::new(api);
-    match args.command {
-        SavedSearchCommand::List { limit } => {
-            if limit.is_some_and(|limit| !(1..=1000).contains(&limit)) {
-                return Err(AppError::usage("--limit must be between 1 and 1000"));
-            }
-            let searches = saved.list(limit).await?;
-            let count = searches.len();
-            Ok(
-                CommandOutcome::new(CommandData::SavedSearchList(SavedSearchListOutput {
-                    saved_searches: searches,
-                    count,
-                }))
-                .with_observation(Observation::confirmed_present(
-                    "saved_search_list",
-                    Some(200),
-                )),
-            )
-        }
-        SavedSearchCommand::Show { id } => {
-            let search = saved.show(&id).await?;
-            Ok(
-                CommandOutcome::new(CommandData::SavedSearch(search)).with_observation(
-                    Observation::confirmed_present("saved_search_show", Some(200)),
-                ),
-            )
-        }
+    let request = match args.command {
+        SavedSearchCommand::List { limit } => SavedSearchRequest::List { limit },
+        SavedSearchCommand::Show { id } => SavedSearchRequest::Show { id },
         SavedSearchCommand::Create {
             name,
             email,
@@ -158,23 +136,13 @@ pub async fn dispatch(
             no_notifications,
             search,
         } => {
-            if !no_notifications && !email && !push && !notification_center {
-                return Err(AppError::usage(
-                    "choose --email, --push, --notification-center, or --no-notifications",
-                ));
+            let notifications =
+                NotificationSelection::new(email, push, notification_center, no_notifications)?;
+            SavedSearchRequest::Create {
+                name,
+                notifications,
+                search: request_from_args(search)?,
             }
-            let parameters = saved_search_parameters(search, search_api).await?;
-            let notifications = notification_list(email, push, notification_center);
-            mutation_value(
-                saved
-                    .create(CreateSavedSearch {
-                        name,
-                        notifications,
-                        parameters,
-                    })
-                    .await?,
-                true,
-            )
         }
         SavedSearchCommand::Update {
             id,
@@ -182,65 +150,44 @@ pub async fn dispatch(
             email,
             push,
             notification_center,
-        } => {
-            if name.is_none() && email.is_none() && push.is_none() && notification_center.is_none()
-            {
-                return Err(AppError::usage(
-                    "provide --name or a notification channel state",
-                ));
-            }
-            let current = saved.show(&id).await?;
-            let mut notifications = current.notifications;
-            apply_notification(&mut notifications, "EMAIL", email);
-            apply_notification(&mut notifications, "PUSH", push);
-            apply_notification(&mut notifications, "NC", notification_center);
-            mutation_value(saved.update(&id, name, Some(notifications)).await?, true)
-        }
-        SavedSearchCommand::Delete { id } => {
-            let deleted = saved.delete(&id).await?;
-            Ok(
-                CommandOutcome::new(CommandData::DeletedSavedSearch(deleted)).with_observation(
-                    Observation::confirmed_absent("saved_search_show", Some(200)),
-                ),
-            )
-        }
-    }
-}
-
-fn notification_list(email: bool, push: bool, notification_center: bool) -> Vec<String> {
-    [
-        (email, "EMAIL"),
-        (push, "PUSH"),
-        (notification_center, "NC"),
-    ]
-    .into_iter()
-    .filter(|(enabled, _)| *enabled)
-    .map(|(_, value)| value.to_owned())
-    .collect()
-}
-
-fn apply_notification(
-    notifications: &mut Vec<String>,
-    value: &str,
-    state: Option<NotificationState>,
-) {
-    match state {
-        Some(NotificationState::On) if !notifications.iter().any(|existing| existing == value) => {
-            notifications.push(value.to_owned())
-        }
-        Some(NotificationState::Off) => notifications.retain(|existing| existing != value),
-        _ => {}
-    }
-}
-
-fn mutation_value(
-    search: crate::marketplace::tori::saved_searches::SavedSearch,
-    present: bool,
-) -> Result<CommandOutcome, AppError> {
-    let observation = if present {
-        Observation::confirmed_present("saved_search_show", Some(200))
-    } else {
-        Observation::confirmed_absent("saved_search_show", Some(200))
+        } => SavedSearchRequest::Update {
+            id,
+            name,
+            email: email.map(Into::into),
+            push: push.map(Into::into),
+            notification_center: notification_center.map(Into::into),
+        },
+        SavedSearchCommand::Delete { id } => SavedSearchRequest::Delete { id },
     };
-    Ok(CommandOutcome::new(CommandData::SavedSearch(search)).with_observation(observation))
+    let (data, observation) = match SavedSearches::new(api).execute(request, search_api).await? {
+        SavedSearchResult::List {
+            saved_searches,
+            count,
+            observation,
+        } => (
+            CommandData::SavedSearchList(SavedSearchListOutput {
+                saved_searches,
+                count,
+            }),
+            observation,
+        ),
+        SavedSearchResult::Search {
+            saved_search,
+            observation,
+        } => (CommandData::SavedSearch(saved_search), observation),
+        SavedSearchResult::Deleted {
+            deleted,
+            observation,
+        } => (CommandData::DeletedSavedSearch(deleted), observation),
+    };
+    Ok(CommandOutcome::new(data).with_observation(observation))
+}
+
+impl From<NotificationState> for ToriNotificationState {
+    fn from(value: NotificationState) -> Self {
+        match value {
+            NotificationState::On => Self::On,
+            NotificationState::Off => Self::Off,
+        }
+    }
 }

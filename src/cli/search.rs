@@ -192,8 +192,12 @@ pub async fn saved_search_parameters(
     api: &dyn PublicSearchApi,
 ) -> Result<BTreeMap<String, Vec<String>>, AppError> {
     ToriDiscovery::new(api, None)
-        .saved_search_parameters(collect_input(args)?.into())
+        .saved_search_parameters(request_from_args(args)?)
         .await
+}
+
+pub(crate) fn request_from_args(args: SearchArgs) -> Result<SearchRequest, AppError> {
+    Ok(collect_input(args)?.into())
 }
 
 impl From<SearchInput> for SearchRequest {
