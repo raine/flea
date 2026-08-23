@@ -105,7 +105,7 @@ pub struct SearchRequest {
 #[derive(Debug, PartialEq)]
 pub enum SearchResult {
     Search {
-        collection: SearchCollection,
+        collection: Box<SearchCollection>,
         next_actions: Vec<NextAction>,
     },
     Raw(Value),
@@ -206,7 +206,7 @@ impl<'a> ToriDiscovery<'a> {
             }
         }
         Ok(SearchResult::Search {
-            collection: result,
+            collection: Box::new(result),
             next_actions: actions,
         })
     }
@@ -743,27 +743,6 @@ fn category_parameter(category: &str) -> Result<&'static str, AppError> {
             "--category must use a supported Tori taxonomy depth",
         )),
     }
-}
-
-fn parse_facets(values: &[String]) -> Result<BTreeMap<String, Vec<String>>, AppError> {
-    let mut facets = BTreeMap::new();
-    for value in values {
-        let (name, value) = value
-            .split_once('=')
-            .ok_or_else(|| AppError::usage("--facet must use NAME=VALUE"))?;
-        validate_facet_name(name)?;
-        let length = value.chars().count();
-        if length == 0 || length > 256 {
-            return Err(AppError::usage(
-                "facet values must contain 1 through 256 characters",
-            ));
-        }
-        facets
-            .entry(name.to_owned())
-            .or_insert_with(Vec::new)
-            .push(value.to_owned());
-    }
-    Ok(facets)
 }
 
 fn validate_facet_name(name: &str) -> Result<(), AppError> {

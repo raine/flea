@@ -247,7 +247,7 @@ impl<T: AdInputProtocol> HttpAdInputApi<T> {
             let classification = observation.retry_classification(operation);
             error.upstream_transient = classification.upstream_transient;
             error.safe_to_retry = classification.safe_to_retry;
-            error.observation = Some(observation);
+            error.observation = Some(Box::new(observation));
             if is_mutation {
                 error.code = "mutation.uncertain".to_owned();
                 error.message =
@@ -260,9 +260,14 @@ impl<T: AdInputProtocol> HttpAdInputApi<T> {
     }
 
     async fn reconcile_missing_draft(&self, draft_id: &str, detail_error: ApiError) -> ApiError {
-        let detail_observation = detail_error.observation.clone().unwrap_or_else(|| {
-            Observation::confirmed_absent(ObservationSource::DraftDetail, Some(404))
-        });
+        let detail_observation =
+            detail_error
+                .observation
+                .as_deref()
+                .cloned()
+                .unwrap_or_else(|| {
+                    Observation::confirmed_absent(ObservationSource::DraftDetail, Some(404))
+                });
         match ListingObservations::new(&self.transport)
             .find_summary(draft_id)
             .await
@@ -315,16 +320,19 @@ impl<T: AdInputProtocol> HttpAdInputApi<T> {
                     },
                 );
                 let mut error = detail_error;
-                error.observation = Some(observation);
+                error.observation = Some(Box::new(observation));
                 error
             }
             Err(collection_error) => {
-                let collection_observation = collection_error.observation.unwrap_or_else(|| {
-                    Observation::unrecognized_response(
-                        ObservationSource::AuthenticatedListingCollection,
-                        None,
-                    )
-                });
+                let collection_observation = collection_error
+                    .observation
+                    .map(|value| *value)
+                    .unwrap_or_else(|| {
+                        Observation::unrecognized_response(
+                            ObservationSource::AuthenticatedListingCollection,
+                            None,
+                        )
+                    });
                 let mut error = ApiError::new(
                     "draft.observation_incomplete",
                     "Draft absence could not be confirmed against the authenticated collection",
@@ -360,8 +368,6 @@ impl<T: AdInputProtocol> HttpAdInputApi<T> {
         })
     }
 }
-
-#[allow(async_fn_in_trait)]
 
 fn observed_detail_matches(value: &Value, listing_id: &str) -> bool {
     match value.get("id").or_else(|| value.get("listing_id")) {

@@ -18,10 +18,6 @@ impl<T> Sensitive<T> {
     pub const fn expose(&self) -> &T {
         &self.0
     }
-
-    pub fn into_inner(self) -> T {
-        self.0
-    }
 }
 
 impl<T> From<T> for Sensitive<T> {

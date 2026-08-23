@@ -8,6 +8,7 @@ use crate::marketplace::tori::adinput::{
 };
 
 impl<A: AdInputApi> DraftWorkflow<A> {
+    #[cfg(test)]
     pub async fn show(&self, draft_id: &str) -> Result<DraftState, WorkflowError> {
         let mut state = self
             .api

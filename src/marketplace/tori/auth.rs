@@ -164,7 +164,7 @@ pub struct SchibstedTokens {
 }
 
 impl SchibstedTokens {
-    #[doc(hidden)]
+    #[cfg(test)]
     pub fn new_for_adapter(access_token: String, refresh_token: String, id_token: String) -> Self {
         Self {
             access_token: SecretString::new(access_token),
@@ -181,7 +181,7 @@ pub struct ToriSession {
 }
 
 impl ToriSession {
-    #[doc(hidden)]
+    #[cfg(test)]
     pub fn new_for_adapter(user_id: String, bearer_token: String) -> Self {
         Self {
             user_id,

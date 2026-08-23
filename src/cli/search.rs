@@ -180,13 +180,15 @@ pub async fn dispatch(
         SearchResult::Search {
             collection,
             next_actions,
-        } => Ok(
-            CommandOutcome::new(CommandData::Search(collection)).with_next_actions(next_actions)
-        ),
+        } => {
+            Ok(CommandOutcome::new(CommandData::Search(*collection))
+                .with_next_actions(next_actions))
+        }
         SearchResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
     }
 }
 
+#[cfg(test)]
 pub async fn saved_search_parameters(
     args: SearchArgs,
     api: &dyn PublicSearchApi,

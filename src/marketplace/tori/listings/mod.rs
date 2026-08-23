@@ -6,12 +6,16 @@ mod taxonomy;
 
 pub use gateway::{
     HttpListingsApi, ListingsApi, ListingsApiError, UpstreamAction, UpstreamFacet, UpstreamListing,
-    UpstreamListingPage, UpstreamListingSummary, UpstreamState, UpstreamStatistic,
-    UpstreamStatistics, UpstreamSummaryData,
+    UpstreamListingSummary, UpstreamState, UpstreamStatistics, UpstreamSummaryData,
 };
+#[cfg(test)]
+#[allow(unused_imports)]
+pub use gateway::{UpstreamListingPage, UpstreamStatistic};
+#[cfg(test)]
+pub use taxonomy::CategorySearchOptions;
 pub use taxonomy::{
     CATEGORY_SEARCH_LIMIT_DEFAULT, CATEGORY_SEARCH_LIMIT_MAX, CategoryRequest, CategoryResult,
-    CategorySearchOptions, Taxonomy, TaxonomyApi, UpstreamCategory, UpstreamCategoryTaxonomy,
+    Taxonomy, TaxonomyApi, UpstreamCategory, UpstreamCategoryTaxonomy,
 };
 
 use std::{
@@ -19,25 +23,30 @@ use std::{
     ops::ControlFlow,
 };
 
+#[cfg(test)]
+use normalization::collect_image_urls;
 use normalization::{
-    collect_image_urls, commerce_from_fields, detail_observation_status, normalize_facet,
+    commerce_from_fields, detail_observation_status, normalize_facet,
     normalize_listing_detail_for_id, normalize_listing_for_id, normalize_summary, summary_detail,
     summary_id, value_id,
 };
+#[cfg(test)]
+use scan::COLLECTION_PAGE_SIZE;
 use scan::{
-    COLLECTION_PAGE_SIZE, CollectionPage, CollectionPageSource, CollectionScan,
-    CollectionScanError, scan_collection,
+    CollectionPage, CollectionPageSource, CollectionScan, CollectionScanError, scan_collection,
 };
 
 use serde::Serialize;
 use serde_json::{Value, json};
 
+#[cfg(test)]
+use crate::domain::listing::ListingCopySource;
 use crate::{
     domain::{
         commerce::{Price, TradeType},
         listing::{
-            ListingCollection, ListingCopySource, ListingDetail, ListingMutation, ListingRef,
-            ListingSnapshot, ListingState, ListingSummary,
+            ListingCollection, ListingDetail, ListingMutation, ListingRef, ListingSnapshot,
+            ListingState, ListingSummary,
         },
         observation::{Observation, ObservationOperation},
     },
@@ -45,6 +54,7 @@ use crate::{
     retry::{FailureKind, OperationMethod, RetryContext, classify},
 };
 
+#[cfg(test)]
 pub const LISTING_PAGE_SIZE: usize = COLLECTION_PAGE_SIZE;
 
 struct ListingCollectionSource<'a> {
@@ -406,6 +416,7 @@ impl<'a> Listings<'a> {
         })
     }
 
+    #[cfg(test)]
     pub async fn copy_source(&self, listing_id: &str) -> Result<ListingCopySource, AppError> {
         let snapshot = self.snapshot(listing_id).await?;
         let mut fields = snapshot.source_fields;
@@ -527,6 +538,7 @@ fn listing_error(
             "listing changed remotely",
             ExitClass::Conflict,
         ),
+        #[cfg(test)]
         ListingsApiError::Validation { fields, .. } => {
             let mut error = AppError::new(
                 "listing.validation_failed",

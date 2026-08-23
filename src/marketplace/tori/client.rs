@@ -46,7 +46,6 @@ pub mod compatibility {
     pub const SERVICE_ADVIEW: &str = "ADVIEW-PROVIDER-RC";
     pub const SERVICE_BILLING_TRACKING: &str = "BILLING-TRACKING-SERVICE";
     pub const SERVICE_ORDER_PAYMENT: &str = "ORDER-PAYMENT-SERVER";
-    pub const SERVICE_LOGIN: &str = "LOGIN-SERVER-AUTH";
     pub const SERVICE_SEARCH: &str = "SEARCH-QUEST";
     pub const SERVICE_FAVORITES: &str = "FAVORITE-MANAGEMENT";
     pub const SERVICE_SAVED_SEARCHES: &str = "SEARCH-SAVEDSEARCH";

@@ -340,7 +340,8 @@ fn workflow_error(error: WorkflowError) -> AppError {
                 .iter()
                 .cloned()
                 .map(|command| NextAction { command })
-                .collect()
+                .collect::<Vec<_>>()
+                .into()
         })
         .unwrap_or_default();
     let partial = error
@@ -355,15 +356,17 @@ fn workflow_error(error: WorkflowError) -> AppError {
         .as_ref()
         .and_then(|source| source.observation.clone())
         .or_else(|| {
-            error.recovery.as_ref().map(|recovery| Observation {
-                state: recovery.observation.state,
-                source: recovery.observation.source.clone(),
-                observed_at: recovery
-                    .observation
-                    .observed_at
-                    .clone()
-                    .unwrap_or_else(crate::domain::observation::observation_timestamp),
-                status_evidence: recovery.observation.status_evidence.clone(),
+            error.recovery.as_ref().map(|recovery| {
+                Box::new(Observation {
+                    state: recovery.observation.state,
+                    source: recovery.observation.source.clone(),
+                    observed_at: recovery
+                        .observation
+                        .observed_at
+                        .clone()
+                        .unwrap_or_else(crate::domain::observation::observation_timestamp),
+                    status_evidence: recovery.observation.status_evidence.clone(),
+                })
             })
         });
     app.details = error

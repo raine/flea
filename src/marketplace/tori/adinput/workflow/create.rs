@@ -1,14 +1,18 @@
 use super::{DraftWorkflow, sanitize_listing_copy_values};
+#[cfg(test)]
+use crate::marketplace::tori::adinput::images::prepare_image;
 use crate::marketplace::tori::adinput::{
     adapter::AdInputApi,
     fields::{create_preflight_issues, ordered_field_mutations, requested_sale_price},
-    images::{PreparedImage, prepare_image, prepare_image_bytes},
+    images::{PreparedImage, prepare_image_bytes},
     recovery::{CreateResult, ListingCopyReport, WorkflowError},
 };
 use serde_json::{Map, Value};
+#[cfg(test)]
 use std::path::Path;
 
 impl<A: AdInputApi> DraftWorkflow<A> {
+    #[cfg(test)]
     pub async fn create(
         &self,
         values: Map<String, Value>,

@@ -11,7 +11,6 @@ pub enum FailureKind {
     Transport,
     HttpStatus(u16),
     MalformedSuccess,
-    Conflict,
     PreconditionFailed,
     Local,
 }
@@ -50,7 +49,6 @@ pub struct RetryContext {
     pub idempotency_contract: bool,
     pub idempotency_key: bool,
     pub completed_mutation_steps: bool,
-    pub returned_identifier: bool,
     pub etag: bool,
     pub authoritative_observation: bool,
 }
@@ -62,7 +60,6 @@ impl RetryContext {
             idempotency_contract: false,
             idempotency_key: false,
             completed_mutation_steps: false,
-            returned_identifier: false,
             etag: false,
             authoritative_observation: false,
         }
@@ -74,7 +71,6 @@ impl RetryContext {
             idempotency_contract: false,
             idempotency_key: false,
             completed_mutation_steps: false,
-            returned_identifier: false,
             etag: false,
             authoritative_observation: false,
         }
@@ -95,11 +91,6 @@ impl RetryContext {
         self
     }
 
-    pub const fn with_returned_identifier(mut self) -> Self {
-        self.returned_identifier = true;
-        self
-    }
-
     pub const fn with_etag(mut self) -> Self {
         self.etag = true;
         self
@@ -115,13 +106,12 @@ pub const fn classify(failure: FailureKind, context: RetryContext) -> RetryClass
     let upstream_transient = match failure {
         FailureKind::Transport => true,
         FailureKind::HttpStatus(status) => is_transient_status(status),
-        FailureKind::MalformedSuccess
-        | FailureKind::Conflict
-        | FailureKind::PreconditionFailed
-        | FailureKind::Local => false,
+        FailureKind::MalformedSuccess | FailureKind::PreconditionFailed | FailureKind::Local => {
+            false
+        }
     };
 
-    let safe_to_retry = if context.completed_mutation_steps || context.returned_identifier {
+    let safe_to_retry = if context.completed_mutation_steps {
         false
     } else if context.method.is_read() || context.idempotency_contract || context.idempotency_key {
         true
@@ -200,14 +190,10 @@ mod tests {
     }
 
     #[test]
-    fn partial_workflows_and_returned_ids_prevent_whole_command_replay() {
+    fn partial_workflows_prevent_whole_command_replay() {
         let completed = RetryContext::read(OperationMethod::Get).with_completed_mutation_steps();
-        let identified = RetryContext::mutation(OperationMethod::Post)
-            .with_idempotency_key()
-            .with_returned_identifier();
 
         assert!(!classify(FailureKind::Transport, completed).safe_to_retry);
-        assert!(!classify(FailureKind::Transport, identified).safe_to_retry);
     }
 
     #[test]
@@ -221,10 +207,6 @@ mod tests {
                 upstream_transient: false,
                 safe_to_retry: true,
             }
-        );
-        assert_eq!(
-            classify(FailureKind::Conflict, context),
-            RetryClassification::default()
         );
     }
 }

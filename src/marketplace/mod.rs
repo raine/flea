@@ -19,8 +19,6 @@ pub fn marketplace(id: MarketplaceId) -> &'static MarketplaceDescriptor {
         .expect("every marketplace ID has a descriptor")
 }
 
-pub use vinted::binding::{VINTED_FI_BINDING, VintedPortalBinding};
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,7 +1,7 @@
 use super::normalization::values_semantically_equal;
 use super::types::{
-    CategoryValidation, ComposerModelStatus, DraftImage, DraftState, ImageState,
-    PublicationCategory, PublicationRequirement, PublicationValidation,
+    CategoryValidation, ComposerModelStatus, DraftState, ImageState, PublicationCategory,
+    PublicationRequirement, PublicationValidation,
 };
 use crate::domain::commerce::TradeType;
 use crate::domain::commerce::normalize_trade_type;
@@ -10,7 +10,6 @@ use crate::domain::field::FieldStatus;
 use crate::domain::field::FieldType;
 use crate::domain::field::Requirement;
 use serde_json::Value;
-use std::collections::BTreeMap;
 
 pub fn evaluate_publication(
     state: &DraftState,
@@ -613,11 +612,4 @@ pub(super) fn delivery_values(delivery: &Value) -> Option<Vec<String>> {
             .collect(),
         _ => None,
     }
-}
-
-pub fn ordered_image_states(images: &[DraftImage]) -> BTreeMap<usize, (&str, &ImageState)> {
-    images
-        .iter()
-        .map(|image| (image.position, (image.image_id.as_str(), &image.state)))
-        .collect()
 }

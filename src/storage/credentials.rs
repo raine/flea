@@ -82,6 +82,7 @@ impl<R: StoredCredential, W: AtomicFileStore> TypedCredentialStore<R, W> {
         self.lock()?.delete()
     }
 
+    #[cfg(test)]
     pub fn with_locked<T>(
         &self,
         operation: impl FnOnce(&LockedCredentials<'_, R, W>) -> Result<T, CredentialStoreError>,
@@ -90,6 +91,7 @@ impl<R: StoredCredential, W: AtomicFileStore> TypedCredentialStore<R, W> {
         operation(&locked)
     }
 
+    #[cfg(test)]
     pub fn rotate(
         &self,
         operation: impl FnOnce(Option<R>) -> Result<R, CredentialStoreError>,

@@ -1,11 +1,9 @@
+#[cfg(test)]
 use std::{
     collections::VecDeque,
-    fmt,
-    future::Future,
-    pin::Pin,
     sync::{Arc, Mutex},
-    time::Duration,
 };
+use std::{fmt, future::Future, pin::Pin, time::Duration};
 
 use reqwest::{Method, StatusCode, header::HeaderMap};
 
@@ -279,12 +277,14 @@ impl Transport for ReqwestTransport {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub struct RecordingTransport {
     requests: Arc<Mutex<Vec<TransportRequest>>>,
     responses: Arc<Mutex<VecDeque<Result<TransportResponse, TransportError>>>>,
 }
 
+#[cfg(test)]
 impl RecordingTransport {
     pub fn queued(
         responses: impl IntoIterator<Item = Result<TransportResponse, TransportError>>,
@@ -303,6 +303,7 @@ impl RecordingTransport {
     }
 }
 
+#[cfg(test)]
 impl Transport for RecordingTransport {
     fn execute(&self, request: TransportRequest) -> TransportFuture<'_> {
         self.requests

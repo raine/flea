@@ -42,7 +42,7 @@ pub async fn dispatch(args: ItemArgs, api: &dyn PublicItemApi) -> Result<Command
     };
     match PublicItems::new(api).execute(request).await? {
         ShowItemResult::Detail { item, observation } => {
-            Ok(CommandOutcome::new(CommandData::Item(item)).with_observation(observation))
+            Ok(CommandOutcome::new(CommandData::Item(*item)).with_observation(observation))
         }
         ShowItemResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
     }

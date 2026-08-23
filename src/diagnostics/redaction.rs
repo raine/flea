@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 const REDACTED: &str = "[REDACTED]";
+#[cfg(test)]
 const UPSTREAM_BODY_LIMIT: usize = 4 * 1024;
 
 pub(super) fn redact_json_line(line: &[u8]) -> Vec<u8> {
@@ -318,6 +319,7 @@ fn redact_data_images(text: &str) -> String {
     result
 }
 
+#[cfg(test)]
 pub fn sanitized_upstream_body(body: &[u8]) -> String {
     let mut sanitized = match serde_json::from_slice::<Value>(body) {
         Ok(mut value) => {

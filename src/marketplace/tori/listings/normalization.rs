@@ -329,6 +329,7 @@ fn parse_statistic(value: &str) -> Option<u64> {
     (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
 }
 
+#[cfg(test)]
 pub(super) fn collect_image_urls(value: &Value, output: &mut Vec<String>) {
     match value {
         Value::String(url) if !url.is_empty() => output.push(url.clone()),

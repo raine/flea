@@ -103,7 +103,7 @@ pub struct ShowItemRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ShowItemResult {
     Detail {
-        item: PublicItemDetail,
+        item: Box<PublicItemDetail>,
         observation: Observation,
     },
     Raw(Value),
@@ -124,7 +124,7 @@ impl<'a> PublicItems<'a> {
             Ok(ShowItemResult::Raw(raw))
         } else {
             Ok(ShowItemResult::Detail {
-                item,
+                item: Box::new(item),
                 observation: Observation::confirmed_present("public_listing_detail", None),
             })
         }

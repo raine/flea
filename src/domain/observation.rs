@@ -325,7 +325,10 @@ mod tests {
         let absent = Observation::confirmed_absent("listing_detail", Some(404));
         let present = Observation::confirmed_present("listing_detail", Some(200));
 
-        assert_eq!(Observation::reconcile(&[present.clone()]).unwrap(), present);
+        assert_eq!(
+            Observation::reconcile(std::slice::from_ref(&present)).unwrap(),
+            present
+        );
         assert_eq!(absent.state, ObservationState::ConfirmedAbsent);
     }
 }

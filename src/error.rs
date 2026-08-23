@@ -43,10 +43,10 @@ pub struct AppError {
     pub message: String,
     pub upstream_transient: bool,
     pub safe_to_retry: bool,
-    pub observation: Option<Observation>,
+    pub observation: Option<Box<Observation>>,
     pub details: Option<Box<Value>>,
     pub partial: Option<Box<Value>>,
-    pub next_actions: Vec<NextAction>,
+    pub next_actions: Box<Vec<NextAction>>,
     pub diagnostics: Option<Box<Diagnostics>>,
     pub exit_class: ExitClass,
     #[source]
@@ -127,7 +127,7 @@ impl AppError {
             observation: None,
             details: None,
             partial: None,
-            next_actions: Vec::new(),
+            next_actions: Box::default(),
             diagnostics: None,
             exit_class,
             source_error: None,
@@ -164,7 +164,7 @@ impl AppError {
         let classification = observation.retry_classification(operation);
         self.upstream_transient = classification.upstream_transient;
         self.safe_to_retry = classification.safe_to_retry;
-        self.observation = Some(observation);
+        self.observation = Some(Box::new(observation));
         self
     }
 
@@ -290,7 +290,7 @@ impl From<&AppError> for ErrorBody {
             message: crate::diagnostics::redact_text(&error.message),
             upstream_transient: error.upstream_transient,
             safe_to_retry: error.safe_to_retry,
-            observation: error.observation.clone(),
+            observation: error.observation.as_deref().cloned(),
             retry_guidance: retry_guidance(error)
                 .map(|guidance| crate::diagnostics::redact_text(&guidance)),
             details,

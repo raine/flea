@@ -52,7 +52,7 @@ impl<T> Envelope<T> {
             partial: error.partial.map(|partial| *partial),
             observation: None,
             warnings: Vec::new(),
-            next_actions: error.next_actions,
+            next_actions: *error.next_actions,
             diagnostics: error.diagnostics.map(|diagnostics| *diagnostics),
         }
     }

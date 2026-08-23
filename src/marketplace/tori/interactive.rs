@@ -549,10 +549,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_browser_failures_are_structured_and_actionable() {
-        let error = browser_launch_error(
-            "/usr/bin/open",
-            std::io::Error::new(std::io::ErrorKind::Other, "failed"),
-        );
+        let error = browser_launch_error("/usr/bin/open", std::io::Error::other("failed"));
 
         assert_eq!(error.code, "auth.browser_launch_failed");
         assert_eq!(error.details.unwrap()["launcher"], "/usr/bin/open");

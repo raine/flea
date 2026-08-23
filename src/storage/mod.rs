@@ -47,22 +47,11 @@ impl StatePaths {
         Ok(paths)
     }
 
-    pub fn from_state_home(state_home: impl Into<PathBuf>, context: MarketplaceContext) -> Self {
-        Self {
-            root: state_home.into().join(STATE_DIR),
-            context,
-        }
-    }
-
     pub fn from_root(root: impl Into<PathBuf>, context: MarketplaceContext) -> Self {
         Self {
             root: root.into(),
             context,
         }
-    }
-
-    pub fn context(&self) -> MarketplaceContext {
-        self.context
     }
 
     pub fn ensure(&self) -> io::Result<()> {
@@ -75,6 +64,7 @@ impl StatePaths {
         secure_directory(&self.logs_dir())
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn root(&self) -> PathBuf {
         self.root.clone()
     }

@@ -102,7 +102,7 @@ async fn saved_search_creation_reuses_public_search_argument_mapping() {
         panic!("create command")
     };
 
-    let parameters = search::saved_search_parameters(args, &api).await.unwrap();
+    let parameters = search::saved_search_parameters(*args, &api).await.unwrap();
 
     assert_eq!(parameters["q"], ["chair"]);
     assert_eq!(parameters["product_category"], ["2.93.3215.8368"]);

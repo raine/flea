@@ -66,7 +66,7 @@ pub enum SavedSearchCommand {
         no_notifications: bool,
 
         #[command(flatten)]
-        search: SearchArgs,
+        search: Box<SearchArgs>,
     },
     #[command(
         about = "Update a search alert",
@@ -141,7 +141,7 @@ pub async fn dispatch(
             SavedSearchRequest::Create {
                 name,
                 notifications,
-                search: request_from_args(search)?,
+                search: Box::new(request_from_args(*search)?),
             }
         }
         SavedSearchCommand::Update {
@@ -174,7 +174,7 @@ pub async fn dispatch(
         SavedSearchResult::Search {
             saved_search,
             observation,
-        } => (CommandData::SavedSearch(saved_search), observation),
+        } => (CommandData::SavedSearch(*saved_search), observation),
         SavedSearchResult::Deleted {
             deleted,
             observation,

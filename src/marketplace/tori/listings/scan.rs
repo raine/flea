@@ -164,10 +164,11 @@ mod tests {
         };
 
         let result = scan_collection(&source, async |items, _| {
-            items
-                .contains(&1)
-                .then_some(ControlFlow::Break("found"))
-                .unwrap_or(ControlFlow::Continue(()))
+            if items.contains(&1) {
+                ControlFlow::Break("found")
+            } else {
+                ControlFlow::Continue(())
+            }
         })
         .await
         .unwrap();

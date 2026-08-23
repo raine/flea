@@ -68,7 +68,7 @@ pub struct CatalogueSearchRequest {
 
 #[derive(Debug, PartialEq)]
 pub enum SearchResult {
-    Search(SearchCollection),
+    Search(Box<SearchCollection>),
     Raw(Value),
 }
 
@@ -116,7 +116,7 @@ impl<'a> VintedSearch<'a> {
         if raw_output {
             Ok(SearchResult::Raw(raw))
         } else {
-            Ok(SearchResult::Search(normalized))
+            Ok(SearchResult::Search(Box::new(normalized)))
         }
     }
 }

@@ -160,6 +160,7 @@ impl<'a> PublicSearch<'a> {
         Self { api }
     }
 
+    #[cfg(test)]
     pub async fn execute(
         &self,
         request: &UpstreamSearchRequest,

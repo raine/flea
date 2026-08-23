@@ -16,9 +16,11 @@ use std::ffi::OsString;
 
 use clap::{Args, Parser, Subcommand};
 
+#[cfg(test)]
+use crate::marketplace::CapabilityId;
 use crate::{
     error::AppError,
-    marketplace::{CapabilityId, MarketplaceContext, PortalId},
+    marketplace::{MarketplaceContext, PortalId},
     output::OutputFormat,
 };
 
@@ -78,6 +80,7 @@ impl Command {
         }
     }
 
+    #[cfg(test)]
     pub fn capability_id(&self) -> Option<CapabilityId> {
         match self {
             Self::Tori(args) => args.command.capability_id(),
@@ -170,6 +173,7 @@ pub struct VintedArgs {
 }
 
 impl ToriCommand {
+    #[cfg(test)]
     pub fn capability_id(&self) -> Option<CapabilityId> {
         Some(match self {
             Self::Auth(args) => args.command.capability_id(),
@@ -224,6 +228,7 @@ pub enum VintedCommand {
 }
 
 impl VintedCommand {
+    #[cfg(test)]
     pub fn capability_id(&self) -> Option<CapabilityId> {
         Some(match self {
             Self::Auth(args) => args.command.capability_id(),

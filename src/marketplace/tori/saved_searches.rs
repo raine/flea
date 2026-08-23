@@ -296,7 +296,7 @@ pub enum SavedSearchRequest {
     Create {
         name: String,
         notifications: NotificationSelection,
-        search: SearchRequest,
+        search: Box<SearchRequest>,
     },
     Update {
         id: String,
@@ -318,7 +318,7 @@ pub enum SavedSearchResult {
         observation: Observation,
     },
     Search {
-        saved_search: SavedSearch,
+        saved_search: Box<SavedSearch>,
         observation: Observation,
     },
     Deleted {
@@ -355,7 +355,7 @@ impl<'a> SavedSearches<'a> {
                 })
             }
             SavedSearchRequest::Show { id } => Ok(SavedSearchResult::Search {
-                saved_search: self.show(&id).await?,
+                saved_search: Box::new(self.show(&id).await?),
                 observation: Observation::confirmed_present("saved_search_show", Some(200)),
             }),
             SavedSearchRequest::Create {
@@ -364,16 +364,17 @@ impl<'a> SavedSearches<'a> {
                 search,
             } => {
                 let parameters = ToriDiscovery::new(search_api, None)
-                    .saved_search_parameters(search)
+                    .saved_search_parameters(*search)
                     .await?;
                 Ok(SavedSearchResult::Search {
-                    saved_search: self
-                        .create(CreateSavedSearch {
+                    saved_search: Box::new(
+                        self.create(CreateSavedSearch {
                             name,
                             notifications: notifications.values(),
                             parameters,
                         })
                         .await?,
+                    ),
                     observation: Observation::confirmed_present("saved_search_show", Some(200)),
                 })
             }
@@ -399,7 +400,7 @@ impl<'a> SavedSearches<'a> {
                 apply_notification(&mut notifications, "PUSH", push);
                 apply_notification(&mut notifications, "NC", notification_center);
                 Ok(SavedSearchResult::Search {
-                    saved_search: self.update(&id, name, Some(notifications)).await?,
+                    saved_search: Box::new(self.update(&id, name, Some(notifications)).await?),
                     observation: Observation::confirmed_present("saved_search_show", Some(200)),
                 })
             }

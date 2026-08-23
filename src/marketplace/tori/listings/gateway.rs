@@ -205,6 +205,7 @@ pub enum ListingsApiError {
     NotFound,
     #[error("the resource changed remotely")]
     Conflict,
+    #[cfg(test)]
     #[error("listing validation failed: {message}")]
     Validation {
         message: String,
@@ -224,6 +225,7 @@ impl fmt::Debug for ListingsApiError {
             Self::Authentication => formatter.write_str("Authentication"),
             Self::NotFound => formatter.write_str("NotFound"),
             Self::Conflict => formatter.write_str("Conflict"),
+            #[cfg(test)]
             Self::Validation { fields, .. } => formatter
                 .debug_struct("Validation")
                 .field("message", &"[REDACTED]")

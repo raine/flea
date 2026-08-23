@@ -129,6 +129,7 @@ impl<'a> Taxonomy<'a> {
         })
     }
 
+    #[cfg(test)]
     pub async fn search_categories(&self, query: &str) -> Result<CategorySearchResult, AppError> {
         self.search_categories_with_options(query, CategorySearchOptions::default())
             .await

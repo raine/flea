@@ -250,7 +250,7 @@ async fn execute_vinted(
         .await?
         {
             VintedSearchResult::Search(collection) => {
-                Ok(CommandOutcome::new(CommandData::Search(collection)))
+                Ok(CommandOutcome::new(CommandData::Search(*collection)))
             }
             VintedSearchResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
         },

@@ -92,7 +92,7 @@ impl<T: AdInputProtocol> DraftListingObservation for HttpAdInputApi<T> {
                 } else {
                     "unavailable"
                 };
-                let observation = error.observation.unwrap_or_else(|| {
+                let observation = error.observation.map(|value| *value).unwrap_or_else(|| {
                     Observation::temporarily_unavailable(
                         ObservationSource::ListingDetail,
                         error.status,

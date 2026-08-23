@@ -181,7 +181,7 @@ pub struct ApiError {
     pub message: String,
     pub upstream_transient: bool,
     pub safe_to_retry: bool,
-    pub observation: Option<Observation>,
+    pub observation: Option<Box<Observation>>,
     pub status: Option<u16>,
     pub details: Option<Box<Value>>,
 }
@@ -270,7 +270,7 @@ impl ApiError {
         let classification = observation.retry_classification(operation);
         self.upstream_transient = classification.upstream_transient;
         self.safe_to_retry = classification.safe_to_retry;
-        self.observation = Some(observation);
+        self.observation = Some(Box::new(observation));
         self
     }
 }

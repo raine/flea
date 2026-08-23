@@ -19,7 +19,7 @@ impl SecretString {
         self.0.expose()
     }
 
-    #[doc(hidden)]
+    #[cfg(test)]
     pub fn new_for_adapter(value: String) -> Self {
         Self::new(value)
     }
