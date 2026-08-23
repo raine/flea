@@ -12,7 +12,10 @@ mod types;
 mod validation;
 mod workflow;
 
-pub use adapter::{AdInputApi, HttpAdInputApi};
+pub use adapter::{
+    AdInputApi, DraftDeliveryApi, DraftImages, DraftListingObservation, DraftMutation,
+    DraftPublication, DraftRead, HttpAdInputApi,
+};
 pub use execution::{
     DraftDeleteOutput, DraftExecution, DraftRequest, DraftResult, DraftResultData,
 };

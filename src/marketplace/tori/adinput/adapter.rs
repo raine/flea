@@ -33,8 +33,7 @@ use serde_json::Value;
 use serde_json::json;
 
 #[allow(async_fn_in_trait)]
-pub trait AdInputApi: Send + Sync {
-    async fn create_draft(&self) -> Result<DraftState, ApiError>;
+pub trait DraftRead: Send + Sync {
     async fn get_draft(&self, draft_id: &str) -> Result<DraftState, ApiError>;
     async fn publication_draft(&self, draft_id: &str) -> Result<PublicationDraftState, ApiError> {
         self.get_draft(draft_id)
@@ -51,6 +50,16 @@ pub trait AdInputApi: Send + Sync {
     ) -> Result<PublicationDraftState, ApiError> {
         self.publication_draft(draft_id).await
     }
+    async fn category_predictions(
+        &self,
+        draft_id: &str,
+    ) -> Result<Vec<CategoryPrediction>, ApiError>;
+    async fn publication_categories(&self) -> Result<Vec<PublicationCategory>, ApiError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait DraftMutation: Send + Sync {
+    async fn create_draft(&self) -> Result<DraftState, ApiError>;
     async fn update_item(
         &self,
         draft_id: &str,
@@ -76,6 +85,10 @@ pub trait AdInputApi: Send + Sync {
         values: &Map<String, Value>,
     ) -> Result<DraftState, ApiError>;
     async fn delete_draft(&self, draft_id: &str) -> Result<(), ApiError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait DraftImages: Send + Sync {
     async fn upload_image(
         &self,
         draft_id: &str,
@@ -91,12 +104,10 @@ pub trait AdInputApi: Send + Sync {
         values: &Map<String, Value>,
         images: &[UploadedImage],
     ) -> Result<DraftState, ApiError>;
-    async fn category_predictions(
-        &self,
-        draft_id: &str,
-    ) -> Result<Vec<CategoryPrediction>, ApiError>;
-    async fn publication_categories(&self) -> Result<Vec<PublicationCategory>, ApiError>;
-    async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait DraftDeliveryApi: Send + Sync {
     async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError>;
     async fn delivery_composer_for_inspection(
         &self,
@@ -111,6 +122,10 @@ pub trait AdInputApi: Send + Sync {
         composer: &DeliveryComposer,
         delivery: &str,
     ) -> Result<(), ApiError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait DraftPublication: Send + Sync {
     async fn product_context(
         &self,
         draft_id: &str,
@@ -123,8 +138,33 @@ pub trait AdInputApi: Send + Sync {
     ) -> Result<Publication, ApiError>;
     async fn confirmation(&self, publication: &Publication) -> Result<Confirmation, ApiError>;
     async fn track_confirmation(&self, confirmation: &Confirmation) -> Result<(), ApiError>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait DraftListingObservation: Send + Sync {
+    async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError>;
     async fn active_listing(&self, listing_id: &str) -> Result<Option<Value>, ApiError>;
     async fn observed_listing(&self, listing_id: &str) -> Result<Value, ApiError>;
+}
+
+pub trait AdInputApi:
+    DraftRead
+    + DraftMutation
+    + DraftImages
+    + DraftDeliveryApi
+    + DraftPublication
+    + DraftListingObservation
+{
+}
+
+impl<T> AdInputApi for T where
+    T: DraftRead
+        + DraftMutation
+        + DraftImages
+        + DraftDeliveryApi
+        + DraftPublication
+        + DraftListingObservation
+{
 }
 
 pub struct HttpAdInputApi<T> {
@@ -315,7 +355,96 @@ impl<T: HttpTransport> HttpAdInputApi<T> {
 }
 
 #[allow(async_fn_in_trait)]
-impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
+impl<T: HttpTransport> DraftRead for HttpAdInputApi<T> {
+    async fn get_draft(&self, draft_id: &str) -> Result<DraftState, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
+        match self
+            .draft_request(
+                HttpRequest::read(
+                    ObservationSource::DraftDetail,
+                    format!("/adinput/ad/withModel/{draft_id}"),
+                ),
+                true,
+            )
+            .await
+        {
+            Err(error) if error.status == Some(404) => {
+                Err(self.reconcile_missing_draft(draft_id, error).await)
+            }
+            result => result,
+        }
+    }
+    async fn publication_draft(&self, draft_id: &str) -> Result<PublicationDraftState, ApiError> {
+        self.publication_draft_for_inspection(draft_id, false).await
+    }
+    async fn publication_draft_for_inspection(
+        &self,
+        draft_id: &str,
+        include_all_options: bool,
+    ) -> Result<PublicationDraftState, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
+        let response = match self
+            .json(HttpRequest::read(
+                ObservationSource::DraftDetail,
+                format!("/adinput/ad/withModel/{draft_id}"),
+            ))
+            .await
+        {
+            Err(error) if error.status == Some(404) => {
+                return Err(self.reconcile_missing_draft(draft_id, error).await);
+            }
+            result => result?,
+        };
+        if response.body_is_unparseable {
+            return Err(malformed_read_response(
+                "publication_draft",
+                ObservationSource::DraftDetail,
+            ));
+        }
+        let status = response.status;
+        let parsed = if include_all_options {
+            normalize_publication_draft_with_limit(
+                response.body,
+                response.etag.as_deref(),
+                usize::MAX,
+            )
+        } else {
+            normalize_publication_draft(response.body, response.etag.as_deref())
+        };
+        parsed.map_err(|error| unrecognized_read(error, ObservationSource::DraftDetail, status))
+    }
+    async fn category_predictions(
+        &self,
+        draft_id: &str,
+    ) -> Result<Vec<CategoryPrediction>, ApiError> {
+        validate_resource_id(draft_id, "draft")?;
+        let response = self
+            .json(HttpRequest::read(
+                ObservationSource::DraftCategoryPredictions,
+                format!("/drafts/{draft_id}/category-predictions"),
+            ))
+            .await?;
+        serde_json::from_value(response.body).map_err(|_| {
+            malformed_read_response(
+                "category_predictions",
+                ObservationSource::DraftCategoryPredictions,
+            )
+        })
+    }
+    async fn publication_categories(&self) -> Result<Vec<PublicationCategory>, ApiError> {
+        let response = self
+            .json(HttpRequest::read(
+                ObservationSource::CategoryTaxonomy,
+                "/categories/taxonomy",
+            ))
+            .await?;
+        normalize_publication_categories(&response.body).map_err(|error| {
+            unrecognized_read(error, ObservationSource::CategoryTaxonomy, response.status)
+        })
+    }
+}
+
+impl<T: HttpTransport> DraftMutation for HttpAdInputApi<T> {
     async fn create_draft(&self) -> Result<DraftState, ApiError> {
         let request = HttpRequest::mutation(
             ObservationSource::DraftCreation,
@@ -366,67 +495,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         self.observe_created_draft(&draft_id, &["create_draft", "establish_identity"])
             .await
     }
-
-    async fn get_draft(&self, draft_id: &str) -> Result<DraftState, ApiError> {
-        validate_resource_id(draft_id, "draft")?;
-        match self
-            .draft_request(
-                HttpRequest::read(
-                    ObservationSource::DraftDetail,
-                    format!("/adinput/ad/withModel/{draft_id}"),
-                ),
-                true,
-            )
-            .await
-        {
-            Err(error) if error.status == Some(404) => {
-                Err(self.reconcile_missing_draft(draft_id, error).await)
-            }
-            result => result,
-        }
-    }
-
-    async fn publication_draft(&self, draft_id: &str) -> Result<PublicationDraftState, ApiError> {
-        self.publication_draft_for_inspection(draft_id, false).await
-    }
-
-    async fn publication_draft_for_inspection(
-        &self,
-        draft_id: &str,
-        include_all_options: bool,
-    ) -> Result<PublicationDraftState, ApiError> {
-        validate_resource_id(draft_id, "draft")?;
-        let response = match self
-            .json(HttpRequest::read(
-                ObservationSource::DraftDetail,
-                format!("/adinput/ad/withModel/{draft_id}"),
-            ))
-            .await
-        {
-            Err(error) if error.status == Some(404) => {
-                return Err(self.reconcile_missing_draft(draft_id, error).await);
-            }
-            result => result?,
-        };
-        if response.body_is_unparseable {
-            return Err(malformed_read_response(
-                "publication_draft",
-                ObservationSource::DraftDetail,
-            ));
-        }
-        let status = response.status;
-        let parsed = if include_all_options {
-            normalize_publication_draft_with_limit(
-                response.body,
-                response.etag.as_deref(),
-                usize::MAX,
-            )
-        } else {
-            normalize_publication_draft(response.body, response.etag.as_deref())
-        };
-        parsed.map_err(|error| unrecognized_read(error, ObservationSource::DraftDetail, status))
-    }
-
     async fn update_item(
         &self,
         draft_id: &str,
@@ -444,7 +512,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         request.if_match = Some(etag.to_owned());
         self.draft_request(request, false).await
     }
-
     async fn update_sale_price(
         &self,
         draft_id: &str,
@@ -472,7 +539,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             .map_err(|error| error_at_stage(error, "apply_price"))?;
         normalize_item_update(response, draft_id, "apply_price")
     }
-
     async fn patch_item_fields(
         &self,
         draft_id: &str,
@@ -494,7 +560,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             .map_err(|error| error_at_stage(error, "patch_item_fields"))?;
         normalize_item_update(response, draft_id, "patch_item_fields")
     }
-
     async fn update_recommerce(
         &self,
         draft_id: &str,
@@ -516,7 +581,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             .map_err(|error| error_at_stage(error, "update_recommerce"))?;
         normalize_recommerce_update(response, draft_id)
     }
-
     async fn delete_draft(&self, draft_id: &str) -> Result<(), ApiError> {
         validate_resource_id(draft_id, "draft")?;
         self.get_draft(draft_id).await?;
@@ -535,7 +599,9 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         .await
         .map(|_| ())
     }
+}
 
+impl<T: HttpTransport> DraftImages for HttpAdInputApi<T> {
     async fn upload_image(
         &self,
         draft_id: &str,
@@ -585,7 +651,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             mime_type: Some(mime_type.to_owned()),
         })
     }
-
     async fn set_images(
         &self,
         draft_id: &str,
@@ -635,75 +700,12 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         request.if_match = Some(etag.to_owned());
         self.draft_request(request, false).await
     }
+}
 
-    async fn category_predictions(
-        &self,
-        draft_id: &str,
-    ) -> Result<Vec<CategoryPrediction>, ApiError> {
-        validate_resource_id(draft_id, "draft")?;
-        let response = self
-            .json(HttpRequest::read(
-                ObservationSource::DraftCategoryPredictions,
-                format!("/drafts/{draft_id}/category-predictions"),
-            ))
-            .await?;
-        serde_json::from_value(response.body).map_err(|_| {
-            malformed_read_response(
-                "category_predictions",
-                ObservationSource::DraftCategoryPredictions,
-            )
-        })
-    }
-
-    async fn publication_categories(&self) -> Result<Vec<PublicationCategory>, ApiError> {
-        let response = self
-            .json(HttpRequest::read(
-                ObservationSource::CategoryTaxonomy,
-                "/categories/taxonomy",
-            ))
-            .await?;
-        normalize_publication_categories(&response.body).map_err(|error| {
-            unrecognized_read(error, ObservationSource::CategoryTaxonomy, response.status)
-        })
-    }
-
-    async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
-        validate_resource_id(listing_id, "listing")?;
-        let Some(_) = ListingObservations::new(&self.transport)
-            .find_summary(listing_id)
-            .await?
-        else {
-            return Err(listing_not_copyable(
-                listing_id,
-                "not_in_authenticated_seller_collection",
-                None,
-            ));
-        };
-        let response = self
-            .json(HttpRequest::read(
-                ObservationSource::ListingCopyEligibility,
-                format!("/listings/{listing_id}/draft-source"),
-            ))
-            .await
-            .map_err(|error| {
-                if error.status == Some(404) {
-                    listing_not_copyable(listing_id, "copy_source_unavailable", Some(404))
-                } else {
-                    copy_source_error(error, listing_id)
-                }
-            })?;
-        let seed: ListingDraftSeed = serde_json::from_value(response.body)
-            .map_err(|_| malformed_copy_source(listing_id, response.status))?;
-        if seed.listing_id != listing_id {
-            return Err(malformed_copy_source(listing_id, response.status));
-        }
-        Ok(seed)
-    }
-
+impl<T: HttpTransport> DraftDeliveryApi for HttpAdInputApi<T> {
     async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError> {
         self.delivery_composer_for_inspection(draft_id, false).await
     }
-
     async fn delivery_composer_for_inspection(
         &self,
         draft_id: &str,
@@ -727,7 +729,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         parsed
             .map_err(|error| unrecognized_read(error, ObservationSource::DeliveryComposer, status))
     }
-
     async fn apply_delivery(
         &self,
         draft_id: &str,
@@ -866,7 +867,9 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         .await
         .map(|_| ())
     }
+}
 
+impl<T: HttpTransport> DraftPublication for HttpAdInputApi<T> {
     async fn product_context(
         &self,
         draft_id: &str,
@@ -888,7 +891,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             unrecognized_read(error, ObservationSource::PublicationProductContext, status)
         })
     }
-
     async fn publish_basic(
         &self,
         draft_id: &str,
@@ -909,7 +911,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             .map_err(|error| error_at_stage(error, "package_choice"))?;
         normalize_publication(response, draft_id, &context.revision)
     }
-
     async fn confirmation(&self, publication: &Publication) -> Result<Confirmation, ApiError> {
         validate_resource_id(&publication.listing_id, "listing")?;
         validate_resource_id(&publication.order_id, "order")?;
@@ -934,7 +935,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             details: response.body,
         })
     }
-
     async fn track_confirmation(&self, confirmation: &Confirmation) -> Result<(), ApiError> {
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query.append_pair("adId", &confirmation.listing_id);
@@ -946,7 +946,41 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
         .await
         .map(|_| ())
     }
+}
 
+impl<T: HttpTransport> DraftListingObservation for HttpAdInputApi<T> {
+    async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
+        validate_resource_id(listing_id, "listing")?;
+        let Some(_) = ListingObservations::new(&self.transport)
+            .find_summary(listing_id)
+            .await?
+        else {
+            return Err(listing_not_copyable(
+                listing_id,
+                "not_in_authenticated_seller_collection",
+                None,
+            ));
+        };
+        let response = self
+            .json(HttpRequest::read(
+                ObservationSource::ListingCopyEligibility,
+                format!("/listings/{listing_id}/draft-source"),
+            ))
+            .await
+            .map_err(|error| {
+                if error.status == Some(404) {
+                    listing_not_copyable(listing_id, "copy_source_unavailable", Some(404))
+                } else {
+                    copy_source_error(error, listing_id)
+                }
+            })?;
+        let seed: ListingDraftSeed = serde_json::from_value(response.body)
+            .map_err(|_| malformed_copy_source(listing_id, response.status))?;
+        if seed.listing_id != listing_id {
+            return Err(malformed_copy_source(listing_id, response.status));
+        }
+        Ok(seed)
+    }
     async fn active_listing(&self, listing_id: &str) -> Result<Option<Value>, ApiError> {
         validate_resource_id(listing_id, "listing")?;
         Ok(ListingObservations::new(&self.transport)
@@ -954,7 +988,6 @@ impl<T: HttpTransport> AdInputApi for HttpAdInputApi<T> {
             .await?
             .filter(listing_is_active))
     }
-
     async fn observed_listing(&self, listing_id: &str) -> Result<Value, ApiError> {
         validate_resource_id(listing_id, "listing")?;
         let detail = self

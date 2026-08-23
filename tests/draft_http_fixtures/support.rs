@@ -10,7 +10,8 @@ pub(crate) use flea::{
         observation::ObservationState,
     },
     marketplace::tori::adinput::{
-        AdInputApi, AttachmentRecoveryStatus, DraftWorkflow, HttpAdInputApi, HttpRequest,
+        AttachmentRecoveryStatus, DraftDeliveryApi, DraftImages, DraftListingObservation,
+        DraftMutation, DraftPublication, DraftRead, DraftWorkflow, HttpAdInputApi, HttpRequest,
         HttpResponse, HttpTransport, ImageRecoveryOperation, ImageState, Method, ObservationStatus,
         ProcessingRecoveryStatus, RecoveryStatus, RequestBody, RetryPolicy, UploadRecoveryStatus,
         WorkflowConfig,

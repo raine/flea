@@ -14,7 +14,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
-    error::{AppError, ExitClass},
+    error::AppError,
     marketplace::tori::adinput::{
         AdInputApi, DraftExecution, DraftInput, DraftRequest, DraftResultData, WorkflowConfig,
         preview,
@@ -612,6 +612,7 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
+    use crate::error::ExitClass;
 
     fn empty_args() -> ListingInputArgs {
         ListingInputArgs {
