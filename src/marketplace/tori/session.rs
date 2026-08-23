@@ -1,11 +1,11 @@
 use serde::Serialize;
-use serde_json::Value;
 
 use crate::{
     api::{
         auth::{GatewaySigner, RefreshRequest, SchibstedToriAuthenticationApi},
         client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
     },
+    cli::outcome::CommandOutcome,
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::MarketplaceContext,
@@ -24,7 +24,7 @@ pub(crate) async fn authenticated_client() -> Result<HttpClient<ReqwestTransport
     .await
 }
 
-pub(crate) async fn status() -> Result<Value, AppError> {
+pub(crate) async fn status() -> Result<CommandOutcome, AppError> {
     auth_status(
         state_paths()?,
         &SchibstedToriAuthenticationApi::new(),
@@ -68,7 +68,7 @@ struct AuthStatusOutput {
     bearer_expires_at_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_in_seconds: Option<u64>,
-    #[serde(rename = "_next_actions", skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip)]
     next_actions: Vec<NextAction>,
 }
 
@@ -178,8 +178,8 @@ async fn auth_status<S: GatewaySigner>(
     paths: StatePaths,
     api: &SchibstedToriAuthenticationApi<S>,
     now: u64,
-) -> Result<Value, AppError> {
-    let output = match resolve_credentials_with(paths, api, now).await {
+) -> Result<CommandOutcome, AppError> {
+    let mut output = match resolve_credentials_with(paths, api, now).await {
         Ok(Some(resolved)) => AuthStatusOutput {
             authenticated: true,
             health: if resolved.refreshed_from.is_some() {
@@ -202,7 +202,9 @@ async fn auth_status<S: GatewaySigner>(
         Ok(None) => unavailable_status("missing", "local_storage", None, None, true),
         Err(failure) => status_from_failure(failure),
     };
+    let next_actions = std::mem::take(&mut output.next_actions);
     serde_json::to_value(output)
+        .map(|data| CommandOutcome::new(data).with_next_actions(next_actions))
         .map_err(|error| AppError::output("failed to serialize auth status").with_source(error))
 }
 
@@ -486,9 +488,9 @@ mod tests {
                 "health": "missing",
                 "validation": "local_storage",
                 "refresh_performed": false,
-                "_next_actions": [{ "command": "flea tori auth login" }],
             })
         );
+        assert_eq!(status.next_actions[0].command, "flea tori auth login");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -577,10 +579,7 @@ mod tests {
         assert_eq!(status["authenticated"], false);
         assert_eq!(status["health"], "refresh_rejected");
         assert_eq!(status["stored_bearer_state"], "expired");
-        assert_eq!(
-            status["_next_actions"][0]["command"],
-            "flea tori auth login"
-        );
+        assert_eq!(status.next_actions[0].command, "flea tori auth login");
         for secret in ["user", "refresh-old", "bearer-old", "response-secret"] {
             assert!(!rendered.contains(secret));
         }
@@ -605,7 +604,7 @@ mod tests {
         assert_eq!(refresh_status["health"], "malformed");
         assert_eq!(refresh_status["stored_bearer_state"], "expired");
         assert_eq!(
-            refresh_status["_next_actions"][0]["command"],
+            refresh_status.next_actions[0].command,
             "flea tori auth login"
         );
 
@@ -656,10 +655,7 @@ mod tests {
         assert_eq!(status["health"], "temporarily_unavailable");
         assert_eq!(status["validation"], "unverified");
         assert_eq!(status["stored_bearer_state"], "expired");
-        assert_eq!(
-            status["_next_actions"][0]["command"],
-            "flea tori auth login"
-        );
+        assert_eq!(status.next_actions[0].command, "flea tori auth login");
     }
 
     #[test]

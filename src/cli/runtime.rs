@@ -39,9 +39,7 @@ impl CommandRuntime for ProductionRuntime {
                 Command::Capabilities => capabilities_output().map(Into::into),
                 Command::Marketplaces => marketplaces_output().map(Into::into),
                 Command::Tori(args) => execute_tori(args.command).await,
-                Command::Vinted(args) => execute_vinted(args.portal, args.command)
-                    .await
-                    .map(super::outcome::CommandOutcome::from_legacy_value),
+                Command::Vinted(args) => execute_vinted(args.portal, args.command).await,
                 Command::Skill(args) => super::skill::dispatch(args).map(Into::into),
                 Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
             }
@@ -51,9 +49,7 @@ impl CommandRuntime for ProductionRuntime {
 
 async fn execute_tori(command: ToriCommand) -> Result<super::outcome::CommandOutcome, AppError> {
     match command {
-        ToriCommand::Auth(args) => execute_tori_auth(args)
-            .await
-            .map(super::outcome::CommandOutcome::from_legacy_value),
+        ToriCommand::Auth(args) => execute_tori_auth(args).await,
         ToriCommand::Capabilities => marketplace_capabilities(MarketplaceId::Tori).map(Into::into),
         ToriCommand::Category(args) => {
             let client = tori_session::authenticated_client().await?;
@@ -123,7 +119,7 @@ async fn execute_tori(command: ToriCommand) -> Result<super::outcome::CommandOut
 async fn execute_vinted(
     portal: crate::marketplace::PortalId,
     command: VintedCommand,
-) -> Result<Value, AppError> {
+) -> Result<super::outcome::CommandOutcome, AppError> {
     match command {
         VintedCommand::Auth(args) => {
             use crate::marketplace::vinted::session::{self, AuthOperation};
@@ -140,10 +136,14 @@ async fn execute_vinted(
             };
             session::execute_auth(portal, operation).await
         }
-        VintedCommand::Capabilities => marketplace_capabilities(MarketplaceId::Vinted),
+        VintedCommand::Capabilities => {
+            marketplace_capabilities(MarketplaceId::Vinted).map(Into::into)
+        }
         VintedCommand::Search(args) => {
             let credentials = crate::marketplace::vinted::session::credentials(portal)?;
-            vinted_search::dispatch(args, &credentials).await
+            vinted_search::dispatch(args, &credentials)
+                .await
+                .map(Into::into)
         }
         VintedCommand::Unsupported(parts) => Err(capability_unavailable(
             MarketplaceContext::VINTED_FI,
@@ -231,7 +231,9 @@ fn first_external_command(parts: &[std::ffi::OsString]) -> &str {
         .unwrap_or("unknown")
 }
 
-async fn execute_tori_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
+async fn execute_tori_auth(
+    args: super::auth::AuthArgs,
+) -> Result<super::outcome::CommandOutcome, AppError> {
     let command = match args.command {
         super::auth::AuthCommand::Callback {
             state_root,
@@ -240,18 +242,19 @@ async fn execute_tori_auth(args: super::auth::AuthArgs) -> Result<Value, AppErro
             return auth_callback::capture(
                 &StatePaths::from_root(state_root, MarketplaceContext::TORI_FI),
                 &callback_url,
-            );
+            )
+            .map(Into::into);
         }
         command => command,
     };
     let paths = tori_session::state_paths()?;
     match command {
-        super::auth::AuthCommand::Login => execute_interactive_login(paths).await,
+        super::auth::AuthCommand::Login => execute_interactive_login(paths).await.map(Into::into),
         super::auth::AuthCommand::Status => tori_session::status().await,
         command => {
             let store = FileAuthStore::new(paths);
             let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
-            handler.dispatch(command).await
+            handler.dispatch(command).await.map(Into::into)
         }
     }
 }

@@ -2,6 +2,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
+    cli::outcome::CommandOutcome,
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::{
@@ -23,16 +24,16 @@ pub(crate) enum AuthOperation {
 pub(crate) async fn execute_auth(
     portal: PortalId,
     operation: AuthOperation,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     if portal != PortalId::Fi {
         return Err(AppError::usage("the selected Vinted portal is unavailable"));
     }
     let paths = StatePaths::discover(MarketplaceContext::VINTED_FI)
         .map_err(|error| storage_error(error, "discover"))?;
     match operation {
-        AuthOperation::Login => execute_login(paths).await,
+        AuthOperation::Login => execute_login(paths).await.map(Into::into),
         AuthOperation::Status => execute_status(paths).await,
-        AuthOperation::Logout => execute_logout(paths),
+        AuthOperation::Logout => execute_logout(paths).map(Into::into),
     }
 }
 
@@ -66,29 +67,23 @@ struct VintedAuthStatus {
     access_expires_at_unix: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     expires_in_seconds: Option<u64>,
-    #[serde(rename = "_next_actions", skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip)]
     next_actions: Vec<NextAction>,
 }
 
-async fn execute_status(paths: StatePaths) -> Result<Value, AppError> {
+async fn execute_status(paths: StatePaths) -> Result<CommandOutcome, AppError> {
     let now = unix_time_now()?;
     let Some(credentials) = VintedCredentialStore::new(paths)
         .load()
         .map_err(|error| storage_error(error, "read"))?
     else {
-        return serialize(
-            unavailable_status("missing", "local_storage"),
-            "Vinted auth status",
-        );
+        return serialize_status(unavailable_status("missing", "local_storage"));
     };
     if credentials.access_expires_at_unix <= now {
-        return serialize(
-            VintedAuthStatus {
-                access_expires_at_unix: Some(credentials.access_expires_at_unix),
-                ..unavailable_status("expired", "local_expiry")
-            },
-            "Vinted auth status",
-        );
+        return serialize_status(VintedAuthStatus {
+            access_expires_at_unix: Some(credentials.access_expires_at_unix),
+            ..unavailable_status("expired", "local_expiry")
+        });
     }
 
     let (_, login) = match VintedAuthentication::new()
@@ -97,27 +92,21 @@ async fn execute_status(paths: StatePaths) -> Result<Value, AppError> {
     {
         Ok(account) => account,
         Err(error) => {
-            return serialize(
-                validation_failure_status(&credentials, &error),
-                "Vinted auth status",
-            );
+            return serialize_status(validation_failure_status(&credentials, &error));
         }
     };
-    serialize(
-        VintedAuthStatus {
-            authenticated: true,
-            health: "valid",
-            validation: "online_current_user",
-            refresh_maturity: CapabilityMaturity::SourceDerived,
-            refresh_performed: false,
-            user_id: Some(credentials.user_id),
-            login,
-            access_expires_at_unix: Some(credentials.access_expires_at_unix),
-            expires_in_seconds: Some(credentials.access_expires_at_unix.saturating_sub(now)),
-            next_actions: Vec::new(),
-        },
-        "Vinted auth status",
-    )
+    serialize_status(VintedAuthStatus {
+        authenticated: true,
+        health: "valid",
+        validation: "online_current_user",
+        refresh_maturity: CapabilityMaturity::SourceDerived,
+        refresh_performed: false,
+        user_id: Some(credentials.user_id),
+        login,
+        access_expires_at_unix: Some(credentials.access_expires_at_unix),
+        expires_in_seconds: Some(credentials.access_expires_at_unix.saturating_sub(now)),
+        next_actions: Vec::new(),
+    })
 }
 
 fn execute_logout(paths: StatePaths) -> Result<Value, AppError> {
@@ -173,6 +162,12 @@ fn validation_failure_status(
             }
         }],
     }
+}
+
+fn serialize_status(mut status: VintedAuthStatus) -> Result<CommandOutcome, AppError> {
+    let next_actions = std::mem::take(&mut status.next_actions);
+    serialize(status, "Vinted auth status")
+        .map(|data| CommandOutcome::new(data).with_next_actions(next_actions))
 }
 
 fn serialize(value: impl Serialize, stage: &'static str) -> Result<Value, AppError> {
@@ -295,10 +290,11 @@ mod tests {
                 "validation": "local_storage",
                 "refresh_maturity": "source_derived",
                 "refresh_performed": false,
-                "_next_actions": [{
-                    "command": "flea vinted --portal fi auth login",
-                }],
             })
+        );
+        assert_eq!(
+            status.next_actions[0].command,
+            "flea vinted --portal fi auth login"
         );
     }
 
