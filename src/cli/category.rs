@@ -2,7 +2,7 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 
 use crate::{
-    cli::outcome::CommandOutcome,
+    cli::outcome::{CommandData, CommandOutcome},
     domain::envelope::NextAction,
     error::AppError,
     marketplace::tori::listings::{
@@ -93,8 +93,6 @@ pub async fn dispatch(
                     },
                 )
                 .await?;
-            let value = serde_json::to_value(&result)
-                .map_err(|error| AppError::output(error.to_string()))?;
             let next_actions = result
                 .truncated
                 .then(|| NextAction {
@@ -108,13 +106,12 @@ pub async fn dispatch(
                 })
                 .into_iter()
                 .collect();
-            Ok(CommandOutcome::new(value).with_next_actions(next_actions))
+            Ok(CommandOutcome::new(CommandData::CategorySearch(result))
+                .with_next_actions(next_actions))
         }
-        CategoryCommand::List { parent } => {
-            serde_json::to_value(taxonomy.categories(parent.as_deref()).await?)
-                .map(CommandOutcome::new)
-                .map_err(|error| AppError::output(error.to_string()))
-        }
+        CategoryCommand::List { parent } => Ok(CommandOutcome::new(CommandData::CategoryList(
+            taxonomy.categories(parent.as_deref()).await?,
+        ))),
     }
 }
 

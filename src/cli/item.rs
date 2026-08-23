@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 
 use crate::{
-    cli::outcome::CommandOutcome,
+    cli::outcome::{CommandData, CommandOutcome},
     domain::observation::Observation,
     error::AppError,
     marketplace::tori::item::{PublicItemApi, PublicItems},
@@ -42,16 +42,12 @@ pub async fn dispatch(args: ItemArgs, api: &dyn PublicItemApi) -> Result<Command
         ItemCommand::Show { listing_id, raw } => {
             let (detail, upstream) = PublicItems::new(api).show(&listing_id).await?;
             if raw {
-                return Ok(upstream.into());
+                return Ok(CommandOutcome::new(CommandData::Raw(upstream)));
             }
-            let value = serde_json::to_value(detail).map_err(|error| {
-                AppError::output("failed to serialize public item output").with_source(error)
-            })?;
             Ok(
-                CommandOutcome::new(value).with_observation(Observation::confirmed_present(
-                    "public_listing_detail",
-                    None,
-                )),
+                CommandOutcome::new(CommandData::Item(detail)).with_observation(
+                    Observation::confirmed_present("public_listing_detail", None),
+                ),
             )
         }
     }

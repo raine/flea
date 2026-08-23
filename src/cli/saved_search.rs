@@ -1,8 +1,7 @@
 use clap::{Args, Subcommand, ValueEnum};
-use serde_json::json;
 
 use crate::{
-    cli::outcome::CommandOutcome,
+    cli::outcome::{CommandData, CommandOutcome, SavedSearchListOutput},
     domain::observation::Observation,
     error::AppError,
     marketplace::tori::{
@@ -132,25 +131,23 @@ pub async fn dispatch(
             }
             let searches = saved.list(limit).await?;
             let count = searches.len();
-            Ok(CommandOutcome::new(json!({
-                "saved_searches": searches,
-                "count": count,
-            }))
-            .with_observation(Observation::confirmed_present(
-                "saved_search_list",
-                Some(200),
-            )))
+            Ok(
+                CommandOutcome::new(CommandData::SavedSearchList(SavedSearchListOutput {
+                    saved_searches: searches,
+                    count,
+                }))
+                .with_observation(Observation::confirmed_present(
+                    "saved_search_list",
+                    Some(200),
+                )),
+            )
         }
         SavedSearchCommand::Show { id } => {
             let search = saved.show(&id).await?;
-            let value = serde_json::to_value(search).map_err(|error| {
-                AppError::output("failed to serialize saved search").with_source(error)
-            })?;
             Ok(
-                CommandOutcome::new(value).with_observation(Observation::confirmed_present(
-                    "saved_search_show",
-                    Some(200),
-                )),
+                CommandOutcome::new(CommandData::SavedSearch(search)).with_observation(
+                    Observation::confirmed_present("saved_search_show", Some(200)),
+                ),
             )
         }
         SavedSearchCommand::Create {
@@ -201,14 +198,10 @@ pub async fn dispatch(
         }
         SavedSearchCommand::Delete { id } => {
             let deleted = saved.delete(&id).await?;
-            let value = serde_json::to_value(deleted).map_err(|error| {
-                AppError::output("failed to serialize saved search deletion").with_source(error)
-            })?;
             Ok(
-                CommandOutcome::new(value).with_observation(Observation::confirmed_absent(
-                    "saved_search_show",
-                    Some(200),
-                )),
+                CommandOutcome::new(CommandData::DeletedSavedSearch(deleted)).with_observation(
+                    Observation::confirmed_absent("saved_search_show", Some(200)),
+                ),
             )
         }
     }
@@ -244,13 +237,10 @@ fn mutation_value(
     search: crate::marketplace::tori::saved_searches::SavedSearch,
     present: bool,
 ) -> Result<CommandOutcome, AppError> {
-    let value = serde_json::to_value(search).map_err(|error| {
-        AppError::output("failed to serialize saved search mutation").with_source(error)
-    })?;
     let observation = if present {
         Observation::confirmed_present("saved_search_show", Some(200))
     } else {
         Observation::confirmed_absent("saved_search_show", Some(200))
     };
-    Ok(CommandOutcome::new(value).with_observation(observation))
+    Ok(CommandOutcome::new(CommandData::SavedSearch(search)).with_observation(observation))
 }

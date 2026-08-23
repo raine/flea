@@ -1,9 +1,17 @@
-use flea::{Presentation, cli::runtime::ApplicationDependencies};
+use flea::{
+    Presentation,
+    cli::{
+        outcome::{CommandData, CommandOutcome},
+        runtime::ApplicationDependencies,
+    },
+};
 use serde_json::{Value, json};
 
 fn dependencies() -> ApplicationDependencies {
     ApplicationDependencies::production().with_tori_auth_handler(|_| async {
-        Ok(json!({ "authenticated": true, "user_id": "42" }).into())
+        Ok(CommandOutcome::new(CommandData::Raw(
+            json!({ "authenticated": true, "user_id": "42" }),
+        )))
     })
 }
 

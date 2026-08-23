@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    cli::outcome::CommandOutcome,
+    cli::outcome::{CommandData, CommandOutcome},
     domain::{
         envelope::NextAction,
         search::{
@@ -219,7 +219,7 @@ pub async fn dispatch(
         .execute_with_area(&request, prepared.resolved_location, prepared.resolved_area)
         .await?;
     if input.raw {
-        return Ok(raw.into());
+        return Ok(CommandOutcome::new(CommandData::Raw(raw)));
     }
     if let Some(request_limit) = input.explain {
         let item_api = item_api.ok_or_else(|| {
@@ -227,9 +227,6 @@ pub async fn dispatch(
         })?;
         explain_matches(&mut result, item_api, request_limit).await;
     }
-    let value = serde_json::to_value(&result).map_err(|error| {
-        AppError::output("failed to serialize search output").with_source(error)
-    })?;
     let mut actions = Vec::new();
     if let Some(next_page) = result.pagination.next_page {
         actions.push(NextAction {
@@ -286,7 +283,7 @@ pub async fn dispatch(
             });
         }
     }
-    Ok(CommandOutcome::new(value).with_next_actions(actions))
+    Ok(CommandOutcome::new(CommandData::Search(result)).with_next_actions(actions))
 }
 
 struct PreparedSearch {

@@ -7,6 +7,7 @@ use std::{
 
 use flea::{
     Presentation,
+    cli::outcome::{CommandData, CommandOutcome},
     marketplace::tori::{
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
         favorites::{FavoritesApi, HttpFavoritesApi},
@@ -56,7 +57,9 @@ impl FixtureApplication {
         flea::cli::runtime::ApplicationDependencies::production()
             .with_tori_client(Arc::new(self.client.clone()))
             .with_tori_auth_handler(|_| async {
-                Ok(json!({ "authenticated": true, "user_id": "user-1" }).into())
+                Ok(CommandOutcome::new(CommandData::Raw(
+                    json!({ "authenticated": true, "user_id": "user-1" }),
+                )))
             })
     }
 }

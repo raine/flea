@@ -7,12 +7,12 @@ use std::{
 
 use clap::{Args, Subcommand};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     cli::{
         draft::{ListingInputArgs, TradeType, parse_price},
-        outcome::CommandOutcome,
+        outcome::{CommandData, CommandOutcome, ListingDeleteOutput},
     },
     domain::observation::Observation,
     error::AppError,
@@ -87,40 +87,38 @@ pub async fn dispatch(
     api: &dyn ListingsApi,
 ) -> Result<CommandOutcome, AppError> {
     let listings = Listings::new(api);
-    let (value, source) = match command.command {
+    let (data, source) = match command.command {
         ListingCommand::List => (
-            serde_json::to_value(listings.list().await?),
+            CommandData::ListingCollection(listings.list().await?),
             "listing_collection",
         ),
         ListingCommand::Show { listing_id } => (
-            serde_json::to_value(listings.show(&listing_id).await?),
+            CommandData::ListingDetail(listings.show(&listing_id).await?),
             "listing_detail",
         ),
         ListingCommand::Update { listing_id, values } => {
             let changes = listing_changes(*values)?;
             (
-                serde_json::to_value(listings.update(&listing_id, changes).await?),
+                CommandData::ListingDetail(listings.update(&listing_id, changes).await?),
                 "listing_update_response",
             )
         }
         ListingCommand::Dispose { listing_id } => (
-            serde_json::to_value(listings.dispose(&listing_id).await?),
+            CommandData::ListingMutation(listings.dispose(&listing_id).await?),
             "listing_dispose_response",
         ),
         ListingCommand::Delete { listing_id } => {
             let deleted = listings.delete(&listing_id).await?;
             (
-                Ok(json!({ "listing_id": deleted.listing_id, "deleted": true })),
+                CommandData::ListingDelete(ListingDeleteOutput {
+                    listing_id: deleted.listing_id,
+                    deleted: true,
+                }),
                 "listing_delete_response",
             )
         }
     };
-    value
-        .map(|value| {
-            CommandOutcome::new(value)
-                .with_observation(Observation::confirmed_present(source, None))
-        })
-        .map_err(|error| AppError::output(error.to_string()))
+    Ok(CommandOutcome::new(data).with_observation(Observation::confirmed_present(source, None)))
 }
 
 pub fn listing_changes(values: ListingInputArgs) -> Result<BTreeMap<String, Value>, AppError> {

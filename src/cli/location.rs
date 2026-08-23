@@ -1,10 +1,9 @@
-use clap::{Args, Subcommand};
-use serde_json::Value;
-
 use crate::{
+    domain::search::LocationCollection,
     error::AppError,
     marketplace::tori::search::{PublicSearch, PublicSearchApi},
 };
+use clap::{Args, Subcommand};
 
 #[derive(Debug, Args)]
 pub struct LocationArgs {
@@ -32,13 +31,15 @@ impl LocationCommand {
     }
 }
 
-pub async fn dispatch(args: LocationArgs, api: &dyn PublicSearchApi) -> Result<Value, AppError> {
+pub async fn dispatch(
+    args: LocationArgs,
+    api: &dyn PublicSearchApi,
+) -> Result<LocationCollection, AppError> {
     let search = PublicSearch::new(api);
     let result = match args.command {
         LocationCommand::Search { query } => {
             search.locations(query.as_deref().unwrap_or("")).await?
         }
     };
-    serde_json::to_value(result)
-        .map_err(|error| AppError::output("failed to serialize location output").with_source(error))
+    Ok(result)
 }

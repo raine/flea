@@ -160,7 +160,7 @@ impl<A: AuthenticationApi, S: AuthStore> ToriAuthentication<A, S> {
 }
 
 #[derive(Serialize)]
-pub(crate) struct AuthCompleteOutput {
+pub struct AuthCompleteOutput {
     authenticated: bool,
     user_id: String,
 }
@@ -176,7 +176,7 @@ impl std::fmt::Debug for AuthCompleteOutput {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct AuthLogoutOutput {
+pub struct AuthLogoutOutput {
     authenticated: bool,
 }
 

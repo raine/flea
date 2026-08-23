@@ -235,7 +235,7 @@ fn finish(
                 error.chain = ?diagnostic_chain,
                 partial = ?diagnostic_partial
             );
-            let mut envelope = Envelope::failure(error);
+            let mut envelope = Envelope::<cli::outcome::CommandData>::failure(error);
             envelope.context = context;
             (envelope, exit_code)
         }
@@ -258,7 +258,7 @@ fn finish(
                 event = "output.failed",
                 error.chain = ?diagnostic_chain
             );
-            let mut fallback = Envelope::failure(render_error);
+            let mut fallback = Envelope::<cli::outcome::CommandData>::failure(render_error);
             fallback.context = context;
             let document = serde_json::to_string(&fallback).unwrap_or_else(|_| {
                 "{\"ok\":false,\"error\":{\"code\":\"output.failed\",\"message\":\"failed to serialize output\",\"upstream_transient\":false,\"safe_to_retry\":false},\"warnings\":[],\"next_actions\":[]}".to_owned()

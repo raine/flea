@@ -1,8 +1,7 @@
 use serde::Serialize;
-use serde_json::Value;
 
 use crate::{
-    cli::outcome::CommandOutcome,
+    cli::outcome::{CommandData, CommandOutcome},
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::{
@@ -31,13 +30,20 @@ pub(crate) async fn execute_auth(
     let paths = StatePaths::discover(MarketplaceContext::VINTED_FI)
         .map_err(|error| storage_error(error, "discover"))?;
     match operation {
-        AuthOperation::Login => execute_login(paths).await.map(Into::into),
+        AuthOperation::Login => execute_login(paths)
+            .await
+            .map(CommandData::VintedAuthLogin)
+            .map(CommandOutcome::new),
         AuthOperation::Status => execute_status(paths).await,
-        AuthOperation::Logout => execute_logout(paths).map(Into::into),
+        AuthOperation::Logout => execute_logout(paths)
+            .map(CommandData::VintedAuthLogout)
+            .map(CommandOutcome::new),
     }
 }
 
-async fn execute_login(paths: StatePaths) -> Result<Value, AppError> {
+async fn execute_login(
+    paths: StatePaths,
+) -> Result<crate::marketplace::vinted::auth::VintedLoginResult, AppError> {
     let auth = VintedAuthentication::new();
     let (flow, start) = auth.start(unix_time_now()?)?;
     let callback = super::interactive::open_and_capture_callback(
@@ -49,11 +55,11 @@ async fn execute_login(paths: StatePaths) -> Result<Value, AppError> {
     VintedCredentialStore::new(paths)
         .save(&completion.credentials)
         .map_err(|error| storage_error(error, "write"))?;
-    serialize(completion.output, "Vinted login")
+    Ok(completion.output)
 }
 
-#[derive(Serialize)]
-struct VintedAuthStatus {
+#[derive(Debug, Serialize)]
+pub struct VintedAuthStatus {
     authenticated: bool,
     health: &'static str,
     validation: &'static str,
@@ -109,15 +115,22 @@ async fn execute_status(paths: StatePaths) -> Result<CommandOutcome, AppError> {
     })
 }
 
-fn execute_logout(paths: StatePaths) -> Result<Value, AppError> {
+#[derive(Debug, Serialize)]
+pub struct VintedLogoutOutput {
+    authenticated: bool,
+    marketplace: &'static str,
+    portal: &'static str,
+}
+
+fn execute_logout(paths: StatePaths) -> Result<VintedLogoutOutput, AppError> {
     VintedCredentialStore::new(paths)
         .delete()
         .map_err(|error| storage_error(error, "delete"))?;
-    Ok(serde_json::json!({
-        "authenticated": false,
-        "marketplace": "vinted",
-        "portal": "fi",
-    }))
+    Ok(VintedLogoutOutput {
+        authenticated: false,
+        marketplace: "vinted",
+        portal: "fi",
+    })
 }
 
 fn unavailable_status(health: &'static str, validation: &'static str) -> VintedAuthStatus {
@@ -166,14 +179,7 @@ fn validation_failure_status(
 
 fn serialize_status(mut status: VintedAuthStatus) -> Result<CommandOutcome, AppError> {
     let next_actions = std::mem::take(&mut status.next_actions);
-    serialize(status, "Vinted auth status")
-        .map(|data| CommandOutcome::new(data).with_next_actions(next_actions))
-}
-
-fn serialize(value: impl Serialize, stage: &'static str) -> Result<Value, AppError> {
-    serde_json::to_value(value).map_err(|error| {
-        AppError::output(format!("failed to serialize {stage} output")).with_source(error)
-    })
+    Ok(CommandOutcome::new(CommandData::VintedAuthStatus(status)).with_next_actions(next_actions))
 }
 
 fn storage_error(
@@ -281,9 +287,10 @@ mod tests {
         );
 
         let status = execute_status(paths).await.unwrap();
+        let data = serde_json::to_value(&status.data).unwrap();
 
         assert_eq!(
-            status,
+            data,
             serde_json::json!({
                 "authenticated": false,
                 "health": "missing",

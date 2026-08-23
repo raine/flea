@@ -1,8 +1,7 @@
 use clap::{Args, Subcommand};
-use serde_json::json;
 
 use crate::{
-    cli::outcome::CommandOutcome,
+    cli::outcome::{CommandData, CommandOutcome, FavoriteFoldersOutput},
     domain::observation::Observation,
     error::AppError,
     marketplace::tori::favorites::{Favorites, FavoritesApi},
@@ -74,8 +73,12 @@ pub async fn dispatch(
     match args.command {
         FavoriteCommand::Folders => {
             let folders = favorites.folders().await?;
-            Ok(CommandOutcome::new(json!({ "folders": folders }))
-                .with_observation(Observation::confirmed_present("favorites_folders", None)))
+            Ok(
+                CommandOutcome::new(CommandData::FavoriteFolders(FavoriteFoldersOutput {
+                    folders,
+                }))
+                .with_observation(Observation::confirmed_present("favorites_folders", None)),
+            )
         }
         FavoriteCommand::Status { listing_id } => {
             let status = favorites.status(&listing_id).await?;
@@ -84,10 +87,8 @@ pub async fn dispatch(
             } else {
                 Observation::confirmed_absent("favorites_minimal", None)
             };
-            let value = serde_json::to_value(status).map_err(|error| {
-                AppError::output("failed to serialize favorite status").with_source(error)
-            })?;
-            Ok(CommandOutcome::new(value).with_observation(observation))
+            Ok(CommandOutcome::new(CommandData::FavoriteStatus(status))
+                .with_observation(observation))
         }
         FavoriteCommand::Add { listing_id, folder } => {
             let mutation = favorites.add(&listing_id, folder).await?;
@@ -103,13 +104,10 @@ pub async fn dispatch(
 fn mutation_outcome(
     mutation: crate::marketplace::tori::favorites::FavoriteMutation,
 ) -> Result<CommandOutcome, AppError> {
-    let value = serde_json::to_value(&mutation).map_err(|error| {
-        AppError::output("failed to serialize favorite output").with_source(error)
-    })?;
     let observation = if mutation.favorite {
         Observation::confirmed_present("favorite_mutation_response", None)
     } else {
         Observation::confirmed_absent("favorite_mutation_response", None)
     };
-    Ok(CommandOutcome::new(value).with_observation(observation))
+    Ok(CommandOutcome::new(CommandData::FavoriteMutation(mutation)).with_observation(observation))
 }

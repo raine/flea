@@ -1,7 +1,5 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use serde_json::Value;
-
 use crate::{
     cli::{
         Command, ToriCommand, VintedCommand,
@@ -34,7 +32,10 @@ use crate::{
     storage::StatePaths,
 };
 
-use super::outcome::CommandOutcome;
+use super::outcome::{
+    CapabilitiesOutput, CommandData, CommandOutcome, MarketplaceCapabilitiesOutput,
+    MarketplaceSummary, MarketplacesOutput,
+};
 
 type OutcomeFuture = Pin<Box<dyn Future<Output = Result<CommandOutcome, AppError>>>>;
 type ToriClientFuture = Pin<Box<dyn Future<Output = Result<Arc<dyn ToriClient>, AppError>>>>;
@@ -120,11 +121,17 @@ pub async fn dispatch(
     dependencies: &ApplicationDependencies,
 ) -> Result<CommandOutcome, AppError> {
     match command {
-        Command::Capabilities => capabilities_output().map(Into::into),
-        Command::Marketplaces => marketplaces_output().map(Into::into),
+        Command::Capabilities => Ok(CommandOutcome::new(CommandData::Capabilities(
+            capabilities_output(),
+        ))),
+        Command::Marketplaces => Ok(CommandOutcome::new(CommandData::Marketplaces(
+            marketplaces_output(),
+        ))),
         Command::Tori(args) => execute_tori(args.command, dependencies).await,
         Command::Vinted(args) => execute_vinted(args.portal, args.command, dependencies).await,
-        Command::Skill(args) => super::skill::dispatch(args).map(Into::into),
+        Command::Skill(args) => super::skill::dispatch(args)
+            .map(CommandData::Skill)
+            .map(CommandOutcome::new),
         Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
     }
 }
@@ -135,7 +142,9 @@ async fn execute_tori(
 ) -> Result<CommandOutcome, AppError> {
     match command {
         ToriCommand::Auth(args) => (dependencies.tori_auth)(args).await,
-        ToriCommand::Capabilities => marketplace_capabilities(MarketplaceId::Tori).map(Into::into),
+        ToriCommand::Capabilities => Ok(CommandOutcome::new(CommandData::MarketplaceCapabilities(
+            marketplace_capabilities(MarketplaceId::Tori),
+        ))),
         ToriCommand::Category(args) => {
             let client = dependencies.authenticated_tori_client().await?;
             let api = HttpListingsApi::new(client);
@@ -187,7 +196,10 @@ async fn execute_tori(
         }
         ToriCommand::Location(args) => {
             let api = HttpPublicSearchApi::new(Arc::clone(&dependencies.public_tori_client));
-            super::location::dispatch(args, &api).await.map(Into::into)
+            super::location::dispatch(args, &api)
+                .await
+                .map(CommandData::Location)
+                .map(CommandOutcome::new)
         }
     }
 }
@@ -211,14 +223,14 @@ async fn execute_vinted(
 ) -> Result<CommandOutcome, AppError> {
     match command {
         VintedCommand::Auth(args) => (dependencies.vinted_auth)(portal, args).await,
-        VintedCommand::Capabilities => {
-            marketplace_capabilities(MarketplaceId::Vinted).map(Into::into)
-        }
+        VintedCommand::Capabilities => Ok(CommandOutcome::new(
+            CommandData::MarketplaceCapabilities(marketplace_capabilities(MarketplaceId::Vinted)),
+        )),
         VintedCommand::Search(args) => {
             let credentials = (dependencies.vinted_credentials)(portal)?;
             vinted_search::dispatch(args, &credentials, dependencies.vinted_search.as_ref())
                 .await
-                .map(Into::into)
+                .map(CommandOutcome::new)
         }
         VintedCommand::Unsupported(parts) => Err(capability_unavailable(
             MarketplaceContext::VINTED_FI,
@@ -227,30 +239,32 @@ async fn execute_vinted(
     }
 }
 
-fn capabilities_output() -> Result<Value, AppError> {
-    Ok(serde_json::json!({ "marketplaces": marketplaces() }))
+fn capabilities_output() -> CapabilitiesOutput {
+    CapabilitiesOutput {
+        marketplaces: marketplaces(),
+    }
 }
 
-fn marketplaces_output() -> Result<Value, AppError> {
+fn marketplaces_output() -> MarketplacesOutput {
     let configured = marketplaces()
         .iter()
-        .map(|descriptor| {
-            serde_json::json!({
-                "marketplace": descriptor.marketplace,
-                "portals": descriptor.portals,
-            })
+        .map(|descriptor| MarketplaceSummary {
+            marketplace: descriptor.marketplace,
+            portals: descriptor.portals,
         })
-        .collect::<Vec<_>>();
-    Ok(serde_json::json!({ "marketplaces": configured }))
+        .collect();
+    MarketplacesOutput {
+        marketplaces: configured,
+    }
 }
 
-fn marketplace_capabilities(marketplace_id: MarketplaceId) -> Result<Value, AppError> {
+fn marketplace_capabilities(marketplace_id: MarketplaceId) -> MarketplaceCapabilitiesOutput {
     let descriptor = marketplace(marketplace_id);
-    Ok(serde_json::json!({
-        "marketplace": descriptor.marketplace,
-        "portals": descriptor.portals,
-        "capabilities": descriptor.capabilities,
-    }))
+    MarketplaceCapabilitiesOutput {
+        marketplace: descriptor.marketplace,
+        portals: descriptor.portals,
+        capabilities: descriptor.capabilities,
+    }
 }
 
 fn unsupported_root_command(parts: &[std::ffi::OsString]) -> AppError {
@@ -312,13 +326,12 @@ async fn execute_tori_auth(args: ToriAuthArgs) -> Result<super::outcome::Command
             state_root,
             callback_url,
         } => {
-            return serialize_auth_output(
-                tori_interactive::capture(
-                    &StatePaths::from_root(state_root, MarketplaceContext::TORI_FI),
-                    &callback_url,
-                ),
-                "Tori callback",
-            );
+            return tori_interactive::capture(
+                &StatePaths::from_root(state_root, MarketplaceContext::TORI_FI),
+                &callback_url,
+            )
+            .map(CommandData::ToriAuthCallback)
+            .map(CommandOutcome::new);
         }
         command => command,
     };
@@ -329,7 +342,9 @@ async fn execute_tori_auth(args: ToriAuthArgs) -> Result<super::outcome::Command
         ToriAuthCommand::Logout => {
             let store = FileAuthStore::new(paths);
             let auth = ToriAuthentication::new(SchibstedToriAuthenticationApi::new(), store);
-            serialize_auth_output(auth.logout(), "Tori logout")
+            auth.logout()
+                .map(CommandData::ToriAuthLogout)
+                .map(CommandOutcome::new)
         }
         ToriAuthCommand::Callback { .. } => unreachable!("callbacks return before dispatch"),
     }
@@ -352,22 +367,10 @@ async fn execute_interactive_login(paths: StatePaths) -> Result<CommandOutcome, 
     match result {
         Ok(value) => {
             cleared?;
-            serialize_auth_output(Ok(value), "Tori login")
+            Ok(CommandOutcome::new(CommandData::ToriAuthComplete(value)))
         }
         Err(error) => Err(error),
     }
-}
-
-fn serialize_auth_output<T: serde::Serialize>(
-    result: Result<T, AppError>,
-    stage: &'static str,
-) -> Result<CommandOutcome, AppError> {
-    let value = result?;
-    serde_json::to_value(value)
-        .map(Into::into)
-        .map_err(|error| {
-            AppError::output(format!("failed to serialize {stage} output")).with_source(error)
-        })
 }
 
 fn public_client() -> HttpClient<ReqwestTransport> {

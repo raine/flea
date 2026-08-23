@@ -94,7 +94,8 @@ async fn raw_mode_preserves_the_exact_upstream_document() {
         unreachable!()
     };
 
-    assert_eq!(item::dispatch(args, &api).await.unwrap(), raw);
+    let output = item::dispatch(args, &api).await.unwrap();
+    assert_eq!(serde_json::to_value(output.data).unwrap(), raw);
 }
 
 #[tokio::test]

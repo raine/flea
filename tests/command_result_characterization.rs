@@ -1,6 +1,9 @@
 use flea::{
     Presentation,
-    cli::{outcome::CommandOutcome, runtime::ApplicationDependencies},
+    cli::{
+        outcome::{CommandData, CommandOutcome},
+        runtime::ApplicationDependencies,
+    },
     domain::{
         envelope::{NextAction, Warning},
         observation::Observation,
@@ -13,11 +16,13 @@ fn metadata_dependencies() -> ApplicationDependencies {
     ApplicationDependencies::production().with_tori_auth_handler(|_| async {
         let mut observation = Observation::confirmed_present("fixture", Some(200));
         observation.observed_at = "2026-01-02T03:04:05Z".to_owned();
-        Ok(CommandOutcome::new(json!({ "result": "kept" }))
-            .with_next_actions(vec![NextAction {
-                command: "flea marketplaces".to_owned(),
-            }])
-            .with_observation(observation))
+        Ok(
+            CommandOutcome::new(CommandData::Raw(json!({ "result": "kept" })))
+                .with_next_actions(vec![NextAction {
+                    command: "flea marketplaces".to_owned(),
+                }])
+                .with_observation(observation),
+        )
     })
 }
 
@@ -37,9 +42,9 @@ fn warning_dependencies() -> ApplicationDependencies {
                 "confirmation tracking failed: fixture",
             ),
         ];
-        Ok(CommandOutcome::new(json!({
+        Ok(CommandOutcome::new(CommandData::Raw(json!({
             "warnings": messages.map(|(_, message)| message)
-        }))
+        })))
         .with_warnings(
             messages
                 .map(|(code, message)| Warning {
@@ -53,8 +58,11 @@ fn warning_dependencies() -> ApplicationDependencies {
 }
 
 fn invalid_auth_dependencies() -> ApplicationDependencies {
-    ApplicationDependencies::production()
-        .with_tori_auth_handler(|_| async { Ok(json!({ "authenticated": false }).into()) })
+    ApplicationDependencies::production().with_tori_auth_handler(|_| async {
+        Ok(CommandOutcome::new(CommandData::Raw(
+            json!({ "authenticated": false }),
+        )))
+    })
 }
 
 fn structured(dependencies: &ApplicationDependencies, format: &str) -> flea::RunResult {

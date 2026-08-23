@@ -14,7 +14,7 @@ const MAX_CAPTURED_CALLBACK_BYTES: u64 = 8 * 1024;
 const SCHEME: &str = "fi.tori.www.6079834b9b0b741812e7e91f";
 
 #[derive(Debug, Serialize)]
-pub(crate) struct CallbackCapture {
+pub struct CallbackCapture {
     captured: bool,
 }
 

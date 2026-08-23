@@ -3,7 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    cli::outcome::CommandOutcome,
+    cli::outcome::{CommandData, CommandOutcome},
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::MarketplaceContext,
@@ -134,7 +134,7 @@ const MINIMUM_BEARER_LIFETIME_SECONDS: u64 = 30;
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum StoredBearerState {
+pub enum StoredBearerState {
     Valid,
     NearExpiry,
     Expired,
@@ -151,8 +151,8 @@ struct CredentialResolutionFailure {
     bearer_expires_at_unix: Option<u64>,
 }
 
-#[derive(Serialize)]
-struct AuthStatusOutput {
+#[derive(Debug, Serialize)]
+pub struct AuthStatusOutput {
     authenticated: bool,
     health: &'static str,
     validation: &'static str,
@@ -291,9 +291,7 @@ async fn auth_status<S: GatewaySigner>(
         Err(failure) => status_from_failure(failure),
     };
     let next_actions = std::mem::take(&mut output.next_actions);
-    serde_json::to_value(output)
-        .map(|data| CommandOutcome::new(data).with_next_actions(next_actions))
-        .map_err(|error| AppError::output("failed to serialize auth status").with_source(error))
+    Ok(CommandOutcome::new(CommandData::ToriAuthStatus(output)).with_next_actions(next_actions))
 }
 
 fn status_from_failure(failure: CredentialResolutionFailure) -> AuthStatusOutput {
@@ -568,9 +566,10 @@ mod tests {
         let status = auth_status(paths, &SchibstedToriAuthenticationApi::new(), 1_000)
             .await
             .unwrap();
+        let data = serde_json::to_value(&status.data).unwrap();
 
         assert_eq!(
-            status,
+            data,
             serde_json::json!({
                 "authenticated": false,
                 "health": "missing",
@@ -597,13 +596,14 @@ mod tests {
         let status = auth_status(paths, &SchibstedToriAuthenticationApi::new(), 1_000)
             .await
             .unwrap();
+        let data = serde_json::to_value(&status.data).unwrap();
 
-        assert_eq!(status["authenticated"], true);
-        assert_eq!(status["health"], "valid");
-        assert_eq!(status["validation"], "local_expiry");
-        assert_eq!(status["refresh_performed"], false);
-        assert_eq!(status["expires_in_seconds"], 31);
-        assert_eq!(status["user_id"], "user");
+        assert_eq!(data["authenticated"], true);
+        assert_eq!(data["health"], "valid");
+        assert_eq!(data["validation"], "local_expiry");
+        assert_eq!(data["refresh_performed"], false);
+        assert_eq!(data["expires_in_seconds"], 31);
+        assert_eq!(data["user_id"], "user");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -625,12 +625,13 @@ mod tests {
 
             let status = auth_status(paths.clone(), &api, 1_000).await.unwrap();
             server.join().unwrap();
+            let data = serde_json::to_value(&status.data).unwrap();
 
-            assert_eq!(status["authenticated"], true);
-            assert_eq!(status["health"], "refreshed");
-            assert_eq!(status["validation"], "online_refresh");
-            assert_eq!(status["stored_bearer_state"], expected_state);
-            assert_eq!(status["bearer_expires_at_unix"], 4_600);
+            assert_eq!(data["authenticated"], true);
+            assert_eq!(data["health"], "refreshed");
+            assert_eq!(data["validation"], "online_refresh");
+            assert_eq!(data["stored_bearer_state"], expected_state);
+            assert_eq!(data["bearer_expires_at_unix"], 4_600);
             assert_eq!(requests.lock().unwrap().len(), 3);
             assert_eq!(
                 CredentialStore::new(paths)
@@ -662,11 +663,12 @@ mod tests {
 
         let status = auth_status(paths, &api, 1_000).await.unwrap();
         server.join().unwrap();
-        let rendered = status.to_string();
+        let data = serde_json::to_value(&status.data).unwrap();
+        let rendered = data.to_string();
 
-        assert_eq!(status["authenticated"], false);
-        assert_eq!(status["health"], "refresh_rejected");
-        assert_eq!(status["stored_bearer_state"], "expired");
+        assert_eq!(data["authenticated"], false);
+        assert_eq!(data["health"], "refresh_rejected");
+        assert_eq!(data["stored_bearer_state"], "expired");
         assert_eq!(status.next_actions[0].command, "flea tori auth login");
         for secret in ["user", "refresh-old", "bearer-old", "response-secret"] {
             assert!(!rendered.contains(secret));
@@ -689,8 +691,9 @@ mod tests {
 
         let refresh_status = auth_status(paths, &api, 1_000).await.unwrap();
         server.join().unwrap();
-        assert_eq!(refresh_status["health"], "malformed");
-        assert_eq!(refresh_status["stored_bearer_state"], "expired");
+        let refresh_data = serde_json::to_value(&refresh_status.data).unwrap();
+        assert_eq!(refresh_data["health"], "malformed");
+        assert_eq!(refresh_data["stored_bearer_state"], "expired");
         assert_eq!(
             refresh_status.next_actions[0].command,
             "flea tori auth login"
@@ -717,9 +720,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(stored_status["authenticated"], false);
-        assert_eq!(stored_status["health"], "malformed");
-        assert!(!stored_status.to_string().contains("not-json-secret"));
+        let stored_data = serde_json::to_value(&stored_status.data).unwrap();
+        assert_eq!(stored_data["authenticated"], false);
+        assert_eq!(stored_data["health"], "malformed");
+        assert!(!stored_data.to_string().contains("not-json-secret"));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -738,11 +742,12 @@ mod tests {
         let api = SchibstedToriAuthenticationApi::new().with_base_urls(base_url.clone(), base_url);
 
         let status = auth_status(paths, &api, 1_000).await.unwrap();
+        let data = serde_json::to_value(&status.data).unwrap();
 
-        assert_eq!(status["authenticated"], false);
-        assert_eq!(status["health"], "temporarily_unavailable");
-        assert_eq!(status["validation"], "unverified");
-        assert_eq!(status["stored_bearer_state"], "expired");
+        assert_eq!(data["authenticated"], false);
+        assert_eq!(data["health"], "temporarily_unavailable");
+        assert_eq!(data["validation"], "unverified");
+        assert_eq!(data["stored_bearer_state"], "expired");
         assert_eq!(status.next_actions[0].command, "flea tori auth login");
     }
 

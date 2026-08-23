@@ -1,8 +1,8 @@
 use clap::{Args, ValueEnum};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::{
+    cli::outcome::CommandData,
     error::AppError,
     marketplace::vinted::{
         auth::VintedCredentialRecord,
@@ -65,7 +65,7 @@ pub async fn dispatch(
     args: VintedSearchArgs,
     credentials: &VintedCredentialRecord,
     api: &dyn VintedSearchApi,
-) -> Result<Value, AppError> {
+) -> Result<CommandData, AppError> {
     let request = SearchRequest {
         query: args.query.unwrap_or_default(),
         price_from: args.price_from,
@@ -76,9 +76,7 @@ pub async fn dispatch(
     };
     let (normalized, raw) = api.execute(credentials, &request).await?;
     if args.raw {
-        return Ok(raw);
+        return Ok(CommandData::Raw(raw));
     }
-    serde_json::to_value(normalized).map_err(|error| {
-        AppError::output("failed to serialize Vinted search output").with_source(error)
-    })
+    Ok(CommandData::Search(normalized))
 }

@@ -42,9 +42,7 @@ impl<T> Envelope<T> {
             diagnostics: None,
         }
     }
-}
 
-impl Envelope<Value> {
     pub fn failure(error: AppError) -> Self {
         let body = ErrorBody::from(&error);
         Self {

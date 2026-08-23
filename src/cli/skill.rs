@@ -4,7 +4,7 @@ use std::{
 };
 
 use clap::{Args, Subcommand, ValueEnum};
-use serde_json::{Value, json};
+use serde::Serialize;
 
 use crate::error::{AppError, ExitClass};
 
@@ -75,14 +75,21 @@ impl AgentTarget {
     }
 }
 
-pub fn dispatch(args: SkillArgs) -> Result<Value, AppError> {
+#[derive(Debug, Serialize)]
+pub struct SkillOutput {
+    pub document: String,
+}
+
+pub fn dispatch(args: SkillArgs) -> Result<SkillOutput, AppError> {
     match args.command {
-        None => Ok(json!({ "document": SKILL_CONTENT })),
+        None => Ok(SkillOutput {
+            document: SKILL_CONTENT.to_owned(),
+        }),
         Some(SkillCommand::Install(args)) => install(args),
     }
 }
 
-fn install(args: SkillInstallArgs) -> Result<Value, AppError> {
+fn install(args: SkillInstallArgs) -> Result<SkillOutput, AppError> {
     let home = std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -129,7 +136,7 @@ fn install(args: SkillInstallArgs) -> Result<Value, AppError> {
         ));
     }
 
-    Ok(json!({ "document": document }))
+    Ok(SkillOutput { document })
 }
 
 fn all_agents(home: &Path) -> Vec<AgentTarget> {

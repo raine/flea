@@ -1,9 +1,10 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    cli::outcome::CommandOutcome,
+    cli::outcome::{CommandData, CommandOutcome},
     domain::envelope::Warning,
     error::{AppError, ExitClass},
     marketplace::tori::adinput::{PreparedImage, normalize_category, prepare_image},
@@ -19,6 +20,20 @@ const ATTRIBUTES_MAX_COUNT: usize = 32;
 const ATTRIBUTE_ARRAY_MAX_VALUES: usize = 32;
 const DELIVERY_MAX_VALUES: usize = 8;
 const IMAGE_MAX_COUNT: usize = 12;
+
+#[derive(Debug, Serialize)]
+pub struct DraftPreviewOutput {
+    mode: &'static str,
+    remote_mutation: &'static str,
+    local_validation: Value,
+    normalized: Value,
+    image_plan: Vec<Value>,
+    remote_verification: Value,
+    assumptions: Vec<&'static str>,
+    unverifiable_requirements: Vec<String>,
+    create: Value,
+    warnings: Vec<String>,
+}
 
 pub struct NormalizedInput {
     pub values: Map<String, Value>,
@@ -141,10 +156,10 @@ pub async fn preview(
         })
     });
 
-    let data = json!({
-        "mode": "local_draft_preview",
-        "remote_mutation": "none",
-        "local_validation": {
+    let data = DraftPreviewOutput {
+        mode: "local_draft_preview",
+        remote_mutation: "none",
+        local_validation: json!({
             "status": "passed",
             "scope": [
                 "input_shape",
@@ -157,8 +172,8 @@ pub async fn preview(
                 "image_dimensions",
                 "metadata_processing",
             ],
-        },
-        "normalized": {
+        }),
+        normalized: json!({
             "title": normalized.values.get("title"),
             "description_summary": description_summary,
             "price": structured_price,
@@ -167,26 +182,29 @@ pub async fn preview(
             "attributes": normalized.values.get("attributes"),
             "delivery_intent": delivery_methods(normalized.values.get("delivery")),
             "category_machine_value": category_machine_value,
-        },
-        "image_plan": image_plan,
-        "remote_verification": remote_verification,
-        "assumptions": [
+        }),
+        image_plan,
+        remote_verification,
+        assumptions: vec![
             "prices use euros",
             "text limits are generic local safety bounds rather than category-specific publication rules",
             "image metadata is removed by decoding and re-encoding pixels before any upload",
             "preview creates no remote draft and does not claim publication readiness",
         ],
-        "unverifiable_requirements": unverifiable,
-        "create": {
+        unverifiable_requirements: unverifiable,
+        create: json!({
             "command": "flea tori draft create --input listing.json",
             "input_file_name": "listing.json",
             "input_byte_length": create_input_bytes,
             "input": create_input,
             "path_policy": "image paths contain file names only; replace them if the images are stored elsewhere",
-        },
-        "warnings": warnings.iter().map(|warning| &warning.message).collect::<Vec<_>>(),
-    });
-    Ok(CommandOutcome::new(data).with_warnings(warnings))
+        }),
+        warnings: warnings
+            .iter()
+            .map(|warning| warning.message.clone())
+            .collect(),
+    };
+    Ok(CommandOutcome::new(CommandData::DraftPreview(data)).with_warnings(warnings))
 }
 
 fn normalize_values(mut values: Map<String, Value>) -> Result<Map<String, Value>, AppError> {
@@ -753,6 +771,7 @@ mod tests {
         };
 
         let output = preview(input, false, None).await.unwrap();
+        let output = serde_json::to_value(output.data).unwrap();
 
         assert_eq!(output["mode"], "local_draft_preview");
         assert_eq!(output["remote_mutation"], "none");

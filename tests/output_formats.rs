@@ -77,7 +77,7 @@ fn failure_envelope_matches_json_and_toon_snapshots() {
     error.next_actions.push(NextAction {
         command: "flea tori draft update 36443414 --input PATH".to_owned(),
     });
-    let envelope = Envelope::failure(error);
+    let envelope = Envelope::<Value>::failure(error);
 
     assert_snapshot(
         render(&envelope, OutputFormat::Json).unwrap(),
@@ -109,7 +109,7 @@ fn failure_envelopes_preserve_diagnostics_and_partial_recovery() {
         command: "flea tori draft show draft-1".to_owned(),
     });
 
-    let envelope = Envelope::failure(error);
+    let envelope = Envelope::<Value>::failure(error);
     let decoded = serde_json::to_value(envelope).expect("envelope should serialize");
 
     assert_eq!(decoded["partial"]["draft_id"], "draft-1");

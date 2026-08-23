@@ -13,7 +13,10 @@ use serde::{
 use serde_json::{Map, Value, json};
 
 use crate::{
-    cli::{draft_input, outcome::CommandOutcome},
+    cli::{
+        draft_input,
+        outcome::{CommandData, CommandOutcome, DraftDeleteOutput},
+    },
     domain::{
         envelope::{NextAction, Warning},
         field::{Field, FieldStatus},
@@ -190,7 +193,7 @@ impl DraftCommand {
 }
 
 #[derive(Debug, Serialize)]
-struct DraftInspectionOutput {
+pub struct DraftInspectionOutput {
     draft_id: String,
     etag: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -727,12 +730,7 @@ pub async fn execute_preview(
     else {
         return Err(AppError::unexpected("expected a draft preview command"));
     };
-    draft_input::preview(collect_input(values)?, verify_category, taxonomy)
-        .await
-        .map(|mut outcome| {
-            crate::domain::commerce::normalize_values_output(&mut outcome.data);
-            outcome
-        })
+    draft_input::preview(collect_input(values)?, verify_category, taxonomy).await
 }
 
 pub async fn execute<A: AdInputApi>(
@@ -744,7 +742,7 @@ pub async fn execute<A: AdInputApi>(
         return execute_preview(command, None).await;
     }
     let confirms_absence = matches!(&command, DraftCommand::Delete { .. });
-    let observation_source = match &command {
+    let mut observation_source = match &command {
         DraftCommand::Show { .. } => "draft_detail",
         DraftCommand::Validate { .. } => "draft_validation",
         DraftCommand::Publish { .. } => "listing_detail",
@@ -755,27 +753,31 @@ pub async fn execute<A: AdInputApi>(
         DraftCommand::Preview { .. } => unreachable!(),
     };
     let workflow = DraftWorkflow::new(api, config);
-    let result = match command {
+    let (data, warnings, next_actions) = match command {
         DraftCommand::Create {
             from_listing: Some(listing_id),
             ..
         } => {
-            let result = workflow
+            let mut result = workflow
                 .create_from_listing(&listing_id)
                 .await
                 .map_err(workflow_error)?;
-            serialize_workflow_result(&result, &result.warnings)
+            normalize_draft_state(&mut result.draft);
+            let warnings = output_warnings(&result.warnings);
+            (CommandData::DraftCreate(result), warnings, Vec::new())
         }
         DraftCommand::Create {
             from_listing: None,
             values,
         } => {
             let input = draft_input::normalize(collect_input(values)?, true)?;
-            let result = workflow
+            let mut result = workflow
                 .create_prepared(input.values, input.images)
                 .await
                 .map_err(workflow_error)?;
-            serialize_workflow_result(&result, &result.warnings)
+            normalize_draft_state(&mut result.draft);
+            let warnings = output_warnings(&result.warnings);
+            (CommandData::DraftCreate(result), warnings, Vec::new())
         }
         DraftCommand::Preview { .. } => {
             unreachable!("preview returns before authenticated workflow construction")
@@ -795,10 +797,13 @@ pub async fn execute<A: AdInputApi>(
                 include_fields,
                 include_options.as_deref(),
             )?;
+            crate::domain::commerce::normalize_commerce_map(&mut inspection.values);
             let next_actions = std::mem::take(&mut inspection.next_actions);
-            serde_json::to_value(inspection)
-                .map(|value| (value, Vec::new(), next_actions))
-                .map_err(|error| AppError::output(error.to_string()))
+            (
+                CommandData::DraftInspection(inspection),
+                Vec::new(),
+                next_actions,
+            )
         }
         DraftCommand::Update { draft_id, values } => {
             let input = collect_input(values)?;
@@ -808,20 +813,24 @@ pub async fn execute<A: AdInputApi>(
                 ));
             }
             let input = draft_input::normalize(input, false)?;
-            let result = workflow
+            let mut result = workflow
                 .update(&draft_id, &input.values)
                 .await
                 .map_err(workflow_error)?;
-            serialize_workflow_result(&result, &result.warnings)
+            normalize_draft_state(&mut result.draft);
+            let warnings = output_warnings(&result.warnings);
+            (CommandData::DraftUpdate(result), warnings, Vec::new())
         }
         DraftCommand::Image(ImageArgs {
             command: ImageCommand::Add { draft_id, paths },
         }) => {
-            let result = workflow
+            let mut result = workflow
                 .add_images(&draft_id, &paths)
                 .await
                 .map_err(workflow_error)?;
-            serialize_workflow_result(&result, &result.warnings)
+            normalize_draft_state(&mut result.draft);
+            let warnings = output_warnings(&result.warnings);
+            (CommandData::DraftAddImages(result), warnings, Vec::new())
         }
         DraftCommand::Image(ImageArgs {
             command:
@@ -830,88 +839,85 @@ pub async fn execute<A: AdInputApi>(
                     image_ids,
                 },
         }) => {
-            let result = workflow
+            let mut result = workflow
                 .remove_images(&draft_id, &image_ids)
                 .await
                 .map_err(workflow_error)?;
-            serialize_workflow_result(&result, &[])
+            normalize_draft_state(&mut result);
+            (CommandData::DraftState(result), Vec::new(), Vec::new())
         }
-        DraftCommand::Validate { draft_id } => {
-            serde_json::to_value(workflow.validate(&draft_id).await.map_err(workflow_error)?)
-                .map(|value| (value, Vec::new(), Vec::new()))
-                .map_err(|error| AppError::output(error.to_string()))
-        }
+        DraftCommand::Validate { draft_id } => (
+            CommandData::DraftValidation(
+                workflow.validate(&draft_id).await.map_err(workflow_error)?,
+            ),
+            Vec::new(),
+            Vec::new(),
+        ),
         DraftCommand::Publish {
             draft_id,
             if_revision,
         } => {
-            let result = workflow
+            let mut result = workflow
                 .publish(&draft_id, &if_revision)
                 .await
                 .map_err(workflow_error)?;
-            serialize_workflow_result(&result, &result.warnings)
+            normalize_observed_listing_output(&mut result.observed_listing);
+            let warnings = output_warnings(&result.warnings);
+            (CommandData::DraftPublish(result), warnings, Vec::new())
         }
         DraftCommand::Delete { draft_id } => {
             workflow.delete(&draft_id).await.map_err(workflow_error)?;
-            Ok((
-                json!({ "draft_id": draft_id, "deleted": true }),
+            (
+                CommandData::DraftDelete(DraftDeleteOutput {
+                    draft_id,
+                    deleted: true,
+                }),
                 Vec::new(),
                 Vec::new(),
-            ))
+            )
         }
     };
-    result.map(|(mut value, warnings, next_actions)| {
-        crate::domain::commerce::normalize_values_output(&mut value);
-        normalize_observed_listing_output(&mut value);
-        let reconciled = warnings.iter().any(|warning| {
-            matches!(
-                warning.code.as_str(),
-                "mutation.response_model_drift" | "mutation.observed_success"
-            )
-        });
-        let observation_source = if reconciled
-            && matches!(
-                observation_source,
-                "draft_creation_response" | "draft_update_response"
-            ) {
-            "draft_detail"
-        } else {
-            observation_source
-        };
-        let observation = if confirms_absence {
-            Observation::confirmed_absent(observation_source, None)
-        } else {
-            Observation::confirmed_present(observation_source, None)
-        };
-        CommandOutcome::new(value)
-            .with_warnings(warnings)
-            .with_next_actions(next_actions)
-            .with_observation(observation)
-    })
+    let reconciled = warnings.iter().any(|warning| {
+        matches!(
+            warning.code.as_str(),
+            "mutation.response_model_drift" | "mutation.observed_success"
+        )
+    });
+    if reconciled
+        && matches!(
+            observation_source,
+            "draft_creation_response" | "draft_update_response"
+        )
+    {
+        observation_source = "draft_detail";
+    }
+    let observation = if confirms_absence {
+        Observation::confirmed_absent(observation_source, None)
+    } else {
+        Observation::confirmed_present(observation_source, None)
+    };
+    Ok(CommandOutcome::new(data)
+        .with_warnings(warnings)
+        .with_next_actions(next_actions)
+        .with_observation(observation))
 }
 
-fn serialize_workflow_result(
-    result: &impl Serialize,
-    warnings: &[WorkflowWarning],
-) -> Result<(Value, Vec<Warning>, Vec<NextAction>), AppError> {
-    let warnings = warnings
+fn output_warnings(warnings: &[WorkflowWarning]) -> Vec<Warning> {
+    warnings
         .iter()
         .map(|warning| Warning {
             code: warning.code.to_owned(),
             message: warning.message.clone(),
         })
-        .collect();
-    serde_json::to_value(result)
-        .map(|value| (value, warnings, Vec::new()))
-        .map_err(|error| AppError::output(error.to_string()))
+        .collect()
+}
+
+fn normalize_draft_state(state: &mut DraftState) {
+    crate::domain::commerce::normalize_commerce_map(&mut state.values);
 }
 
 fn normalize_observed_listing_output(value: &mut Value) {
-    let Some(observed) = value
-        .as_object_mut()
-        .and_then(|object| object.get_mut("observed_listing"))
-        .and_then(Value::as_object_mut)
-    else {
+    let Some(observed) = value.as_object_mut() else {
         return;
     };
     let fields = observed

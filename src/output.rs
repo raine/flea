@@ -27,9 +27,12 @@ pub fn render<T: Serialize>(value: &T, format: OutputFormat) -> Result<String, A
 }
 
 pub fn render_auth_login(
-    data: &Value,
+    data: &impl Serialize,
     context: Option<MarketplaceContext>,
 ) -> Result<String, AppError> {
+    let data = serde_json::to_value(data).map_err(|error| {
+        AppError::output("failed to serialize authentication login output").with_source(error)
+    })?;
     if data.get("authenticated").and_then(Value::as_bool) != Some(true) {
         return Err(AppError::output(
             "authentication login output has an invalid status",
@@ -47,7 +50,9 @@ pub fn render_auth_login(
     Ok(format!("Signed in to {name}.\n"))
 }
 
-pub fn render_skill(data: &Value) -> Result<String, AppError> {
+pub fn render_skill(data: &impl Serialize) -> Result<String, AppError> {
+    let data = serde_json::to_value(data)
+        .map_err(|error| AppError::output("failed to serialize skill output").with_source(error))?;
     data.get("document")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)

@@ -305,13 +305,14 @@ async fn searches_an_explicit_helsinki_area_and_exposes_resolved_locations() {
         unreachable!()
     };
     let output = search::dispatch(*args, &api, None).await.unwrap();
+    let data = serde_json::to_value(&output.data).unwrap();
 
     assert_eq!(
         api.requests.lock().unwrap()[0].path_and_query(),
         "/search/SEARCH_ID_BAP_COMMON?client=android&location=1.100018.110091&location=1.100018.110049&location=1.100018.110092&page=1&q=tuoli&rows=20"
     );
-    assert_eq!(output["resolved_area"]["locations"][0]["name"], "Helsinki");
-    assert_eq!(output["resolved_area"]["locations"][2]["name"], "Vantaa");
+    assert_eq!(data["resolved_area"]["locations"][0]["name"], "Helsinki");
+    assert_eq!(data["resolved_area"]["locations"][2]["name"], "Vantaa");
     assert_eq!(
         output.next_actions[0].command,
         "flea tori search 'tuoli' --area '1.100018.110091,1.100018.110049,1.100018.110092' --page 2 --limit 20"
@@ -409,8 +410,9 @@ async fn bounds_and_prioritizes_large_category_and_location_facets() {
         unreachable!()
     };
     let output = search::dispatch(*args, &api, None).await.unwrap();
+    let data = serde_json::to_value(&output.data).unwrap();
 
-    for facet in output["facets"].as_array().unwrap() {
+    for facet in data["facets"].as_array().unwrap() {
         assert_eq!(
             facet["options"].as_array().unwrap().len(),
             SEARCH_FACET_OPTION_LIMIT
@@ -439,7 +441,8 @@ async fn bounds_and_prioritizes_large_category_and_location_facets() {
         unreachable!()
     };
     let broader = search::dispatch(*args, &api, None).await.unwrap();
-    for facet in broader["facets"].as_array().unwrap() {
+    let broader_data = serde_json::to_value(&broader.data).unwrap();
+    for facet in broader_data["facets"].as_array().unwrap() {
         assert_eq!(
             facet["returned_option_count"],
             SEARCH_FACET_OPTION_LIMIT + 3
@@ -613,7 +616,8 @@ async fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
     let output = search::dispatch(*args, &api, Some(&item_api))
         .await
         .unwrap();
-    let listing = output["results"][0].as_object().unwrap();
+    let data = serde_json::to_value(&output.data).unwrap();
+    let listing = data["results"][0].as_object().unwrap();
 
     assert!(item_api.requests.lock().unwrap().is_empty());
 
@@ -635,13 +639,13 @@ async fn default_output_is_compact_and_omits_empty_or_protocol_fields() {
             "seller",
         ]
     );
-    assert_eq!(output["pagination"]["page"], 1);
-    assert_eq!(output["pagination"]["returned"], 2);
-    assert_eq!(output["pagination"]["total"], 1_200);
-    assert_eq!(output["pagination"]["has_next"], true);
-    assert_eq!(output["pagination"]["next_page"], 2);
-    assert!(output.get("applied_filters").is_none());
-    assert!(output.get("facets").is_none());
+    assert_eq!(data["pagination"]["page"], 1);
+    assert_eq!(data["pagination"]["returned"], 2);
+    assert_eq!(data["pagination"]["total"], 1_200);
+    assert_eq!(data["pagination"]["has_next"], true);
+    assert_eq!(data["pagination"]["next_page"], 2);
+    assert!(data.get("applied_filters").is_none());
+    assert!(data.get("facets").is_none());
 }
 
 #[tokio::test]
@@ -685,9 +689,10 @@ async fn explains_a_generic_title_from_bounded_public_description_evidence() {
     let output = search::dispatch(*args, &search_api, Some(&item_api))
         .await
         .unwrap();
+    let data = serde_json::to_value(&output.data).unwrap();
 
     assert_eq!(item_api.requests.lock().unwrap().as_slice(), ["45917182"]);
-    let explanation = &output["results"][0]["match_explanation"];
+    let explanation = &data["results"][0]["match_explanation"];
     assert_eq!(explanation["source_field"], "description");
     assert_eq!(explanation["evidence_origin"], "public_item");
     assert_eq!(explanation["match_method"], "cli_derived_token_match");
@@ -697,12 +702,12 @@ async fn explains_a_generic_title_from_bounded_public_description_evidence() {
     assert!(excerpt.chars().count() <= 160);
     assert!(!excerpt.contains(['\n', '\0']));
     assert_ne!(excerpt, description);
-    assert!(output["results"][1].get("match_explanation").is_none());
-    assert_eq!(output["explain"]["request_limit"], 1);
-    assert_eq!(output["explain"]["requested"], 1);
-    assert_eq!(output["explain"]["hydrated"], 1);
-    assert_eq!(output["explain"]["explained"], 1);
-    assert_eq!(output["explain"]["truncated"], false);
+    assert!(data["results"][1].get("match_explanation").is_none());
+    assert_eq!(data["explain"]["request_limit"], 1);
+    assert_eq!(data["explain"]["requested"], 1);
+    assert_eq!(data["explain"]["hydrated"], 1);
+    assert_eq!(data["explain"]["explained"], 1);
+    assert_eq!(data["explain"]["truncated"], false);
 }
 
 #[tokio::test]
@@ -742,20 +747,21 @@ async fn explain_enforces_its_request_bound_and_reports_partial_failures() {
     let output = search::dispatch(*args, &search_api, Some(&item_api))
         .await
         .unwrap();
+    let data = serde_json::to_value(&output.data).unwrap();
 
     assert_eq!(item_api.requests.lock().unwrap().as_slice(), ["1", "2"]);
-    assert_eq!(output["results"].as_array().unwrap().len(), 3);
-    assert_eq!(output["explain"]["requested"], 2);
-    assert_eq!(output["explain"]["hydrated"], 1);
-    assert_eq!(output["explain"]["explained"], 1);
-    assert_eq!(output["explain"]["truncated"], true);
-    assert_eq!(output["explain"]["failures"][0]["listing_id"], "2");
+    assert_eq!(data["results"].as_array().unwrap().len(), 3);
+    assert_eq!(data["explain"]["requested"], 2);
+    assert_eq!(data["explain"]["hydrated"], 1);
+    assert_eq!(data["explain"]["explained"], 1);
+    assert_eq!(data["explain"]["truncated"], true);
+    assert_eq!(data["explain"]["failures"][0]["listing_id"], "2");
     assert_eq!(
-        output["explain"]["failures"][0]["code"],
+        data["explain"]["failures"][0]["code"],
         "upstream.request_failed"
     );
-    assert_eq!(output["explain"]["failures"][0]["upstream_transient"], true);
-    assert_eq!(output["explain"]["failures"][0]["safe_to_retry"], true);
+    assert_eq!(data["explain"]["failures"][0]["upstream_transient"], true);
+    assert_eq!(data["explain"]["failures"][0]["safe_to_retry"], true);
 }
 
 #[tokio::test]
@@ -784,7 +790,8 @@ async fn raw_mode_preserves_the_upstream_document() {
     let ToriCommand::Search(args) = tori_command(cli) else {
         unreachable!()
     };
-    assert_eq!(search::dispatch(*args, &api, None).await.unwrap(), raw);
+    let output = search::dispatch(*args, &api, None).await.unwrap();
+    assert_eq!(serde_json::to_value(output.data).unwrap(), raw);
 }
 
 fn empty_fixture() -> Value {
