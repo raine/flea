@@ -631,7 +631,7 @@ fn validate_operation(
     Ok(())
 }
 
-fn validate_input(input: &ListingInput) -> Result<(), AppError> {
+pub(crate) fn validate_input(input: &ListingInput) -> Result<(), AppError> {
     for (name, value) in [("title", &input.title), ("description", &input.description)] {
         if value.trim().is_empty() {
             return Err(AppError::validation(

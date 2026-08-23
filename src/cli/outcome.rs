@@ -29,6 +29,7 @@ use crate::{
         },
         vinted::{
             auth::VintedLoginResult,
+            composer::{PublicationCategoryCollection, VintedComposer},
             publication::PublicationResult as VintedPublicationResult,
             session::{VintedAuthStatus, VintedLogoutOutput},
         },
@@ -84,6 +85,8 @@ pub enum CommandData {
     VintedAuthLogout(VintedLogoutOutput),
     VintedAuthStatus(VintedAuthStatus),
     VintedPublication(VintedPublicationResult),
+    VintedCategories(PublicationCategoryCollection),
+    VintedComposer(VintedComposer),
     CategorySearch(CategorySearchResult),
     CategoryList(CategoryList),
     FavoriteFolders(FavoriteFoldersOutput),

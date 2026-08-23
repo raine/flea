@@ -9,6 +9,9 @@ use crate::{
     marketplace::{
         PortalId,
         vinted::{
+            composer::{
+                PublicationCategoryCollection, VintedPublicationComposer, categories_for_search,
+            },
             publication_discovery::{
                 DiscoveryRequest, VintedPublicationDiscoveryApi, validate_request,
             },
@@ -37,6 +40,17 @@ pub enum VintedCategoryCommand {
     Search {
         /// Portal-localized category search text.
         keyword: String,
+    },
+    #[command(
+        about = "Compose a complete Vinted publication form",
+        long_about = "Combine the selected category with runtime attributes, brands, colors, price configuration, and package sizes. Optional partial or complete ListingInput JSON confirms seller facts and enables payload validation."
+    )]
+    Compose {
+        /// Runtime leaf category ID.
+        category_id: u64,
+        /// Partial or complete ListingInput JSON, or `-` for stdin.
+        #[arg(long, value_name = "PATH")]
+        input: Option<PathBuf>,
     },
     #[command(
         about = "Discover layered Vinted category attributes",
@@ -83,6 +97,7 @@ impl VintedCategoryCommand {
         match self {
             Self::List => "category list",
             Self::Search { .. } => "category search",
+            Self::Compose { .. } => "category compose",
             Self::Attributes { .. } => "category attributes",
             Self::Brands { .. } => "category brands",
             Self::Colors => "category colors",
@@ -98,9 +113,19 @@ pub async fn execute(
     session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationDiscoveryApi,
 ) -> Result<CommandOutcome, AppError> {
+    if let VintedCategoryCommand::Compose { category_id, input } = command {
+        let supplied = input.as_ref().map(read_json).transpose()?;
+        let composer = VintedPublicationComposer::new(session, api)
+            .compose(portal, category_id, supplied)
+            .await?;
+        return Ok(CommandOutcome::new(CommandData::VintedComposer(composer)));
+    }
+
+    let normalize_categories = matches!(command, VintedCategoryCommand::Search { .. });
     let request = match command {
         VintedCategoryCommand::List => DiscoveryRequest::Catalogs,
         VintedCategoryCommand::Search { keyword } => DiscoveryRequest::SearchCatalog { keyword },
+        VintedCategoryCommand::Compose { .. } => unreachable!("handled above"),
         VintedCategoryCommand::Attributes { input } => DiscoveryRequest::Attributes {
             selections: read_json(&input)?,
         },
@@ -120,7 +145,18 @@ pub async fn execute(
     validate_request(&request)?;
     let credentials = session.credentials(portal)?;
     let response = api.execute(&credentials, &request).await?;
-    Ok(CommandOutcome::new(CommandData::Raw(response)))
+    if normalize_categories {
+        let catalogs = api
+            .execute(&credentials, &DiscoveryRequest::Catalogs)
+            .await?;
+        let categories = categories_for_search(&response, &catalogs);
+        let count = categories.len();
+        Ok(CommandOutcome::new(CommandData::VintedCategories(
+            PublicationCategoryCollection { categories, count },
+        )))
+    } else {
+        Ok(CommandOutcome::new(CommandData::Raw(response)))
+    }
 }
 
 fn read_json(path: &PathBuf) -> Result<Value, AppError> {
@@ -130,19 +166,19 @@ fn read_json(path: &PathBuf) -> Result<Value, AppError> {
             .lock()
             .take(1024 * 1024 + 1)
             .read_to_end(&mut bytes)
-            .map_err(|error| AppError::usage(format!("Failed to read attributes: {error}")))?;
+            .map_err(|error| AppError::usage(format!("Failed to read JSON input: {error}")))?;
         bytes
     } else {
         fs::read(path).map_err(|error| {
             AppError::usage(format!(
-                "Failed to read attributes `{}`: {error}",
+                "Failed to read JSON input `{}`: {error}",
                 path.display()
             ))
         })?
     };
     if bytes.len() > 1024 * 1024 {
-        return Err(AppError::usage("Attribute input exceeds 1 MiB"));
+        return Err(AppError::usage("JSON input exceeds 1 MiB"));
     }
     serde_json::from_slice(&bytes)
-        .map_err(|error| AppError::usage(format!("Attributes must be valid JSON: {error}")))
+        .map_err(|error| AppError::usage(format!("Input must be valid JSON: {error}")))
 }

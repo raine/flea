@@ -45,8 +45,7 @@ Never guess facts. Pass complete JSON and ordered images when creating or
 directly publishing:
 
 ```sh
-flea vinted category list
-flea vinted category attributes --input selections.json
+flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted draft create --input listing.json --image front.heic
 flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID

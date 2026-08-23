@@ -139,10 +139,14 @@ verifies the remote photo IDs in display order, then reuses them without
 uploading bytes. Passing `--image` while completing a draft performs a verified
 replace-all operation. Flea strips image metadata and converts supported
 HEIC/HEIF input before upload. Category IDs, dynamic attributes, currency, price
-bounds, and package IDs are runtime portal values.
+bounds, and package IDs are runtime portal values. The publication composer
+combines those sources into normalized fields, options, requirements, validation
+issues, and a direct `ListingInput` value when all seller facts are confirmed.
 
 ```sh
-flea vinted category list
+flea vinted category search lukko
+flea vinted category compose CATEGORY_ID
+flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted category attributes --input selections.json
 flea vinted category package-sizes CATEGORY_ID
 flea vinted draft create --input listing.json --image front.heic
