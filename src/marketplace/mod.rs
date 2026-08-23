@@ -79,6 +79,23 @@ pub enum CapabilityId {
     Listing,
 }
 
+impl CapabilityId {
+    pub const ALL: [Self; 12] = [
+        Self::AuthLogin,
+        Self::AuthStatus,
+        Self::AuthLogout,
+        Self::AuthRefresh,
+        Self::Search,
+        Self::ItemShow,
+        Self::LocationSearch,
+        Self::Category,
+        Self::Favorite,
+        Self::SavedSearch,
+        Self::Draft,
+        Self::Listing,
+    ];
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityMaturity {
@@ -155,6 +172,25 @@ pub use vinted::binding::{VINTED_FI_BINDING, VintedPortalBinding};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_manifest_describes_each_capability_once() {
+        for manifest in marketplaces() {
+            for id in CapabilityId::ALL {
+                assert_eq!(
+                    manifest
+                        .capabilities
+                        .iter()
+                        .filter(|capability| capability.id == id)
+                        .count(),
+                    1,
+                    "{id:?} entries in {:?}",
+                    manifest.marketplace
+                );
+            }
+            assert_eq!(manifest.capabilities.len(), CapabilityId::ALL.len());
+        }
+    }
 
     #[test]
     fn capability_identifiers_preserve_wire_names() {

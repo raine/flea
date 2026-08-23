@@ -19,7 +19,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::{
     error::AppError,
-    marketplace::{MarketplaceContext, PortalId},
+    marketplace::{CapabilityId, MarketplaceContext, PortalId},
     output::OutputFormat,
 };
 
@@ -75,6 +75,14 @@ impl Command {
         match self {
             Self::Tori(_) => Some(MarketplaceContext::TORI_FI),
             Self::Vinted(_) => Some(MarketplaceContext::VINTED_FI),
+            Self::Capabilities | Self::Marketplaces | Self::Skill(_) | Self::Unsupported(_) => None,
+        }
+    }
+
+    pub fn capability_id(&self) -> Option<CapabilityId> {
+        match self {
+            Self::Tori(args) => args.command.capability_id(),
+            Self::Vinted(args) => args.command.capability_id(),
             Self::Capabilities | Self::Marketplaces | Self::Skill(_) | Self::Unsupported(_) => None,
         }
     }
@@ -163,6 +171,21 @@ pub struct VintedArgs {
 }
 
 impl ToriCommand {
+    pub fn capability_id(&self) -> Option<CapabilityId> {
+        Some(match self {
+            Self::Auth(args) => args.command.capability_id(),
+            Self::Capabilities => return None,
+            Self::Category(_) => CapabilityId::Category,
+            Self::Draft(_) => CapabilityId::Draft,
+            Self::Favorite(_) => CapabilityId::Favorite,
+            Self::Item(_) => CapabilityId::ItemShow,
+            Self::Listing(_) => CapabilityId::Listing,
+            Self::Search(_) => CapabilityId::Search,
+            Self::SavedSearch(_) => CapabilityId::SavedSearch,
+            Self::Location(_) => CapabilityId::LocationSearch,
+        })
+    }
+
     pub fn telemetry_name(&self) -> String {
         let command = match self {
             Self::Auth(args) => args.command.telemetry_name(),
@@ -202,6 +225,14 @@ pub enum VintedCommand {
 }
 
 impl VintedCommand {
+    pub fn capability_id(&self) -> Option<CapabilityId> {
+        Some(match self {
+            Self::Auth(args) => args.command.capability_id(),
+            Self::Capabilities | Self::Unsupported(_) => return None,
+            Self::Search(_) => CapabilityId::Search,
+        })
+    }
+
     pub fn telemetry_name(&self) -> String {
         match self {
             Self::Auth(args) => format!("vinted {}", args.command.telemetry_name()),
@@ -352,6 +383,87 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to parse {args:?}: {error}"));
             assert_eq!(cli.command.telemetry_name(), *expected, "args: {args:?}");
         }
+    }
+
+    fn assert_manifest_matches_reachable_commands(
+        marketplace_id: crate::marketplace::MarketplaceId,
+        cases: &[&[&str]],
+    ) {
+        use std::collections::HashSet;
+
+        use crate::marketplace::{AuthRequirement, CapabilityMaturity, marketplace};
+
+        let reachable = cases
+            .iter()
+            .map(|args| {
+                let cli = Cli::try_parse_from(std::iter::once("flea").chain(args.iter().copied()))
+                    .unwrap_or_else(|error| panic!("failed to parse {args:?}: {error}"));
+                assert_eq!(
+                    cli.command.context().map(|context| context.marketplace),
+                    Some(marketplace_id),
+                    "args: {args:?}"
+                );
+                cli.command
+                    .capability_id()
+                    .unwrap_or_else(|| panic!("command has no capability: {args:?}"))
+            })
+            .collect::<HashSet<_>>();
+        let declared = marketplace(marketplace_id)
+            .capabilities
+            .iter()
+            .filter(|capability| {
+                capability.auth != AuthRequirement::Internal
+                    && capability.maturity != CapabilityMaturity::Unavailable
+            })
+            .map(|capability| capability.id)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(reachable, declared);
+    }
+
+    #[test]
+    fn tori_manifest_matches_reachable_command_capabilities() {
+        use crate::marketplace::MarketplaceId;
+
+        assert_manifest_matches_reachable_commands(
+            MarketplaceId::Tori,
+            &[
+                &["tori", "auth", "login"],
+                &[
+                    "tori",
+                    "auth",
+                    "callback",
+                    "--state-root",
+                    "/tmp/flea",
+                    "https://example.com/callback",
+                ],
+                &["tori", "auth", "status"],
+                &["tori", "auth", "logout"],
+                &["tori", "category", "list"],
+                &["tori", "draft", "create"],
+                &["tori", "favorite", "folders"],
+                &["tori", "item", "show", "123"],
+                &["tori", "listing", "list"],
+                &["tori", "search", "chair"],
+                &["tori", "saved-search", "list"],
+                &["tori", "location", "search", "Helsinki"],
+            ],
+        );
+    }
+
+    #[test]
+    fn vinted_manifest_matches_reachable_command_capabilities() {
+        use crate::marketplace::MarketplaceId;
+
+        assert_manifest_matches_reachable_commands(
+            MarketplaceId::Vinted,
+            &[
+                &["vinted", "auth", "login"],
+                &["vinted", "auth", "status"],
+                &["vinted", "auth", "logout"],
+                &["vinted", "search", "chair"],
+            ],
+        );
     }
 
     #[test]

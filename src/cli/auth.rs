@@ -35,6 +35,16 @@ pub enum ToriAuthCommand {
 }
 
 impl ToriAuthCommand {
+    pub fn capability_id(&self) -> crate::marketplace::CapabilityId {
+        use crate::marketplace::CapabilityId;
+
+        match self {
+            Self::Login | Self::Callback { .. } => CapabilityId::AuthLogin,
+            Self::Status => CapabilityId::AuthStatus,
+            Self::Logout => CapabilityId::AuthLogout,
+        }
+    }
+
     pub fn telemetry_name(&self) -> &'static str {
         match self {
             Self::Login => "auth login",
@@ -82,6 +92,16 @@ pub enum VintedAuthCommand {
 }
 
 impl VintedAuthCommand {
+    pub fn capability_id(&self) -> crate::marketplace::CapabilityId {
+        use crate::marketplace::CapabilityId;
+
+        match self {
+            Self::Login => CapabilityId::AuthLogin,
+            Self::Status => CapabilityId::AuthStatus,
+            Self::Logout => CapabilityId::AuthLogout,
+        }
+    }
+
     pub fn telemetry_name(&self) -> &'static str {
         match self {
             Self::Login => "auth login",
