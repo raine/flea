@@ -3,7 +3,6 @@ pub mod client;
 pub mod favorites;
 pub mod item;
 pub mod listings;
-pub(crate) mod oauth;
 pub mod saved_searches;
 pub mod search;
 pub mod signing;

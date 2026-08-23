@@ -10,8 +10,8 @@ use sha2::Sha512;
 use url::Url;
 use uuid::Uuid;
 
-pub use super::oauth::SecretString;
-use super::oauth::{pkce_challenge, random_secret, states_equal};
+pub use crate::oauth::SecretString;
+use crate::oauth::{pkce_challenge, random_secret, states_equal};
 
 use crate::{
     domain::envelope::NextAction,

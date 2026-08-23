@@ -6,6 +6,7 @@ pub mod error;
 mod image_processing;
 pub mod invocation;
 pub mod marketplace;
+pub(crate) mod oauth;
 pub mod output;
 pub mod retry;
 pub mod storage;

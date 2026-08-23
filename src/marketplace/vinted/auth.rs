@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
 
 use crate::{
-    api::oauth::{SecretString, pkce_challenge, random_secret, random_uuid_secret, states_equal},
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::{PortalId, vinted::binding::VINTED_FI_BINDING},
+    oauth::{SecretString, pkce_challenge, random_secret, random_uuid_secret, states_equal},
     storage::credentials::VintedCredentialRecord,
 };
 
