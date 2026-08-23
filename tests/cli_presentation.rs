@@ -1,7 +1,6 @@
 use std::process::{Command, Output};
 
-use clap::{Command as ClapCommand, CommandFactory};
-use flea::cli::Cli;
+use clap::Command as ClapCommand;
 
 fn invoke(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_flea"))
@@ -63,7 +62,7 @@ fn assert_complete_help(command: &ClapCommand, path: &str) {
 
 #[test]
 fn every_visible_command_and_argument_has_help_metadata() {
-    assert_complete_help(&Cli::command(), "");
+    assert_complete_help(&flea::command(), "");
 }
 
 #[test]

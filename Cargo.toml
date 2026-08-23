@@ -6,6 +6,31 @@ authors = ["Raine Virta"]
 description = "Operate Tori.fi and Vinted marketplace workflows with coding agents"
 repository = "https://github.com/raine/flea"
 license = "MIT"
+autotests = false
+
+[[test]]
+name = "cli_presentation"
+path = "tests/cli_presentation.rs"
+
+[[test]]
+name = "cli_skill"
+path = "tests/cli_skill.rs"
+
+[[test]]
+name = "live_search_smoke"
+path = "tests/live_search_smoke.rs"
+
+[[test]]
+name = "live_smoke"
+path = "tests/live_smoke.rs"
+
+[[test]]
+name = "marketplace_cli"
+path = "tests/marketplace_cli.rs"
+
+[[test]]
+name = "observation_fixtures"
+path = "tests/observation_fixtures.rs"
 
 [dependencies]
 base64 = "0.22"

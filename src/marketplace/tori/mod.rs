@@ -1,16 +1,16 @@
-pub mod adinput;
-pub mod auth;
-pub mod client;
-pub mod discovery;
-pub mod favorites;
+pub(crate) mod adinput;
+pub(crate) mod auth;
+pub(crate) mod client;
+pub(crate) mod discovery;
+pub(crate) mod favorites;
 pub(crate) mod interactive;
-pub mod item;
-pub mod listings;
+pub(crate) mod item;
+pub(crate) mod listings;
 pub(crate) mod login;
-pub mod saved_searches;
-pub mod search;
+pub(crate) mod saved_searches;
+pub(crate) mod search;
 pub(crate) mod session;
-pub mod signing;
+pub(crate) mod signing;
 
 use super::{
     AuthRequirement, CapabilityDescriptor, CapabilityId, MarketplaceDescriptor, MarketplaceId,

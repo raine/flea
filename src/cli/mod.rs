@@ -1,16 +1,16 @@
-pub mod auth;
-pub mod category;
-pub mod draft;
-pub mod favorite;
-pub mod item;
-pub mod listing;
-pub mod location;
-pub mod outcome;
-pub mod runtime;
-pub mod saved_search;
-pub mod search;
-pub mod skill;
-pub mod vinted_search;
+pub(crate) mod auth;
+pub(crate) mod category;
+pub(crate) mod draft;
+pub(crate) mod favorite;
+pub(crate) mod item;
+pub(crate) mod listing;
+pub(crate) mod location;
+pub(crate) mod outcome;
+pub(crate) mod runtime;
+pub(crate) mod saved_search;
+pub(crate) mod search;
+pub(crate) mod skill;
+pub(crate) mod vinted_search;
 
 use std::ffi::OsString;
 

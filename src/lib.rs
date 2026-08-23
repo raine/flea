@@ -1,27 +1,57 @@
-pub mod cli;
-pub mod diagnostics;
+mod cli;
+mod diagnostics;
 pub mod domain;
-pub mod error;
+mod error;
 mod image_processing;
-pub mod invocation;
-pub mod marketplace;
-pub(crate) mod oauth;
-pub mod output;
-pub mod retry;
-pub mod sensitive;
-pub mod storage;
-pub mod transport;
+mod invocation;
+mod marketplace;
+mod oauth;
+mod output;
+mod retry;
+mod sensitive;
+mod storage;
+mod transport;
 
+pub use error::{AppError, ExitClass};
+pub use marketplace::{
+    AuthRequirement, CapabilityDescriptor, CapabilityId, CapabilityMaturity, MarketplaceContext,
+    MarketplaceDescriptor, MarketplaceId, PortalId, marketplace, marketplaces,
+};
+
+/// Dependency injection types for deterministic command tests and embedders.
+pub mod dependencies {
+    pub use crate::{
+        cli::{
+            auth::{ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand},
+            outcome::{CommandData, CommandOutcome},
+            runtime::ApplicationDependencies,
+        },
+        marketplace::{
+            tori::client::{HttpError, HttpResponse, RequestSpec, ToriClient},
+            vinted::{
+                auth::VintedCredentialRecord,
+                search::{
+                    CatalogueSearchRequest, SearchResult as VintedSearchResult, VintedSearchApi,
+                },
+            },
+        },
+        transport::{
+            MultipartPart, RequestBody, Transport, TransportError, TransportErrorKind,
+            TransportErrorPhase, TransportFuture, TransportRequest, TransportResponse,
+        },
+    };
+}
+
+#[cfg(not(test))]
+use std::sync::Once;
 use std::{
     ffi::OsString,
     panic::{AssertUnwindSafe, catch_unwind},
-    sync::Once,
 };
 
 use clap::{CommandFactory, Parser};
 use diagnostics::{DiagnosticsContext, DiagnosticsSession};
 use domain::envelope::Envelope;
-use error::{AppError, ExitClass};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Presentation {
@@ -82,6 +112,7 @@ where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
 {
+    #[cfg(not(test))]
     install_safe_panic_hook();
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
     cli::Cli::try_parse_from(args).map_err(clap_presentation)
@@ -221,6 +252,7 @@ fn finish(
     }
 }
 
+#[cfg(not(test))]
 fn install_safe_panic_hook() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
@@ -233,3 +265,46 @@ fn install_safe_panic_hook() {
 pub fn command() -> clap::Command {
     cli::Cli::command()
 }
+
+#[cfg(test)]
+extern crate self as flea;
+
+#[cfg(test)]
+#[path = "../tests/auth_login_presentation.rs"]
+mod auth_login_presentation;
+#[cfg(test)]
+#[path = "../tests/cli_parsing.rs"]
+mod cli_parsing;
+#[cfg(test)]
+#[path = "../tests/cli_to_envelope.rs"]
+mod cli_to_envelope;
+#[cfg(test)]
+#[path = "../tests/command_result_characterization.rs"]
+mod command_result_characterization;
+#[cfg(test)]
+#[path = "../tests/conformance_fixtures.rs"]
+mod conformance_fixtures;
+#[cfg(test)]
+#[path = "../tests/draft_http_fixtures.rs"]
+mod draft_http_fixtures;
+#[cfg(test)]
+#[path = "../tests/http_transport.rs"]
+mod http_transport;
+#[cfg(test)]
+#[path = "../tests/item_fixtures.rs"]
+mod item_fixtures;
+#[cfg(test)]
+#[path = "../tests/listings_fixtures.rs"]
+mod listings_fixtures;
+#[cfg(test)]
+#[path = "../tests/output_formats.rs"]
+mod output_formats;
+#[cfg(test)]
+#[path = "../tests/saved_search_fixtures.rs"]
+mod saved_search_fixtures;
+#[cfg(test)]
+#[path = "../tests/search_fixtures.rs"]
+mod search_fixtures;
+#[cfg(test)]
+#[path = "../tests/tori_error_redaction_contracts.rs"]
+mod tori_error_redaction_contracts;

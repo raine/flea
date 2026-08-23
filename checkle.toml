@@ -16,7 +16,14 @@ command = ["cargo", "build", "--all", "--message-format=json"]
 [[check]]
 name = "test"
 mode = "cargo"
-command = ["cargo", "test", "--all", "--message-format=json"]
+command = [
+  "cargo",
+  "test",
+  "--all",
+  "--message-format=json",
+  "--",
+  "--test-threads=1",
+]
 
 [[group]]
 name = "all"
