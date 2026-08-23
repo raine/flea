@@ -2,13 +2,13 @@ use clap::{Args, Subcommand, ValueEnum};
 use serde_json::json;
 
 use crate::{
-    api::{
-        saved_searches::{CreateSavedSearch, SavedSearches, SavedSearchesApi},
-        search::PublicSearchApi,
-    },
     cli::outcome::CommandOutcome,
     domain::observation::Observation,
     error::AppError,
+    marketplace::tori::{
+        saved_searches::{CreateSavedSearch, SavedSearches, SavedSearchesApi},
+        search::PublicSearchApi,
+    },
 };
 
 use super::search::{SearchArgs, saved_search_parameters};
@@ -229,7 +229,7 @@ fn apply_notification(
 }
 
 fn mutation_value(
-    search: crate::api::saved_searches::SavedSearch,
+    search: crate::marketplace::tori::saved_searches::SavedSearch,
     present: bool,
 ) -> Result<CommandOutcome, AppError> {
     let value = serde_json::to_value(search).map_err(|error| {

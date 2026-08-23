@@ -4,6 +4,7 @@ pub mod client;
 pub mod favorites;
 pub mod item;
 pub mod listings;
+pub mod saved_searches;
 pub mod search;
 pub(crate) mod session;
 pub mod signing;

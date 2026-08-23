@@ -3,7 +3,6 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::{
-    api::saved_searches::HttpSavedSearchesApi,
     cli::{
         Command, CommandFuture, CommandRuntime, ToriCommand, VintedCommand,
         auth::{AuthCommandHandler, FileAuthStore, unix_time_now},
@@ -20,6 +19,7 @@ use crate::{
             favorites::HttpFavoritesApi,
             item::HttpPublicItemApi,
             listings::HttpListingsApi,
+            saved_searches::HttpSavedSearchesApi,
             search::HttpPublicSearchApi,
             session as tori_session,
         },

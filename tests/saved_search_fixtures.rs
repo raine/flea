@@ -6,12 +6,12 @@ use std::{
 };
 
 use flea::{
-    api::saved_searches::{
-        CreateSavedSearch, HttpSavedSearchesApi, SavedSearchApiError, SavedSearches,
-        SavedSearchesApi,
-    },
     marketplace::tori::client::{
         HttpError, HttpResponse, RequestBody, RequestSpec, ToriClient, compatibility,
+    },
+    marketplace::tori::saved_searches::{
+        CreateSavedSearch, HttpSavedSearchesApi, SavedSearchApiError, SavedSearches,
+        SavedSearchesApi,
     },
 };
 use reqwest::StatusCode;

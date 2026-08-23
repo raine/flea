@@ -7,7 +7,6 @@ use std::{
 
 use flea::{
     Presentation,
-    api::saved_searches::HttpSavedSearchesApi,
     cli::{
         Command, CommandFuture, CommandRuntime, ToriCommand,
         auth::{AuthCommandHandler, AuthStore},
@@ -24,6 +23,7 @@ use flea::{
         favorites::{FavoritesApi, HttpFavoritesApi},
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
+        saved_searches::HttpSavedSearchesApi,
         search::HttpPublicSearchApi,
     },
     run_with_runtime,
