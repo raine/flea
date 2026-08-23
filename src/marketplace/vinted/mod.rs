@@ -1,6 +1,7 @@
 pub(crate) mod auth;
 pub(crate) mod binding;
 pub(crate) mod interactive;
+pub(crate) mod publication;
 pub(crate) mod search;
 pub(crate) mod session;
 
@@ -22,7 +23,7 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor::unavailable(CapabilityId::Category),
     CapabilityDescriptor::unavailable(CapabilityId::Favorite),
     CapabilityDescriptor::unavailable(CapabilityId::SavedSearch),
-    CapabilityDescriptor::unavailable(CapabilityId::Draft),
+    CapabilityDescriptor::source_derived(CapabilityId::Draft, AuthRequirement::Required),
     CapabilityDescriptor::unavailable(CapabilityId::Listing),
 ];
 
@@ -54,7 +55,11 @@ mod tests {
                 CapabilityMaturity::Validated
             );
         }
-        for id in [CapabilityId::AuthRefresh, CapabilityId::Search] {
+        for id in [
+            CapabilityId::AuthRefresh,
+            CapabilityId::Search,
+            CapabilityId::Draft,
+        ] {
             assert_eq!(
                 MANIFEST
                     .capabilities

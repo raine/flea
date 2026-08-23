@@ -4,7 +4,7 @@ use crate::{
     cli::{
         Command, ToriCommand, VintedCommand,
         auth::{ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand},
-        category, draft, favorite, listing, saved_search,
+        category, draft, favorite, listing, saved_search, vinted_publish,
     },
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
@@ -25,6 +25,7 @@ use crate::{
         },
         vinted::{
             auth::VintedCredentialRecord,
+            publication::{HttpVintedPublicationApi, VintedPublicationApi},
             search::{
                 HttpVintedSearchApi, SearchResult as VintedSearchResult, VintedSearch,
                 VintedSearchApi, VintedSearchSession,
@@ -53,6 +54,7 @@ pub struct ApplicationDependencies {
     vinted_auth: Arc<VintedAuthHandler>,
     vinted_search_session: Arc<dyn VintedSearchSession>,
     vinted_search: Arc<dyn VintedSearchApi>,
+    vinted_publication: Arc<dyn VintedPublicationApi>,
 }
 
 impl ApplicationDependencies {
@@ -70,6 +72,7 @@ impl ApplicationDependencies {
             vinted_auth: Arc::new(|portal, args| Box::pin(execute_vinted_auth(portal, args))),
             vinted_search_session: Arc::new(vinted_session::credentials),
             vinted_search: Arc::new(HttpVintedSearchApi::new()),
+            vinted_publication: Arc::new(HttpVintedPublicationApi::new()),
         }
     }
 
@@ -110,6 +113,11 @@ impl ApplicationDependencies {
 
     pub fn with_vinted_search_api(mut self, api: Arc<dyn VintedSearchApi>) -> Self {
         self.vinted_search = api;
+        self
+    }
+
+    pub fn with_vinted_publication_api(mut self, api: Arc<dyn VintedPublicationApi>) -> Self {
+        self.vinted_publication = api;
         self
     }
 
@@ -242,6 +250,24 @@ async fn execute_vinted(
         VintedCommand::Capabilities => Ok(CommandOutcome::new(
             CommandData::MarketplaceCapabilities(marketplace_capabilities(MarketplaceId::Vinted)),
         )),
+        VintedCommand::Draft(args) => {
+            vinted_publish::execute_draft(
+                portal,
+                args.command,
+                dependencies.vinted_search_session.as_ref(),
+                dependencies.vinted_publication.as_ref(),
+            )
+            .await
+        }
+        VintedCommand::Publish(args) => {
+            vinted_publish::execute_direct(
+                portal,
+                args,
+                dependencies.vinted_search_session.as_ref(),
+                dependencies.vinted_publication.as_ref(),
+            )
+            .await
+        }
         VintedCommand::Search(args) => match VintedSearch::new(
             dependencies.vinted_search_session.as_ref(),
             dependencies.vinted_search.as_ref(),

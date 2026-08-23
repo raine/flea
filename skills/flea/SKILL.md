@@ -1,6 +1,6 @@
 ---
 name: flea
-description: Operate Tori.fi workflows and authenticated Vinted search with flea.
+description: Operate Tori.fi workflows and authenticated Vinted search, drafts, and publication with flea.
 ---
 
 # Flea
@@ -34,7 +34,22 @@ flea vinted search [QUERY] --page PAGE --limit LIMIT
 ```
 
 Omit the query to browse. Results use the shared normalized listing shape. Use
-`--raw` for the upstream response. Other Vinted capabilities are unavailable.
+`--raw` for the upstream response.
+
+## Publish Vinted listings
+
+Use runtime portal values for category, attributes, currency, price, and package.
+Never guess product facts. Pass complete JSON and every image in display order:
+
+```sh
+flea vinted draft create --input listing.json --image front.heic
+flea vinted draft publish DRAFT_ID --input listing.json --image front.jpg
+flea vinted draft delete DRAFT_ID
+flea vinted publish --input listing.json --image front.jpg
+```
+
+Images are sanitized locally. Draft mutations replace the image assignment.
+Inspect remote state before retrying failures.
 
 ## Find Tori listings
 

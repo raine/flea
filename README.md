@@ -1,8 +1,8 @@
 # flea
 
 `flea` gives coding agents explicit command trees for Tori.fi and Vinted.
-Tori supports listing workflows, while Vinted supports persisted browser
-login, status validation, and logout.
+Tori supports listing workflows. Vinted supports persisted browser
+authentication, search, source-derived draft operations, and publication.
 
 ## Why flea?
 
@@ -117,7 +117,39 @@ Authenticated operations cover:
   publication, and deletion
 - Published listing inspection, updates, sold-state transitions, and deletion
 
-Run command help for current syntax, constraints, and examples:
+Vinted publication accepts a complete JSON listing payload and one or more
+images. Flea strips image metadata, converts supported HEIC/HEIF input, uploads
+images in argument order, and uses Vinted's draft or direct-publication
+endpoint. Category IDs, dynamic attributes, currency, price bounds, and package
+IDs are runtime portal values.
+
+```sh
+flea vinted draft create --input listing.json --image front.heic
+flea vinted draft update DRAFT_ID --input listing.json --image front.jpg
+flea vinted draft publish DRAFT_ID --input listing.json --image front.jpg
+flea vinted draft delete DRAFT_ID
+flea vinted publish --input listing.json --image front.jpg
+```
+
+A minimal complete input has this shape:
+
+```json
+{
+  "title": "Truthful title",
+  "description": "Truthful description",
+  "catalog_id": 123,
+  "price": "5.00",
+  "currency": "EUR",
+  "package_size_id": 1,
+  "item_attributes": [{ "code": "condition", "ids": [1] }]
+}
+```
+
+Optional fields include brand, ISBN, color, measurements, manufacturer fields,
+custom shipment prices, and parcel dimensions. Draft update and publish replace
+the complete image assignment, so pass every intended image in display order.
+
+Run command help for current syntax and constraints:
 
 ```sh
 flea tori search --help
@@ -127,6 +159,8 @@ flea tori saved-search create --help
 flea tori draft --help
 flea tori draft create --help
 flea tori listing update --help
+flea vinted draft --help
+flea vinted publish --help
 ```
 
 ## Structured output

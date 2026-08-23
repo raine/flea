@@ -10,6 +10,7 @@ pub(crate) mod runtime;
 pub(crate) mod saved_search;
 pub(crate) mod search;
 pub(crate) mod skill;
+pub(crate) mod vinted_publish;
 pub(crate) mod vinted_search;
 
 use std::ffi::OsString;
@@ -223,6 +224,16 @@ pub enum VintedCommand {
         long_about = "Search Vinted listings by text, price, ordering, and page. Authentication is required. Run `flea vinted auth login` first."
     )]
     Search(vinted_search::VintedSearchArgs),
+    #[command(
+        about = "Manage Vinted drafts",
+        long_about = "Create, replace, publish, or delete Vinted drafts using a complete runtime-discovered listing payload."
+    )]
+    Draft(vinted_publish::VintedDraftArgs),
+    #[command(
+        about = "Publish a Vinted listing",
+        long_about = "Upload locally sanitized images and publish a complete runtime-discovered Vinted listing payload."
+    )]
+    Publish(vinted_publish::PublicationInputArgs),
     #[command(external_subcommand)]
     Unsupported(Vec<OsString>),
 }
@@ -234,6 +245,7 @@ impl VintedCommand {
             Self::Auth(args) => args.command.capability_id(),
             Self::Capabilities | Self::Unsupported(_) => return None,
             Self::Search(_) => CapabilityId::Search,
+            Self::Draft(_) | Self::Publish(_) => CapabilityId::Draft,
         })
     }
 
@@ -242,6 +254,8 @@ impl VintedCommand {
             Self::Auth(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Capabilities => "vinted capabilities".to_owned(),
             Self::Search(_) => "vinted search".to_owned(),
+            Self::Draft(args) => format!("vinted {}", args.command.telemetry_name()),
+            Self::Publish(_) => "vinted publish".to_owned(),
             Self::Unsupported(_) => "unknown".to_owned(),
         }
     }
@@ -466,6 +480,7 @@ mod tests {
                 &["vinted", "auth", "status"],
                 &["vinted", "auth", "logout"],
                 &["vinted", "search", "chair"],
+                &["vinted", "draft", "delete", "123"],
             ],
         );
     }
