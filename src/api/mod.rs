@@ -1,3 +1,7 @@
+//! Compatibility facade for the crate's established `flea::api` library paths.
+//!
+//! Tori implementations have canonical paths under [`crate::marketplace::tori`].
+
 /// Compatibility path for the Tori authentication protocol.
 pub mod auth {
     pub use crate::marketplace::tori::auth::*;
