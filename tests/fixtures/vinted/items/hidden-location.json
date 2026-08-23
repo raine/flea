@@ -1,0 +1,15 @@
+{
+  "item": {
+    "id": 103,
+    "title": "Leather boots",
+    "description": "Description says Espoo, but this is presentation text.",
+    "photos": [],
+    "user": {
+      "login": "seller-three",
+      "expose_location": false,
+      "city": "Espoo",
+      "country_title_local": "Suomi"
+    }
+  },
+  "plugins": [{"type": "breadcrumbs", "data": {"title": "Vantaa"}}]
+}

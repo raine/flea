@@ -32,6 +32,10 @@ path = "tests/marketplace_cli.rs"
 name = "observation_fixtures"
 path = "tests/observation_fixtures.rs"
 
+[[test]]
+name = "vinted_item_fixtures"
+path = "tests/vinted_item_fixtures.rs"
+
 [dependencies]
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }

@@ -31,6 +31,10 @@ pub mod dependencies {
             tori::client::{HttpError, HttpResponse, RequestSpec, ToriClient},
             vinted::{
                 auth::VintedCredentialRecord,
+                item::{
+                    VintedItemApi, VintedItemRequest, VintedItemResult, VintedItemSession,
+                    VintedItems,
+                },
                 search::{
                     CatalogueSearchRequest, SearchResult as VintedSearchResult, VintedSearchApi,
                 },

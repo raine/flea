@@ -32,6 +32,11 @@ fn capability_discovery_is_offline_and_marketplace_scoped() {
             && capability["auth"] == "required"
             && capability["maturity"] == "source_derived"
     }));
+    assert!(capabilities.iter().any(|capability| {
+        capability["name"] == "item.show"
+            && capability["auth"] == "required"
+            && capability["maturity"] == "validated"
+    }));
 }
 
 #[test]
@@ -45,16 +50,12 @@ fn unsupported_commands_return_structured_marketplace_errors() {
         "flea marketplaces"
     );
 
-    let (exit_code, unavailable) = run_json(&["vinted", "item", "show", "123"]);
-    assert_eq!(exit_code, 2);
-    assert_eq!(unavailable["context"]["marketplace"], "vinted");
+    let (exit_code, invalid_item) = run_json(&["vinted", "item", "show", "../123"]);
+    assert_eq!(exit_code, 20);
+    assert_eq!(invalid_item["context"]["marketplace"], "vinted");
+    assert_eq!(invalid_item["error"]["code"], "vinted_item.invalid_id");
     assert_eq!(
-        unavailable["error"]["code"],
-        "marketplace.capability_unavailable"
-    );
-    assert_eq!(unavailable["error"]["details"]["command"], "item");
-    assert_eq!(
-        unavailable["next_actions"][0]["command"],
-        "flea vinted --portal fi capabilities"
+        invalid_item["next_actions"][0]["command"],
+        "flea vinted --portal fi search"
     );
 }

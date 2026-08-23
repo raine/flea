@@ -1,0 +1,13 @@
+{
+  "item": {
+    "id": 104,
+    "title": "Canvas bag, Turku style",
+    "description": "Ships from a place shown only in localized prose",
+    "photos": [],
+    "user": {"login": "seller-four", "business": false}
+  },
+  "plugins": [
+    {"type": "description", "data": {"description": "Tampere"}},
+    {"type": "summary", "data": {"lines": [{"title": "Oulu"}]}}
+  ]
+}

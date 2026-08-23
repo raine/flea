@@ -2,7 +2,8 @@
 
 `flea` gives coding agents explicit command trees for Tori.fi and Vinted.
 Tori supports listing workflows. Vinted supports persisted browser
-authentication, search, source-derived draft operations, and publication.
+authentication, search, item inspection, source-derived draft operations, and
+publication.
 
 ## Why flea?
 
@@ -117,6 +118,21 @@ Authenticated operations cover:
   publication, and deletion
 - Published listing inspection, updates, sold-state transitions, and deletion
 
+Authenticated Vinted search results can be inspected by their numeric item ID:
+
+```sh
+flea vinted search "wool coat"
+flea vinted item show ITEM_ID
+flea vinted item show ITEM_ID --raw
+```
+
+Normalized details expose `seller.seller_disclosed_location` only when Vinted
+returns an explicit seller city or country and permits exposure, or when its
+business-seller information plugin supplies a location. This is seller profile
+information. It is not a catalog location filter and does not guarantee the
+item's physical location. `--raw` returns the exact upstream JSON value inside
+the standard envelope.
+
 Vinted publication accepts a complete JSON listing payload and one or more
 images. Flea strips image metadata, converts supported HEIC/HEIF input, uploads
 images in argument order, and uses Vinted's draft or direct-publication
@@ -162,6 +178,7 @@ flea tori saved-search create --help
 flea tori draft --help
 flea tori draft create --help
 flea tori listing update --help
+flea vinted item show --help
 flea vinted draft --help
 flea vinted publish --help
 ```

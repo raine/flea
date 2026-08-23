@@ -1,0 +1,17 @@
+{
+  "data": {
+    "item": {
+      "id": "102",
+      "title": "Linen shirt",
+      "description": "Blue linen shirt",
+      "photos": [],
+      "user": {
+        "login": "seller-two",
+        "business": false,
+        "expose_location": true,
+        "country_title_local": "Viro"
+      }
+    },
+    "plugins": []
+  }
+}

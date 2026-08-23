@@ -25,6 +25,10 @@ use crate::{
         },
         vinted::{
             auth::VintedCredentialRecord,
+            item::{
+                HttpVintedItemApi, VintedItemApi, VintedItemRequest, VintedItemResult,
+                VintedItemSession, VintedItems,
+            },
             publication::{HttpVintedPublicationApi, VintedPublicationApi},
             publication_discovery::{
                 HttpVintedPublicationDiscoveryApi, VintedPublicationDiscoveryApi,
@@ -56,7 +60,9 @@ pub struct ApplicationDependencies {
     tori_auth: Arc<ToriAuthHandler>,
     vinted_auth: Arc<VintedAuthHandler>,
     vinted_search_session: Arc<dyn VintedSearchSession>,
+    vinted_item_session: Arc<dyn VintedItemSession>,
     vinted_search: Arc<dyn VintedSearchApi>,
+    vinted_item: Arc<dyn VintedItemApi>,
     vinted_publication: Arc<dyn VintedPublicationApi>,
     vinted_publication_discovery: Arc<dyn VintedPublicationDiscoveryApi>,
 }
@@ -75,7 +81,9 @@ impl ApplicationDependencies {
             tori_auth: Arc::new(|args| Box::pin(execute_tori_auth(args))),
             vinted_auth: Arc::new(|portal, args| Box::pin(execute_vinted_auth(portal, args))),
             vinted_search_session: Arc::new(vinted_session::credentials),
+            vinted_item_session: Arc::new(vinted_session::credentials),
             vinted_search: Arc::new(HttpVintedSearchApi::new()),
+            vinted_item: Arc::new(HttpVintedItemApi::new()),
             vinted_publication: Arc::new(HttpVintedPublicationApi::new()),
             vinted_publication_discovery: Arc::new(HttpVintedPublicationDiscoveryApi::new()),
         }
@@ -112,12 +120,20 @@ impl ApplicationDependencies {
     where
         F: Fn(PortalId) -> Result<VintedCredentialRecord, AppError> + Send + Sync + 'static,
     {
-        self.vinted_search_session = Arc::new(provider);
+        let provider = Arc::new(provider);
+        let search_provider = Arc::clone(&provider);
+        self.vinted_search_session = Arc::new(move |portal| search_provider(portal));
+        self.vinted_item_session = Arc::new(move |portal| provider(portal));
         self
     }
 
     pub fn with_vinted_search_api(mut self, api: Arc<dyn VintedSearchApi>) -> Self {
         self.vinted_search = api;
+        self
+    }
+
+    pub fn with_vinted_item_api(mut self, api: Arc<dyn VintedItemApi>) -> Self {
+        self.vinted_item = api;
         self
     }
 
@@ -289,6 +305,23 @@ async fn execute_vinted(
                 dependencies.vinted_publication.as_ref(),
             )
             .await
+        }
+        VintedCommand::Item(args) => {
+            let (item_id, raw) = match args.command {
+                super::vinted_item::VintedItemCommand::Show { item_id, raw } => (item_id, raw),
+            };
+            match VintedItems::new(
+                dependencies.vinted_item_session.as_ref(),
+                dependencies.vinted_item.as_ref(),
+            )
+            .execute(portal, VintedItemRequest { item_id, raw })
+            .await?
+            {
+                VintedItemResult::Detail(detail) => {
+                    Ok(CommandOutcome::new(CommandData::VintedItem(*detail)))
+                }
+                VintedItemResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
+            }
         }
         VintedCommand::Search(args) => match VintedSearch::new(
             dependencies.vinted_search_session.as_ref(),

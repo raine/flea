@@ -1,6 +1,7 @@
 pub(crate) mod auth;
 pub(crate) mod binding;
 pub(crate) mod interactive;
+pub(crate) mod item;
 pub(crate) mod publication;
 pub(crate) mod publication_discovery;
 pub(crate) mod search;
@@ -19,7 +20,7 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor::validated(CapabilityId::AuthLogout, AuthRequirement::None),
     CapabilityDescriptor::source_derived(CapabilityId::AuthRefresh, AuthRequirement::Internal),
     CapabilityDescriptor::source_derived(CapabilityId::Search, AuthRequirement::Required),
-    CapabilityDescriptor::unavailable(CapabilityId::ItemShow),
+    CapabilityDescriptor::validated(CapabilityId::ItemShow, AuthRequirement::Required),
     CapabilityDescriptor::unavailable(CapabilityId::LocationSearch),
     CapabilityDescriptor::source_derived(CapabilityId::Category, AuthRequirement::Required),
     CapabilityDescriptor::unavailable(CapabilityId::Favorite),
@@ -45,6 +46,7 @@ mod tests {
             CapabilityId::AuthLogin,
             CapabilityId::AuthStatus,
             CapabilityId::AuthLogout,
+            CapabilityId::ItemShow,
         ] {
             assert_eq!(
                 MANIFEST

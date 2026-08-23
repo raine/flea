@@ -1,0 +1,30 @@
+{
+  "verified_on": "2026-08-23",
+  "portal": "fi",
+  "search": {
+    "route": "GET https://api.vinted.com/svc-catalogue/items",
+    "result_state": "active_available_listing",
+    "selected_item_id": "<redacted>"
+  },
+  "item_detail": {
+    "route": "GET https://api.vinted.com/item-details/item/<item-id>",
+    "http_status": 200,
+    "top_level_keys": ["item", "plugins"],
+    "returned_id_matched_search_result": true,
+    "seller_location_fields": ["country_title_local", "expose_location"],
+    "expose_location": false,
+    "normalized_seller_location": null
+  },
+  "compatibility_route": {
+    "route": "GET https://www.vinted.fi/api/v2/items/<item-id>",
+    "http_status": 404,
+    "response_kind": "html"
+  },
+  "sanitization": {
+    "credentials": "omitted",
+    "account_identifiers": "omitted",
+    "device_identifiers": "omitted",
+    "request_identifiers": "omitted",
+    "listing_and_seller_values": "redacted"
+  }
+}

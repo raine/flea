@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add authenticated Vinted item inspection with exact raw output and
+  exposure-aware seller-disclosed location fields
+
 ## v0.1.2 (2026-08-23)
 
 - New `flea favorite` commands list favorites folders, check whether a listing

@@ -7,3 +7,4 @@ pub mod listing;
 pub mod metadata;
 pub mod observation;
 pub mod search;
+pub mod vinted_item;

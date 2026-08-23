@@ -1,0 +1,15 @@
+{
+  "item": {
+    "id": 105,
+    "title": "Business listing",
+    "description": "Store item",
+    "photos": [],
+    "user": {"login": "shop-fixture", "business": true, "expose_location": false, "city": "Ignored city"}
+  },
+  "plugins": [{
+    "name": "Seller information",
+    "type": "seller_info_business",
+    "section": "seller",
+    "data": {"seller_location": "Helsinki, Suomi"}
+  }]
+}
