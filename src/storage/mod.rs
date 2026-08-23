@@ -10,6 +10,30 @@ use crate::marketplace::MarketplaceContext;
 
 const STATE_DIR: &str = "flea";
 
+pub(crate) fn discover_state_root() -> io::Result<PathBuf> {
+    state_root_from_environment(env::var_os("XDG_STATE_HOME"), env::var_os("HOME"))
+}
+
+fn state_root_from_environment(
+    xdg_state_home: Option<OsString>,
+    home: Option<OsString>,
+) -> io::Result<PathBuf> {
+    let state_home = xdg_state_home
+        .filter(|path| PathBuf::from(path).is_absolute())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.map(PathBuf::from)
+                .map(|path| path.join(".local/state"))
+        })
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "cannot determine the local state directory",
+            )
+        })?;
+    Ok(state_home.join(STATE_DIR))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StatePaths {
     root: PathBuf,
@@ -18,8 +42,7 @@ pub struct StatePaths {
 
 impl StatePaths {
     pub fn discover(context: MarketplaceContext) -> io::Result<Self> {
-        let paths =
-            Self::from_environment(env::var_os("XDG_STATE_HOME"), env::var_os("HOME"), context)?;
+        let paths = Self::from_root(discover_state_root()?, context);
         paths.remove_unscoped_credentials()?;
         Ok(paths)
     }
@@ -117,27 +140,6 @@ impl StatePaths {
         }
         Ok(())
     }
-
-    fn from_environment(
-        xdg_state_home: Option<OsString>,
-        home: Option<OsString>,
-        context: MarketplaceContext,
-    ) -> io::Result<Self> {
-        let state_home = xdg_state_home
-            .filter(|path| PathBuf::from(path).is_absolute())
-            .map(PathBuf::from)
-            .or_else(|| {
-                home.map(PathBuf::from)
-                    .map(|path| path.join(".local/state"))
-            })
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "cannot determine the local state directory",
-                )
-            })?;
-        Ok(Self::from_state_home(state_home, context))
-    }
 }
 
 #[cfg(test)]
@@ -148,32 +150,30 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
-    use super::StatePaths;
+    use super::{StatePaths, state_root_from_environment};
     use crate::marketplace::MarketplaceContext;
 
     #[test]
     fn uses_absolute_xdg_state_home() {
-        let paths = StatePaths::from_environment(
+        let root = state_root_from_environment(
             Some(OsString::from("/var/lib/example")),
             Some(OsString::from("/home/example")),
-            MarketplaceContext::TORI_FI,
         )
         .unwrap();
 
-        assert_eq!(paths.root(), std::path::Path::new("/var/lib/example/flea"));
+        assert_eq!(root, std::path::Path::new("/var/lib/example/flea"));
     }
 
     #[test]
     fn falls_back_to_home_for_relative_xdg_state_home() {
-        let paths = StatePaths::from_environment(
+        let root = state_root_from_environment(
             Some(OsString::from("relative")),
             Some(OsString::from("/home/example")),
-            MarketplaceContext::TORI_FI,
         )
         .unwrap();
 
         assert_eq!(
-            paths.root(),
+            root,
             std::path::Path::new("/home/example/.local/state/flea")
         );
     }

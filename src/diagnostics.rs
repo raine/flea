@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::{
     domain::envelope::Diagnostics,
     error::{AppError, ExitClass},
-    storage::StatePaths,
+    storage::discover_state_root,
 };
 
 const LOG_FILE: &str = "flea.jsonl";
@@ -191,7 +191,7 @@ fn initialize_with_context(
 }
 
 fn state_dir() -> io::Result<PathBuf> {
-    StatePaths::discover(crate::marketplace::MarketplaceContext::TORI_FI).map(|paths| paths.root())
+    discover_state_root()
 }
 
 fn create_private_dir(path: &Path) -> io::Result<()> {
