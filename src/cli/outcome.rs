@@ -16,6 +16,7 @@ use crate::{
         observation::Observation,
         search::{LocationCollection, SearchCollection},
         vinted_item::VintedItemDetail,
+        vinted_listing::{VintedListingCollection, VintedListingDetail},
     },
     marketplace::{
         CapabilityDescriptor, MarketplaceDescriptor, MarketplaceId, PortalId,
@@ -100,6 +101,8 @@ pub enum CommandData {
     FavoriteMutation(FavoriteMutation),
     Item(PublicItemDetail),
     VintedItem(VintedItemDetail),
+    VintedListingDetail(VintedListingDetail),
+    VintedListingCollection(VintedListingCollection),
     Search(SearchCollection),
     Location(LocationCollection),
     SavedSearchList(SavedSearchListOutput),

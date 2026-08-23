@@ -8,6 +8,8 @@
   replace-all image uploads and inspectable partial replacement state
 - Add authenticated Vinted item inspection with exact raw output and
   exposure-aware seller-disclosed location fields
+- Add direct Vinted account listing inspection and bounded active and draft
+  enumeration without relying on search indexing
 
 ## v0.1.2 (2026-08-23)
 

@@ -4,6 +4,7 @@ pub(crate) mod composer;
 pub(crate) mod draft;
 pub(crate) mod interactive;
 pub(crate) mod item;
+pub(crate) mod listing;
 pub(crate) mod publication;
 pub(crate) mod publication_discovery;
 pub(crate) mod readiness;
@@ -29,7 +30,7 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor::unavailable(CapabilityId::Favorite),
     CapabilityDescriptor::unavailable(CapabilityId::SavedSearch),
     CapabilityDescriptor::source_derived(CapabilityId::Draft, AuthRequirement::Required),
-    CapabilityDescriptor::unavailable(CapabilityId::Listing),
+    CapabilityDescriptor::source_derived(CapabilityId::Listing, AuthRequirement::Required),
 ];
 
 pub(super) const MANIFEST: MarketplaceDescriptor = MarketplaceDescriptor {
@@ -66,6 +67,7 @@ mod tests {
             CapabilityId::Search,
             CapabilityId::Category,
             CapabilityId::Draft,
+            CapabilityId::Listing,
         ] {
             assert_eq!(
                 MANIFEST

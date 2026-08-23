@@ -4,6 +4,7 @@ use clap::{Args, Subcommand};
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
+    domain::envelope::NextAction,
     error::AppError,
     marketplace::{
         PortalId,
@@ -237,7 +238,18 @@ async fn execute_operation(
     let result = VintedPublication::new(session, api, readiness_api)
         .execute(portal, operation, input, images)
         .await?;
-    Ok(CommandOutcome::new(CommandData::VintedPublication(result)))
+    let next_actions = publication_next_actions(portal, result.item_id.as_deref());
+    Ok(CommandOutcome::new(CommandData::VintedPublication(result)).with_next_actions(next_actions))
+}
+
+fn publication_next_actions(portal: PortalId, item_id: Option<&str>) -> Vec<NextAction> {
+    item_id
+        .map(|item_id| {
+            vec![NextAction {
+                command: format!("flea vinted --portal {portal} listing show {item_id}"),
+            }]
+        })
+        .unwrap_or_default()
 }
 
 fn read_input(path: &PathBuf) -> Result<ListingInput, AppError> {
@@ -273,6 +285,15 @@ fn read_input(path: &PathBuf) -> Result<ListingInput, AppError> {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn publication_item_id_points_to_authoritative_inspection() {
+        assert_eq!(
+            publication_next_actions(PortalId::Fi, Some("9001"))[0].command,
+            "flea vinted --portal fi listing show 9001"
+        );
+        assert!(publication_next_actions(PortalId::Fi, None).is_empty());
+    }
 
     #[test]
     fn reads_complete_listing_input() {

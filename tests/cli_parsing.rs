@@ -28,6 +28,8 @@ fn every_command_leaf_parses() {
         vec!["flea", "vinted", "search", "takki"],
         vec!["flea", "vinted", "item", "show", "9757271392"],
         vec!["flea", "vinted", "item", "show", "9757271392", "--raw"],
+        vec!["flea", "vinted", "listing", "show", "9757271392"],
+        vec!["flea", "vinted", "listing", "list"],
         vec![
             "flea",
             "vinted",

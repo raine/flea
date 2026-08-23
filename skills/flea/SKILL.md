@@ -1,12 +1,12 @@
 ---
 name: flea
-description: Operate Tori.fi workflows and authenticated Vinted search, item inspection, drafts, and publication with flea.
+description: Operate Tori.fi and Vinted with flea.
 ---
 
 # Flea
 
-TOON is default output. Add `--format json` for JSON. Use command help for
-syntax and `flea capabilities` for support.
+TOON is default. Add `--format json` for JSON. Run `flea capabilities` for
+support.
 
 ## Rules
 
@@ -50,11 +50,13 @@ flea vinted draft create --input listing.json --image front.heic
 flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
 flea vinted publish --input listing.json --image front.jpg
+flea vinted listing show ITEM_ID
+flea vinted listing list
 ```
 
-Completion reuses verified remote photos. `--image` replaces all photos.
-`draft show` returns photo IDs; `draft validate` classifies blockers. Inspect
-partial state before retrying uncertainty.
+Completion reuses verified remote photos; `--image` replaces all photos.
+`draft show` returns photo IDs and `draft validate` classifies blockers. Follow
+publication `next_actions`; `listing show` inspects visibility without search.
 
 ## Find Tori listings
 

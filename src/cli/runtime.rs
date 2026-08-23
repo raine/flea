@@ -30,6 +30,10 @@ use crate::{
                 HttpVintedItemApi, VintedItemApi, VintedItemRequest, VintedItemResult,
                 VintedItemSession, VintedItems,
             },
+            listing::{
+                HttpVintedListingApi, VintedListingApi, VintedListingRequest, VintedListingResult,
+                VintedListings,
+            },
             publication::{HttpVintedPublicationApi, VintedPublicationApi},
             publication_discovery::{
                 HttpVintedPublicationDiscoveryApi, VintedPublicationDiscoveryApi,
@@ -66,6 +70,7 @@ pub struct ApplicationDependencies {
     vinted_search: Arc<dyn VintedSearchApi>,
     vinted_item: Arc<dyn VintedItemApi>,
     vinted_draft: Arc<dyn VintedDraftApi>,
+    vinted_listing: Arc<dyn VintedListingApi>,
     vinted_publication: Arc<dyn VintedPublicationApi>,
     vinted_publication_discovery: Arc<dyn VintedPublicationDiscoveryApi>,
     vinted_readiness: Arc<dyn VintedReadinessApi>,
@@ -89,6 +94,7 @@ impl ApplicationDependencies {
             vinted_search: Arc::new(HttpVintedSearchApi::new()),
             vinted_item: Arc::new(HttpVintedItemApi::new()),
             vinted_draft: Arc::new(HttpVintedDraftApi::new()),
+            vinted_listing: Arc::new(HttpVintedListingApi::new()),
             vinted_publication: Arc::new(HttpVintedPublicationApi::new()),
             vinted_publication_discovery: Arc::new(HttpVintedPublicationDiscoveryApi::new()),
             vinted_readiness: Arc::new(HttpVintedReadinessApi::new()),
@@ -145,6 +151,11 @@ impl ApplicationDependencies {
 
     pub fn with_vinted_draft_api(mut self, api: Arc<dyn VintedDraftApi>) -> Self {
         self.vinted_draft = api;
+        self
+    }
+
+    pub fn with_vinted_listing_api(mut self, api: Arc<dyn VintedListingApi>) -> Self {
+        self.vinted_listing = api;
         self
     }
 
@@ -348,6 +359,28 @@ async fn execute_vinted(
                     Ok(CommandOutcome::new(CommandData::VintedItem(*detail)))
                 }
                 VintedItemResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
+            }
+        }
+        VintedCommand::Listing(args) => {
+            let request = match args.command {
+                super::vinted_listing::VintedListingCommand::Show { item_id } => {
+                    VintedListingRequest::Show { item_id }
+                }
+                super::vinted_listing::VintedListingCommand::List => VintedListingRequest::List,
+            };
+            match VintedListings::new(
+                dependencies.vinted_item_session.as_ref(),
+                dependencies.vinted_listing.as_ref(),
+            )
+            .execute(portal, request)
+            .await?
+            {
+                VintedListingResult::Detail(detail) => Ok(CommandOutcome::new(
+                    CommandData::VintedListingDetail(*detail),
+                )),
+                VintedListingResult::Collection(collection) => Ok(CommandOutcome::new(
+                    CommandData::VintedListingCollection(*collection),
+                )),
             }
         }
         VintedCommand::Search(args) => match VintedSearch::new(

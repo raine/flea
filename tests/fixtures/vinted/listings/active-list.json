@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "id": 9001,
+      "title": "Bicycle lock",
+      "is_draft": false,
+      "is_hidden": false,
+      "is_closed": false,
+      "status": "active",
+      "price": {"amount": "12.50", "currency_code": "EUR"},
+      "currency": "EUR",
+      "url": "/items/9001-bicycle-lock"
+    }
+  ],
+  "pagination": {"current_page": 1, "total_pages": 1, "total_entries": 1, "per_page": 100}
+}

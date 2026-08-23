@@ -9,3 +9,4 @@ pub mod observation;
 pub mod publication_form;
 pub mod search;
 pub mod vinted_item;
+pub mod vinted_listing;

@@ -158,6 +158,8 @@ flea vinted draft update DRAFT_ID --input listing.json --image front.jpg
 flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
 flea vinted publish --input listing.json --image front.jpg
+flea vinted listing show ITEM_ID
+flea vinted listing list
 ```
 
 Pass one or more `--image` values to `draft publish` only when replacing the
@@ -193,6 +195,12 @@ remain manual actions in Vinted. When a prerequisite appears only in a mutation
 response, Flea returns the draft ID and uploaded photo metadata as continuation
 context together with the safe user action or Vinted URL.
 
+Publication output points to `vinted listing show ITEM_ID`, which reads the
+account wardrobe and editable item directly without waiting for search indexing.
+The result includes listing state, publication fields, photo order, shipping
+summary when disclosed, and canonical URL. Account listing enumeration combines
+active and draft-associated wardrobe items within a fixed output bound.
+
 Run command help for current syntax and constraints:
 
 ```sh
@@ -204,6 +212,7 @@ flea tori draft --help
 flea tori draft create --help
 flea tori listing update --help
 flea vinted item show --help
+flea vinted listing --help
 flea vinted draft --help
 flea vinted publish --help
 ```

@@ -1,0 +1,25 @@
+{
+  "item": {
+    "id": "9001",
+    "title": "Bicycle lock",
+    "description": "Clean cable lock with two keys.",
+    "catalog_id": "3412",
+    "catalog_name": "Bicycle locks",
+    "status_id": "2",
+    "status": "Very good",
+    "brand_dto": {"id": 77, "title": "Kryptonite"},
+    "color1_id": "1",
+    "color1": "Black",
+    "color2_id": "3",
+    "color2": "Silver",
+    "package_size_id": "2",
+    "price": {"amount": "12.50", "currency_code": "EUR"},
+    "currency": "EUR",
+    "shipment_prices": {"domestic": null, "international": null},
+    "photos": [
+      {"id": 41, "url": "https://images.example/41.jpg", "width": 1200, "height": 900},
+      {"id": 42, "url": "https://images.example/42.jpg", "width": 900, "height": 1200}
+    ]
+  },
+  "parcel": {"width": 10.0, "height": 5.0, "length": 15.0, "weight": 0.4}
+}

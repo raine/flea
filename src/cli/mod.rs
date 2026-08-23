@@ -12,6 +12,7 @@ pub(crate) mod search;
 pub(crate) mod skill;
 pub(crate) mod vinted_category;
 pub(crate) mod vinted_item;
+pub(crate) mod vinted_listing;
 pub(crate) mod vinted_publish;
 pub(crate) mod vinted_search;
 
@@ -232,6 +233,11 @@ pub enum VintedCommand {
     )]
     Item(vinted_item::VintedItemArgs),
     #[command(
+        about = "Inspect Vinted account listings (authentication required)",
+        long_about = "Inspect authoritative account listing state by publication item ID, or enumerate active and draft-associated account items without search indexing."
+    )]
+    Listing(vinted_listing::VintedListingArgs),
+    #[command(
         about = "Discover Vinted publication categories and fields",
         long_about = "Discover runtime category, dynamic attribute, brand, color, configuration, and package values for Vinted publication."
     )]
@@ -263,6 +269,7 @@ impl VintedCommand {
             Self::Capabilities | Self::Unsupported(_) => return None,
             Self::Search(_) => CapabilityId::Search,
             Self::Item(_) => CapabilityId::ItemShow,
+            Self::Listing(_) => CapabilityId::Listing,
             Self::Category(_) => CapabilityId::Category,
             Self::Readiness | Self::Draft(_) | Self::Publish(_) => CapabilityId::Draft,
         })
@@ -274,6 +281,7 @@ impl VintedCommand {
             Self::Capabilities => "vinted capabilities".to_owned(),
             Self::Search(_) => "vinted search".to_owned(),
             Self::Item(args) => format!("vinted {}", args.command.telemetry_name()),
+            Self::Listing(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Category(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Readiness => "vinted readiness".to_owned(),
             Self::Draft(args) => format!("vinted {}", args.command.telemetry_name()),
@@ -422,6 +430,8 @@ mod tests {
                 &["vinted", "draft", "validate", "123"],
                 "vinted draft validate",
             ),
+            (&["vinted", "listing", "show", "123"], "vinted listing show"),
+            (&["vinted", "listing", "list"], "vinted listing list"),
             (&["unsupported"], "unknown"),
             (&["vinted", "unsupported"], "unknown"),
         ];
@@ -511,6 +521,7 @@ mod tests {
                 &["vinted", "auth", "logout"],
                 &["vinted", "search", "chair"],
                 &["vinted", "item", "show", "123"],
+                &["vinted", "listing", "list"],
                 &["vinted", "category", "list"],
                 &["vinted", "draft", "delete", "123"],
             ],
