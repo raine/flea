@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest::{
     Method, StatusCode,
-    header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue},
+    header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
@@ -187,20 +187,13 @@ impl std::fmt::Debug for VintedAuthCompletion {
 #[derive(Clone)]
 pub struct VintedAuthentication<T = ReqwestTransport> {
     transport: T,
-    client: reqwest::Client,
     portal_base_url: String,
 }
 
 impl VintedAuthentication<ReqwestTransport> {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .build()
-            .expect("static Vinted search client configuration is valid");
         Self {
             transport: ReqwestTransport::default(),
-            client,
             portal_base_url: PORTAL_BASE_URL.to_owned(),
         }
     }
@@ -362,27 +355,45 @@ impl<T: Transport> VintedAuthentication<T> {
         method: Method,
         url: String,
         credentials: &VintedCredentialRecord,
-    ) -> Result<reqwest::RequestBuilder, AppError> {
-        let mut request = self
-            .native_request(
-                method,
-                url,
-                &credentials.device_uuid,
-                &credentials.anonymous_id,
-            )?
-            .bearer_auth(&credentials.access_token)
-            .header(
-                "X-V-Udt",
-                credentials.user_device_token.as_deref().unwrap_or(""),
-            );
+        max_response_bytes: usize,
+        invalid_header: fn(TransportError) -> AppError,
+    ) -> Result<TransportRequest, AppError> {
+        let mut headers = native_headers(
+            &credentials.device_uuid,
+            &credentials.anonymous_id,
+            invalid_header,
+        )?;
+        insert_header(
+            &mut headers,
+            "authorization",
+            &format!("Bearer {}", credentials.access_token),
+        )
+        .map_err(invalid_header)?;
+        insert_header(
+            &mut headers,
+            "x-v-udt",
+            credentials.user_device_token.as_deref().unwrap_or(""),
+        )
+        .map_err(invalid_header)?;
         let jwt = jwt_request_context(&credentials.access_token);
         if let Some(user_id) = jwt.user_id {
-            request = request.header("X-V-Uid", user_id.expose());
+            insert_header(&mut headers, "x-v-uid", user_id.expose()).map_err(invalid_header)?;
         }
         if let Some(session_id) = jwt.session_id {
-            request = request.header("X-V-Sid", session_id.expose());
+            insert_header(&mut headers, "x-v-sid", session_id.expose()).map_err(invalid_header)?;
         }
-        Ok(request)
+        Ok(TransportRequest {
+            method,
+            url,
+            headers,
+            body: RequestBody::Empty,
+            deadline: REQUEST_TIMEOUT,
+            max_response_bytes,
+        })
+    }
+
+    pub(crate) fn executor(&self) -> &T {
+        &self.transport
     }
 
     pub async fn validate_credentials(
@@ -449,33 +460,6 @@ impl<T: Transport> VintedAuthentication<T> {
             id,
             login: decoded.user.login,
         })
-    }
-
-    fn native_request(
-        &self,
-        method: Method,
-        url: String,
-        device_uuid: &str,
-        anonymous_id: &str,
-    ) -> Result<reqwest::RequestBuilder, AppError> {
-        Ok(self
-            .client
-            .request(method, url)
-            .timeout(REQUEST_TIMEOUT)
-            .header(ACCEPT, "application/json")
-            .header("User-Agent", USER_AGENT)
-            .header("X-Platform", "android")
-            .header("X-Portal", VINTED_FI_BINDING.portal_header)
-            .header("X-App-Version", APP_VERSION)
-            .header("X-OS-Version", "15")
-            .header("X-Device-Model", "Google Pixel 6")
-            .header("X-Screen-Width", "1080")
-            .header("X-Screen-Height", "2400")
-            .header("X-Local-Time", unix_time_millis()?.to_string())
-            .header("X-Anon-Id", anonymous_id)
-            .header("X-Device-UUID", device_uuid)
-            .header("Locale", ISO_LOCALE)
-            .header("Accept-Language", LOCALE))
     }
 
     #[cfg(test)]

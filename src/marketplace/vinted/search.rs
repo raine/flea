@@ -17,6 +17,7 @@ use crate::{
             binding::VINTED_FI_BINDING,
         },
     },
+    transport::{Transport, TransportError, TransportErrorKind, TransportResponse},
 };
 
 pub const SEARCH_LIMIT_DEFAULT: usize = 20;
@@ -139,17 +140,23 @@ impl HttpVintedSearchApi {
         request: &CatalogueSearchRequest,
     ) -> Result<Value, AppError> {
         let url = request_url(&self.api_base_url, request)?;
+        let transport_request = self.auth.authenticated_request(
+            Method::GET,
+            url.to_string(),
+            credentials,
+            MAX_RESPONSE_BYTES,
+            transport_error,
+        )?;
         let response = self
             .auth
-            .authenticated_request(Method::GET, url.to_string(), credentials)?
-            .send()
+            .executor()
+            .execute(transport_request)
             .await
-            .map_err(transport_error)?;
-        let status = response.status();
-        if !status.is_success() {
-            return Err(status_error(status));
+            .map_err(execution_error)?;
+        if !response.status.is_success() {
+            return Err(status_error(response.status));
         }
-        bounded_json(response).await
+        bounded_json(response)
     }
 
     #[cfg(test)]
@@ -238,25 +245,9 @@ fn request_url(base_url: &str, request: &CatalogueSearchRequest) -> Result<Url, 
     Ok(url)
 }
 
-async fn bounded_json(mut response: reqwest::Response) -> Result<Value, AppError> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
-    {
-        return Err(unexpected_response("response exceeded the size limit"));
-    }
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| transport_error(error))?
-    {
-        if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
-            return Err(unexpected_response("response exceeded the size limit"));
-        }
-        body.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&body).map_err(|_| unexpected_response("response was not valid JSON"))
+fn bounded_json(response: TransportResponse) -> Result<Value, AppError> {
+    serde_json::from_slice(&response.body)
+        .map_err(|_| unexpected_response("response was not valid JSON"))
 }
 
 fn normalize_search(
@@ -421,7 +412,7 @@ fn identifier(value: Option<&Value>) -> Option<String> {
     }
 }
 
-fn transport_error(error: reqwest::Error) -> AppError {
+fn transport_error(error: TransportError) -> AppError {
     let mut app_error = AppError::upstream(
         "vinted_search.transport_failed",
         "Vinted search could not be reached",
@@ -430,6 +421,14 @@ fn transport_error(error: reqwest::Error) -> AppError {
     app_error.upstream_transient = true;
     app_error.safe_to_retry = true;
     app_error
+}
+
+fn execution_error(error: TransportError) -> AppError {
+    if error.kind == TransportErrorKind::ResponseTooLarge {
+        unexpected_response("response exceeded the size limit")
+    } else {
+        transport_error(error)
+    }
 }
 
 fn status_error(status: StatusCode) -> AppError {
