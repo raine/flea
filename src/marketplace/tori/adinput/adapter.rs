@@ -3,7 +3,7 @@ use super::delivery::{
     shipping_products, shipping_unavailable,
 };
 use super::http::{
-    ApiError, HttpRequest, HttpResponse, HttpTransport, Method, RequestBody, RetryPolicy,
+    AdInputProtocol, ApiError, HttpRequest, HttpResponse, Method, RequestBody, RetryPolicy,
 };
 use super::normalization::{
     normalize_authoritative_draft_state, normalize_draft_state, normalize_publication_categories,
@@ -192,7 +192,7 @@ fn unrecognized_read(mut error: ApiError, source: ObservationSource, status: u16
     error
 }
 
-impl<T: HttpTransport> HttpAdInputApi<T> {
+impl<T: AdInputProtocol> HttpAdInputApi<T> {
     async fn json(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
         debug_assert!(!request.method.is_mutation() || request.retry == RetryPolicy::Never);
         let retry_context = request.retry_context();

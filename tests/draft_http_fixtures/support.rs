@@ -10,11 +10,11 @@ pub(crate) use flea::{
         observation::ObservationState,
     },
     marketplace::tori::adinput::{
-        AttachmentRecoveryStatus, DraftDeliveryApi, DraftImages, DraftListingObservation,
-        DraftMutation, DraftPublication, DraftRead, DraftWorkflow, HttpAdInputApi, HttpRequest,
-        HttpResponse, HttpTransport, ImageRecoveryOperation, ImageState, Method, ObservationStatus,
-        ProcessingRecoveryStatus, RecoveryStatus, RequestBody, RetryPolicy, UploadRecoveryStatus,
-        WorkflowConfig,
+        AdInputProtocol, AttachmentRecoveryStatus, DraftDeliveryApi, DraftImages,
+        DraftListingObservation, DraftMutation, DraftPublication, DraftRead, DraftWorkflow,
+        HttpAdInputApi, HttpRequest, HttpResponse, ImageRecoveryOperation, ImageState, Method,
+        ObservationStatus, ProcessingRecoveryStatus, RecoveryStatus, RequestBody, RetryPolicy,
+        UploadRecoveryStatus, WorkflowConfig,
     },
 };
 pub(crate) use serde_json::{Map, Value, json};
@@ -49,7 +49,7 @@ impl FixtureTransport {
     }
 }
 
-impl HttpTransport for FixtureTransport {
+impl AdInputProtocol for FixtureTransport {
     async fn execute(
         &self,
         request: HttpRequest,
@@ -144,7 +144,7 @@ pub(crate) struct HangingPollTransport {
     pub(crate) responses: Mutex<VecDeque<HttpResponse>>,
 }
 
-impl HttpTransport for HangingPollTransport {
+impl AdInputProtocol for HangingPollTransport {
     async fn execute(
         &self,
         request: HttpRequest,

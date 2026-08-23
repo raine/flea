@@ -8,7 +8,7 @@ use super::scan::{
 use crate::{
     domain::observation::{Observation, ObservationOperation, ObservationSource},
     marketplace::tori::{
-        adinput::{ApiError, HttpRequest, HttpResponse, HttpTransport, RetryPolicy},
+        adinput::{AdInputProtocol, ApiError, HttpRequest, HttpResponse, RetryPolicy},
         client::compatibility,
     },
 };
@@ -19,7 +19,7 @@ pub(crate) struct ListingObservations<'a, T> {
     transport: &'a T,
 }
 
-impl<'a, T: HttpTransport> ListingObservations<'a, T> {
+impl<'a, T: AdInputProtocol> ListingObservations<'a, T> {
     pub(crate) const fn new(transport: &'a T) -> Self {
         Self { transport }
     }
@@ -94,7 +94,7 @@ struct ObservationPages<'a, T> {
     model: CollectionModel,
 }
 
-impl<T: HttpTransport> CollectionPageSource for ObservationPages<'_, T> {
+impl<T: AdInputProtocol> CollectionPageSource for ObservationPages<'_, T> {
     type Item = Value;
     type Metadata = u16;
     type Error = ApiError;
@@ -176,7 +176,7 @@ impl CollectionModel {
     }
 }
 
-async fn execute<T: HttpTransport>(
+async fn execute<T: AdInputProtocol>(
     transport: &T,
     request: HttpRequest,
 ) -> Result<HttpResponse, ApiError> {

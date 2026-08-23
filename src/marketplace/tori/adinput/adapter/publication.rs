@@ -1,6 +1,6 @@
 use super::*;
 
-impl<T: HttpTransport> DraftPublication for HttpAdInputApi<T> {
+impl<T: AdInputProtocol> DraftPublication for HttpAdInputApi<T> {
     async fn product_context(
         &self,
         draft_id: &str,

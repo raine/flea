@@ -11,7 +11,7 @@ use crate::{
     marketplace::{
         MarketplaceContext, MarketplaceId, PortalId, marketplace, marketplaces,
         tori::{
-            adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
+            adinput::{HttpAdInputApi, WorkflowConfig},
             auth::SchibstedToriAuthenticationApi,
             client::{ClientConfig, DeviceIdentity, HttpClient, ToriClient},
             favorites::HttpFavoritesApi,
@@ -167,7 +167,7 @@ async fn execute_tori(
             }
             command => {
                 let client = dependencies.authenticated_tori_client().await?;
-                let api = HttpAdInputApi::new(ClientTransport::new(client));
+                let api = HttpAdInputApi::new(client);
                 draft::execute(command, api, WorkflowConfig::default()).await
             }
         },

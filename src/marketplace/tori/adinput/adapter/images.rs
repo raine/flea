@@ -1,6 +1,6 @@
 use super::*;
 
-impl<T: HttpTransport> DraftImages for HttpAdInputApi<T> {
+impl<T: AdInputProtocol> DraftImages for HttpAdInputApi<T> {
     async fn upload_image(
         &self,
         draft_id: &str,

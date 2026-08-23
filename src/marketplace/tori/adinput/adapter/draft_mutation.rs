@@ -1,6 +1,6 @@
 use super::*;
 
-impl<T: HttpTransport> DraftMutation for HttpAdInputApi<T> {
+impl<T: AdInputProtocol> DraftMutation for HttpAdInputApi<T> {
     async fn create_draft(&self) -> Result<DraftState, ApiError> {
         let request = HttpRequest::mutation(
             ObservationSource::DraftCreation,

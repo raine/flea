@@ -1,6 +1,6 @@
 use super::*;
 
-impl<T: HttpTransport> DraftRead for HttpAdInputApi<T> {
+impl<T: AdInputProtocol> DraftRead for HttpAdInputApi<T> {
     async fn get_draft(&self, draft_id: &str) -> Result<DraftState, ApiError> {
         validate_resource_id(draft_id, "draft")?;
         match self

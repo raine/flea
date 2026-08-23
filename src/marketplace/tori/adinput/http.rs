@@ -306,21 +306,11 @@ impl fmt::Display for ApiError {
 impl std::error::Error for ApiError {}
 
 #[allow(async_fn_in_trait)]
-pub trait HttpTransport: Send + Sync {
+pub trait AdInputProtocol: Send + Sync {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ApiError>;
 }
 
-pub struct ClientTransport<C> {
-    client: C,
-}
-
-impl<C> ClientTransport<C> {
-    pub const fn new(client: C) -> Self {
-        Self { client }
-    }
-}
-
-impl<C: ToriClient> HttpTransport for ClientTransport<C> {
+impl<C: ToriClient> AdInputProtocol for C {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
         let service = request
             .service
@@ -381,7 +371,7 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
                 ApiError::new("upstream.invalid_etag", "Tori returned an invalid ETag")
             })?);
         }
-        let response = self.client.execute(spec).await.map_err(|error| {
+        let response = ToriClient::execute(self, spec).await.map_err(|error| {
             let failure = HttpFailure::from(error);
             let classification = failure.retry_classification(retry_context);
             let (code, message) = if classification.upstream_transient
@@ -562,25 +552,29 @@ mod tests {
 
     #[tokio::test]
     async fn transport_errors_use_request_metadata_instead_of_request_paths() {
-        let transport = ClientTransport::new(FailingClient {
+        let transport = FailingClient {
             error: TransportErrorKind::Connection,
-        });
-        let read = transport
-            .execute(HttpRequest::read(
+        };
+        let read = AdInputProtocol::execute(
+            &transport,
+            HttpRequest::read(
                 ObservationSource::CategoryTaxonomy,
                 "/path-with-no-source-semantics",
-            ))
-            .await
-            .unwrap_err();
-        let mutation = transport
-            .execute(HttpRequest::mutation(
+            ),
+        )
+        .await
+        .unwrap_err();
+        let mutation = AdInputProtocol::execute(
+            &transport,
+            HttpRequest::mutation(
                 ObservationSource::PublicationConfirmation,
                 Method::Post,
                 "/another-unrelated-path",
                 RequestBody::Empty,
-            ))
-            .await
-            .unwrap_err();
+            ),
+        )
+        .await
+        .unwrap_err();
 
         assert_eq!(
             read.observation.unwrap().source,

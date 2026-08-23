@@ -1,6 +1,6 @@
 use super::*;
 
-impl<T: HttpTransport> DraftListingObservation for HttpAdInputApi<T> {
+impl<T: AdInputProtocol> DraftListingObservation for HttpAdInputApi<T> {
     async fn source_listing(&self, listing_id: &str) -> Result<ListingDraftSeed, ApiError> {
         validate_resource_id(listing_id, "listing")?;
         let Some(_) = ListingObservations::new(&self.transport)

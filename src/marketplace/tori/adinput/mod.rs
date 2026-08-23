@@ -20,8 +20,7 @@ pub use execution::{
     DraftDeleteOutput, DraftExecution, DraftRequest, DraftResult, DraftResultData,
 };
 pub use http::{
-    ApiError, ClientTransport, HttpRequest, HttpResponse, HttpTransport, Method, RequestBody,
-    RetryPolicy,
+    AdInputProtocol, ApiError, HttpRequest, HttpResponse, Method, RequestBody, RetryPolicy,
 };
 pub use images::{PreparedImage, normalize_category, prepare_image};
 pub use input::{

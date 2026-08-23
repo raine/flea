@@ -1,6 +1,6 @@
 use super::*;
 
-impl<T: HttpTransport> DraftDeliveryApi for HttpAdInputApi<T> {
+impl<T: AdInputProtocol> DraftDeliveryApi for HttpAdInputApi<T> {
     async fn delivery_composer(&self, draft_id: &str) -> Result<DeliveryComposer, ApiError> {
         self.delivery_composer_for_inspection(draft_id, false).await
     }
