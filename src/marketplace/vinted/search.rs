@@ -10,7 +10,7 @@ use crate::{
         search::{SearchCollection, SearchListing, SearchPagination, SearchPrice},
     },
     error::{AppError, ExitClass},
-    marketplace::{VINTED_FI_BINDING, vinted::auth::VintedAuthentication},
+    marketplace::vinted::{auth::VintedAuthentication, binding::VINTED_FI_BINDING},
     storage::credentials::VintedCredentialRecord,
 };
 

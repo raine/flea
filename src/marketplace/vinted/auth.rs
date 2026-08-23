@@ -11,7 +11,7 @@ use crate::{
     api::oauth::{SecretString, pkce_challenge, random_secret, random_uuid_secret, states_equal},
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
-    marketplace::{PortalId, VINTED_FI_BINDING},
+    marketplace::{PortalId, vinted::binding::VINTED_FI_BINDING},
     storage::credentials::VintedCredentialRecord,
 };
 
