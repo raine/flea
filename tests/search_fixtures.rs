@@ -544,7 +544,9 @@ async fn upstream_read_failures_are_transient_safe_bounded_and_redacted() {
         ) -> Pin<Box<dyn Future<Output = Result<Value, SearchApiError>> + Send + 'a>> {
             Box::pin(async {
                 Err(SearchApiError::Transport(
-                    "private query cookie -> secret stack trace".to_owned(),
+                    "private query cookie -> secret stack trace"
+                        .to_owned()
+                        .into(),
                 ))
             })
         }

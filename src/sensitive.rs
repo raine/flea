@@ -11,15 +11,15 @@ use serde::{Deserialize, Serialize};
 pub struct Sensitive<T>(T);
 
 impl<T> Sensitive<T> {
-    pub(crate) const fn new(value: T) -> Self {
+    pub const fn new(value: T) -> Self {
         Self(value)
     }
 
-    pub(crate) const fn expose(&self) -> &T {
+    pub const fn expose(&self) -> &T {
         &self.0
     }
 
-    pub(crate) fn into_inner(self) -> T {
+    pub fn into_inner(self) -> T {
         self.0
     }
 }

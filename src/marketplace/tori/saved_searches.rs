@@ -12,7 +12,7 @@ use crate::{
     },
     error::{AppError, ExitClass},
     marketplace::tori::client::{
-        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+        HttpFailure, RequestSpec, ToriClient, compatibility, map_http_error,
     },
     retry::RetryClassification,
 };
@@ -58,7 +58,10 @@ impl HttpSavedSearchesApi {
         &self,
         request: RequestSpec,
     ) -> Result<crate::marketplace::tori::client::HttpResponse, SavedSearchApiError> {
-        self.client.execute(request).await.map_err(http_error)
+        self.client
+            .execute(request)
+            .await
+            .map_err(map_http_error::<SavedSearchApiError>)
     }
 
     fn query(pairs: &[(&str, String)]) -> String {
@@ -179,18 +182,11 @@ fn ensure_success(status: StatusCode) -> Result<(), SavedSearchApiError> {
     }
 }
 
-fn http_error(error: HttpError) -> SavedSearchApiError {
-    match error {
-        HttpError::Transport(error)
-            if matches!(
-                error.kind,
-                TransportErrorKind::Timeout | TransportErrorKind::Connection
-            ) =>
-        {
-            SavedSearchApiError::Transport
-        }
-        HttpError::InvalidRequest | HttpError::ResponseTooLarge | HttpError::Transport(_) => {
-            SavedSearchApiError::Unexpected
+impl From<HttpFailure> for SavedSearchApiError {
+    fn from(failure: HttpFailure) -> Self {
+        match failure {
+            HttpFailure::Transport(_) => Self::Transport,
+            HttpFailure::Local(_) => Self::Unexpected,
         }
     }
 }

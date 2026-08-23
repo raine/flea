@@ -2,11 +2,10 @@ use crate::diagnostics;
 use crate::domain::observation::Observation;
 use crate::domain::observation::ObservationOperation;
 use crate::domain::observation::ObservationSource;
-use crate::marketplace::tori::client::HttpError;
+use crate::marketplace::tori::client::HttpFailure;
 use crate::marketplace::tori::client::MultipartPart;
 use crate::marketplace::tori::client::RequestSpec;
 use crate::marketplace::tori::client::ToriClient;
-use crate::marketplace::tori::client::TransportErrorKind;
 use crate::marketplace::tori::client::compatibility;
 use crate::retry::FailureKind;
 use crate::retry::OperationMethod;
@@ -383,20 +382,8 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
             })?);
         }
         let response = self.client.execute(spec).await.map_err(|error| {
-            let failure = match &error {
-                HttpError::Transport(transport)
-                    if matches!(
-                        transport.kind,
-                        TransportErrorKind::Timeout | TransportErrorKind::Connection
-                    ) =>
-                {
-                    FailureKind::Transport
-                }
-                HttpError::InvalidRequest
-                | HttpError::ResponseTooLarge
-                | HttpError::Transport(_) => FailureKind::Local,
-            };
-            let classification = classify(failure, retry_context);
+            let failure = HttpFailure::from(error);
+            let classification = failure.retry_classification(retry_context);
             let (code, message) = if classification.upstream_transient
                 && !classification.safe_to_retry
                 && !retry_context.method.is_read()
@@ -407,7 +394,7 @@ impl<C: ToriClient> HttpTransport for ClientTransport<C> {
                         .to_owned(),
                 )
             } else {
-                ("upstream.request_failed", error.to_string())
+                ("upstream.request_failed", failure.to_string())
             };
             let operation = if retry_context.method.is_read() {
                 ObservationOperation::Read
@@ -490,7 +477,9 @@ fn safe_content_type(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::marketplace::tori::client::{RequestSpec, TransportError};
+    use crate::marketplace::tori::client::{
+        HttpError, RequestSpec, TransportError, TransportErrorKind,
+    };
     use std::future::Future;
     use std::pin::Pin;
 

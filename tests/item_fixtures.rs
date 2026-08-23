@@ -131,11 +131,11 @@ async fn missing_expired_and_upstream_invalid_items_have_distinct_actionable_err
 async fn read_failures_separate_transience_from_safe_replay_and_redact_details() {
     for (api_error, upstream_transient) in [
         (
-            PublicItemApiError::Unexpected("secret response body".to_owned()),
+            PublicItemApiError::Unexpected("secret response body".to_owned().into()),
             false,
         ),
         (
-            PublicItemApiError::Transport("secret request target".to_owned()),
+            PublicItemApiError::Transport("secret request target".to_owned().into()),
             true,
         ),
         (PublicItemApiError::Upstream(503), true),

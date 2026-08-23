@@ -24,7 +24,7 @@ use crate::{
     },
     error::{AppError, ExitClass},
     marketplace::tori::client::{
-        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+        HttpFailure, RequestSpec, ToriClient, compatibility, map_http_error,
     },
     retry::{FailureKind, OperationMethod, RetryContext, classify},
 };
@@ -97,7 +97,7 @@ impl HttpListingsApi {
             .client
             .execute(request)
             .await
-            .map_err(listings_http_error)?;
+            .map_err(map_http_error::<ListingsApiError>)?;
         decode_response(response.status, &response.body)
     }
 
@@ -112,7 +112,7 @@ impl HttpListingsApi {
             .client
             .execute(request)
             .await
-            .map_err(listings_http_error)?;
+            .map_err(map_http_error::<ListingsApiError>)?;
         decode_response(response.status, &response.body)
     }
 
@@ -123,18 +123,11 @@ impl HttpListingsApi {
     }
 }
 
-fn listings_http_error(error: HttpError) -> ListingsApiError {
-    match error {
-        HttpError::Transport(transport)
-            if matches!(
-                transport.kind,
-                TransportErrorKind::Timeout | TransportErrorKind::Connection
-            ) =>
-        {
-            ListingsApiError::Transport
-        }
-        HttpError::InvalidRequest | HttpError::ResponseTooLarge | HttpError::Transport(_) => {
-            ListingsApiError::UnexpectedResponse("HTTP adapter failed".to_owned())
+impl From<HttpFailure> for ListingsApiError {
+    fn from(failure: HttpFailure) -> Self {
+        match failure {
+            HttpFailure::Transport(_) => Self::Transport,
+            HttpFailure::Local(_) => Self::UnexpectedResponse("HTTP adapter failed".to_owned()),
         }
     }
 }

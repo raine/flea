@@ -10,7 +10,7 @@ use crate::{
     },
     error::{AppError, ExitClass},
     marketplace::tori::client::{
-        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+        HttpFailure, RequestSpec, ToriClient, compatibility, map_http_error,
     },
 };
 
@@ -52,7 +52,7 @@ impl HttpFavoritesApi {
         self.client
             .execute(request)
             .await
-            .map_err(favorites_http_error)
+            .map_err(map_http_error::<FavoritesApiError>)
     }
 
     async fn mutate(&self, method: Method, path: String) -> Result<(), FavoritesApiError> {
@@ -146,18 +146,11 @@ fn ensure_success(status: StatusCode) -> Result<(), FavoritesApiError> {
     }
 }
 
-fn favorites_http_error(error: HttpError) -> FavoritesApiError {
-    match error {
-        HttpError::Transport(transport)
-            if matches!(
-                transport.kind,
-                TransportErrorKind::Timeout | TransportErrorKind::Connection
-            ) =>
-        {
-            FavoritesApiError::Transport
-        }
-        HttpError::InvalidRequest | HttpError::ResponseTooLarge | HttpError::Transport(_) => {
-            FavoritesApiError::Unexpected
+impl From<HttpFailure> for FavoritesApiError {
+    fn from(failure: HttpFailure) -> Self {
+        match failure {
+            HttpFailure::Transport(_) => Self::Transport,
+            HttpFailure::Local(_) => Self::Unexpected,
         }
     }
 }

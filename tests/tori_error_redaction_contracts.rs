@@ -45,11 +45,11 @@ fn tori_api_error_debug_output_redacts_private_context() {
     let errors = [
         format!(
             "{:?}",
-            SearchApiError::Transport("secret search target".to_owned())
+            SearchApiError::Transport("secret search target".to_owned().into())
         ),
         format!(
             "{:?}",
-            PublicItemApiError::Unexpected("secret item response".to_owned())
+            PublicItemApiError::Unexpected("secret item response".to_owned().into())
         ),
         format!(
             "{:?}",

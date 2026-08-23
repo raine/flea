@@ -332,7 +332,7 @@ pub enum TransportErrorKind {
     Other,
 }
 
-#[derive(Clone, thiserror::Error)]
+#[derive(Clone, thiserror::Error, Eq, PartialEq)]
 #[error("HTTP transport {kind}")]
 pub struct TransportError {
     pub kind: TransportErrorKind,
@@ -471,6 +471,62 @@ pub enum HttpError {
     ResponseTooLarge,
     #[error(transparent)]
     Transport(#[from] TransportError),
+}
+
+#[derive(Clone, Copy, Debug, thiserror::Error, Eq, PartialEq)]
+pub(crate) enum HttpAdapterFailure {
+    #[error("invalid HTTP request")]
+    InvalidRequest,
+    #[error("HTTP response exceeded the configured size bound")]
+    ResponseTooLarge,
+    #[error("HTTP transport failed")]
+    OtherTransport,
+}
+
+#[derive(Clone, Debug, thiserror::Error, Eq, PartialEq)]
+pub(crate) enum HttpFailure {
+    #[error(transparent)]
+    Transport(TransportError),
+    #[error(transparent)]
+    Local(HttpAdapterFailure),
+}
+
+impl HttpFailure {
+    pub(crate) const fn failure_kind(&self) -> FailureKind {
+        match self {
+            Self::Transport(_) => FailureKind::Transport,
+            Self::Local(_) => FailureKind::Local,
+        }
+    }
+
+    pub(crate) fn retry_classification(
+        &self,
+        context: RetryContext,
+    ) -> crate::retry::RetryClassification {
+        classify(self.failure_kind(), context)
+    }
+}
+
+impl From<HttpError> for HttpFailure {
+    fn from(error: HttpError) -> Self {
+        match error {
+            HttpError::Transport(transport)
+                if matches!(
+                    transport.kind,
+                    TransportErrorKind::Timeout | TransportErrorKind::Connection
+                ) =>
+            {
+                Self::Transport(transport)
+            }
+            HttpError::InvalidRequest => Self::Local(HttpAdapterFailure::InvalidRequest),
+            HttpError::ResponseTooLarge => Self::Local(HttpAdapterFailure::ResponseTooLarge),
+            HttpError::Transport(_) => Self::Local(HttpAdapterFailure::OtherTransport),
+        }
+    }
+}
+
+pub(crate) fn map_http_error<T: From<HttpFailure>>(error: HttpError) -> T {
+    HttpFailure::from(error).into()
 }
 
 #[derive(Clone)]
@@ -797,11 +853,7 @@ fn retry_transport_classification(
     kind: TransportErrorKind,
     context: RetryContext,
 ) -> crate::retry::RetryClassification {
-    let failure = match kind {
-        TransportErrorKind::Timeout | TransportErrorKind::Connection => FailureKind::Transport,
-        TransportErrorKind::Other => FailureKind::Local,
-    };
-    classify(failure, context)
+    HttpFailure::from(HttpError::Transport(TransportError { kind })).retry_classification(context)
 }
 
 fn retry_delay(config: &ClientConfig, attempt: usize) -> Duration {
@@ -820,4 +872,44 @@ fn retry_delay(config: &ClientConfig, attempt: usize) -> Duration {
         .subsec_nanos() as u64;
     let half = ceiling / 2;
     half.saturating_add(Duration::from_nanos(nanos % (half.as_nanos() as u64 + 1)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HttpAdapterFailure, HttpError, HttpFailure, TransportError, TransportErrorKind};
+    use crate::retry::{OperationMethod, RetryContext};
+
+    #[test]
+    fn http_failures_carry_transport_and_local_policy_in_types() {
+        for kind in [TransportErrorKind::Timeout, TransportErrorKind::Connection] {
+            let failure = HttpFailure::from(HttpError::Transport(TransportError { kind }));
+            assert!(matches!(failure, HttpFailure::Transport(_)));
+            let retry = failure.retry_classification(RetryContext::read(OperationMethod::Get));
+            assert!(retry.upstream_transient);
+            assert!(retry.safe_to_retry);
+        }
+
+        for (error, expected) in [
+            (
+                HttpError::InvalidRequest,
+                HttpAdapterFailure::InvalidRequest,
+            ),
+            (
+                HttpError::ResponseTooLarge,
+                HttpAdapterFailure::ResponseTooLarge,
+            ),
+            (
+                HttpError::Transport(TransportError {
+                    kind: TransportErrorKind::Other,
+                }),
+                HttpAdapterFailure::OtherTransport,
+            ),
+        ] {
+            let failure = HttpFailure::from(error);
+            assert_eq!(failure, HttpFailure::Local(expected));
+            let retry = failure.retry_classification(RetryContext::read(OperationMethod::Get));
+            assert!(!retry.upstream_transient);
+            assert!(retry.safe_to_retry);
+        }
+    }
 }

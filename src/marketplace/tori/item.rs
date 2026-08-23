@@ -1,4 +1,4 @@
-use std::{fmt, future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
@@ -13,8 +13,9 @@ use crate::{
     },
     error::{AppError, ExitClass},
     marketplace::tori::client::{
-        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+        HttpFailure, RequestSpec, ToriClient, compatibility, map_http_error,
     },
+    sensitive::Sensitive,
 };
 
 pub trait PublicItemApi: Send + Sync {
@@ -49,7 +50,7 @@ impl PublicItemApi for HttpPublicItemApi {
                 .client
                 .execute(request)
                 .await
-                .map_err(item_http_error)?;
+                .map_err(map_http_error::<PublicItemApiError>)?;
 
             if !response.status.is_success() {
                 return Err(match response.status {
@@ -61,29 +62,23 @@ impl PublicItemApi for HttpPublicItemApi {
                     status => PublicItemApiError::Upstream(status.as_u16()),
                 });
             }
-            serde_json::from_slice(&response.body)
-                .map_err(|_| PublicItemApiError::Unexpected("invalid JSON response".to_owned()))
+            serde_json::from_slice(&response.body).map_err(|_| {
+                PublicItemApiError::Unexpected("invalid JSON response".to_owned().into())
+            })
         })
     }
 }
 
-fn item_http_error(error: HttpError) -> PublicItemApiError {
-    match error {
-        HttpError::Transport(transport)
-            if matches!(
-                transport.kind,
-                TransportErrorKind::Timeout | TransportErrorKind::Connection
-            ) =>
-        {
-            PublicItemApiError::Transport(transport.to_string())
-        }
-        HttpError::InvalidRequest | HttpError::ResponseTooLarge | HttpError::Transport(_) => {
-            PublicItemApiError::Unexpected("HTTP adapter failed".to_owned())
+impl From<HttpFailure> for PublicItemApiError {
+    fn from(failure: HttpFailure) -> Self {
+        match failure {
+            HttpFailure::Transport(transport) => Self::Transport(transport.to_string().into()),
+            HttpFailure::Local(_) => Self::Unexpected("HTTP adapter failed".to_owned().into()),
         }
     }
 }
 
-#[derive(Clone, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PublicItemApiError {
     #[error("listing ID was rejected")]
     Invalid,
@@ -92,24 +87,11 @@ pub enum PublicItemApiError {
     #[error("listing has expired")]
     Expired,
     #[error("item transport failed")]
-    Transport(String),
+    Transport(Sensitive<String>),
     #[error("Tori item service returned HTTP {0}")]
     Upstream(u16),
-    #[error("unexpected item response: {0}")]
-    Unexpected(String),
-}
-
-impl fmt::Debug for PublicItemApiError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Invalid => formatter.write_str("Invalid"),
-            Self::NotFound => formatter.write_str("NotFound"),
-            Self::Expired => formatter.write_str("Expired"),
-            Self::Upstream(status) => formatter.debug_tuple("Upstream").field(status).finish(),
-            Self::Transport(_) => formatter.write_str("Transport([REDACTED])"),
-            Self::Unexpected(_) => formatter.write_str("Unexpected([REDACTED])"),
-        }
-    }
+    #[error("unexpected item response: {}", .0.expose())]
+    Unexpected(Sensitive<String>),
 }
 
 pub struct PublicItems<'a> {

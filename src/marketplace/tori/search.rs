@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, future::Future, pin::Pin, sync::Arc};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value};
@@ -13,9 +13,10 @@ use crate::{
     },
     error::{AppError, ExitClass},
     marketplace::tori::client::{
-        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+        HttpFailure, RequestSpec, ToriClient, compatibility, map_http_error,
     },
     retry::{FailureKind, OperationMethod, RetryContext, classify},
+    sensitive::Sensitive,
 };
 
 pub const SEARCH_PAGE_MAX: usize = 50;
@@ -55,7 +56,7 @@ impl HttpPublicSearchApi {
             .client
             .execute(request)
             .await
-            .map_err(search_http_error)?;
+            .map_err(map_http_error::<SearchApiError>)?;
         if !response.status.is_success() {
             return Err(match response.status {
                 StatusCode::BAD_REQUEST => SearchApiError::Rejected,
@@ -63,7 +64,7 @@ impl HttpPublicSearchApi {
             });
         }
         serde_json::from_slice(&response.body)
-            .map_err(|_| SearchApiError::Unexpected("invalid JSON response".to_owned()))
+            .map_err(|_| SearchApiError::Unexpected("invalid JSON response".to_owned().into()))
     }
 }
 
@@ -92,18 +93,11 @@ impl PublicSearchApi for HttpPublicSearchApi {
     }
 }
 
-fn search_http_error(error: HttpError) -> SearchApiError {
-    match error {
-        HttpError::Transport(transport)
-            if matches!(
-                transport.kind,
-                TransportErrorKind::Timeout | TransportErrorKind::Connection
-            ) =>
-        {
-            SearchApiError::Transport(transport.to_string())
-        }
-        HttpError::InvalidRequest | HttpError::ResponseTooLarge | HttpError::Transport(_) => {
-            SearchApiError::Unexpected("HTTP adapter failed".to_owned())
+impl From<HttpFailure> for SearchApiError {
+    fn from(failure: HttpFailure) -> Self {
+        match failure {
+            HttpFailure::Transport(transport) => Self::Transport(transport.to_string().into()),
+            HttpFailure::Local(_) => Self::Unexpected("HTTP adapter failed".to_owned().into()),
         }
     }
 }
@@ -140,27 +134,16 @@ impl UpstreamSearchRequest {
     }
 }
 
-#[derive(Clone, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SearchApiError {
     #[error("search request was rejected")]
     Rejected,
     #[error("search transport failed")]
-    Transport(String),
+    Transport(Sensitive<String>),
     #[error("Tori search returned HTTP {0}")]
     Upstream(u16),
-    #[error("unexpected search response: {0}")]
-    Unexpected(String),
-}
-
-impl fmt::Debug for SearchApiError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Rejected => formatter.write_str("Rejected"),
-            Self::Transport(_) => formatter.write_str("Transport([REDACTED])"),
-            Self::Upstream(status) => formatter.debug_tuple("Upstream").field(status).finish(),
-            Self::Unexpected(_) => formatter.write_str("Unexpected([REDACTED])"),
-        }
-    }
+    #[error("unexpected search response: {}", .0.expose())]
+    Unexpected(Sensitive<String>),
 }
 
 pub struct PublicSearch<'a> {
