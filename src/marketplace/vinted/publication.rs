@@ -30,6 +30,8 @@ use crate::{
 const API_V2_PATH: &str = "/api/v2/";
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_IMAGES: usize = 20;
+const MAX_UPLOAD_SESSION_BYTES: usize = 1024;
+const MAX_SESSION_DISCOVERIES: usize = 2;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ItemAttributeInput {
@@ -118,9 +120,15 @@ pub struct PublicationResult {
 }
 
 pub trait VintedPublicationApi: Send + Sync {
+    fn configuration<'a>(
+        &'a self,
+        credentials: &'a VintedCredentialRecord,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>>;
+
     fn upload_photo<'a>(
         &'a self,
         credentials: &'a VintedCredentialRecord,
+        upload_session_id: &'a str,
         image: PreparedImage,
     ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>>;
 
@@ -170,29 +178,90 @@ impl<'a> VintedPublication<'a> {
             });
         }
 
-        let mut photos = Vec::with_capacity(image_paths.len());
+        let mut prepared_images = Vec::with_capacity(image_paths.len());
         for path in image_paths {
-            let prepared = prepare_image(path).await.map_err(|error| {
-                publication_error(error, &operation, &photos, MutationStatus::NotAttempted)
-            })?;
-            photos.push(
-                self.api
-                    .upload_photo(&credentials, prepared)
-                    .await
-                    .map_err(|error| {
-                        publication_error(error, &operation, &photos, MutationStatus::NotAttempted)
-                    })?,
-            );
+            prepared_images.push(prepare_image(path).await.map_err(|error| {
+                publication_error(error, &operation, &[], MutationStatus::NotAttempted)
+            })?);
         }
         let input = input.expect("validated publication input");
-        let upload_session_id = Uuid::new_v4().to_string();
-        let body = publication_body(&operation, input, &photos, &upload_session_id);
-        let response = self
-            .api
-            .mutate(&credentials, &operation, Some(body))
-            .await
-            .map_err(|error| classify_mutation_error(error, &operation, &photos))?;
-        normalize_result(&operation, photos.len(), &response)
+        let temp_uuid = Uuid::new_v4().to_string();
+
+        for discovery in 0..MAX_SESSION_DISCOVERIES {
+            let configuration = self
+                .api
+                .configuration(&credentials)
+                .await
+                .map_err(|error| {
+                    publication_error(error, &operation, &[], MutationStatus::NotAttempted)
+                })?;
+            let upload_session_id = upload_session_id(&configuration).map_err(|error| {
+                publication_error(error, &operation, &[], MutationStatus::NotAttempted)
+            })?;
+            let mut photos = Vec::with_capacity(prepared_images.len());
+            let mut rejected_session = false;
+            for prepared in &prepared_images {
+                match self
+                    .api
+                    .upload_photo(&credentials, upload_session_id, prepared.clone())
+                    .await
+                {
+                    Ok(photo) => photos.push(photo),
+                    Err(error)
+                        if discovery + 1 < MAX_SESSION_DISCOVERIES
+                            && is_upload_session_rejection(&error) =>
+                    {
+                        rejected_session = true;
+                        break;
+                    }
+                    Err(error) => {
+                        return Err(publication_error(
+                            error,
+                            &operation,
+                            &photos,
+                            MutationStatus::NotAttempted,
+                        ));
+                    }
+                }
+            }
+            if rejected_session {
+                continue;
+            }
+
+            let body = publication_body(
+                &operation,
+                input.clone(),
+                &photos,
+                upload_session_id,
+                &temp_uuid,
+            );
+            match self.api.mutate(&credentials, &operation, Some(body)).await {
+                Ok(response) => return normalize_result(&operation, photos.len(), &response),
+                Err(error)
+                    if discovery + 1 < MAX_SESSION_DISCOVERIES
+                        && is_upload_session_rejection(&error) =>
+                {
+                    continue;
+                }
+                Err(error) if is_upload_session_rejection(&error) => {
+                    return Err(publication_error(
+                        error,
+                        &operation,
+                        &photos,
+                        MutationStatus::ConfirmedRejected,
+                    ));
+                }
+                Err(error) => {
+                    return Err(classify_mutation_error(error, &operation, &photos));
+                }
+            }
+        }
+        Err(publication_error(
+            upload_session_rejected(),
+            &operation,
+            &[],
+            MutationStatus::ConfirmedRejected,
+        ))
     }
 }
 
@@ -223,9 +292,37 @@ impl HttpVintedPublicationApi {
         Ok(url)
     }
 
+    async fn configuration_request(
+        &self,
+        credentials: &VintedCredentialRecord,
+    ) -> Result<Value, AppError> {
+        let url = self.endpoint("items/configuration")?;
+        let request = self.auth.authenticated_request(
+            Method::GET,
+            url.to_string(),
+            credentials,
+            MAX_RESPONSE_BYTES,
+            transport_error,
+        )?;
+        let response = self
+            .auth
+            .executor()
+            .execute(request)
+            .await
+            .map_err(execution_error)?;
+        let status = response.status;
+        let value = bounded_json(response)?;
+        if status.is_success() {
+            Ok(value)
+        } else {
+            Err(upstream_error(status, &value, "configuration"))
+        }
+    }
+
     async fn upload_photo_request(
         &self,
         credentials: &VintedCredentialRecord,
+        upload_session_id: &str,
         image: PreparedImage,
     ) -> Result<UploadedPhoto, AppError> {
         let url = self.endpoint("photos")?;
@@ -238,6 +335,7 @@ impl HttpVintedPublicationApi {
         )?;
         request.body = RequestBody::Multipart(vec![
             MultipartPart::bytes("photo[type]", b"item".to_vec()),
+            MultipartPart::bytes("upload_session_id", upload_session_id.as_bytes().to_vec()),
             MultipartPart::bytes("photo[file]", image.bytes)
                 .file_name(image.file_name)
                 .mime_type(image.media_type),
@@ -297,12 +395,20 @@ impl Default for HttpVintedPublicationApi {
 }
 
 impl VintedPublicationApi for HttpVintedPublicationApi {
+    fn configuration<'a>(
+        &'a self,
+        credentials: &'a VintedCredentialRecord,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(self.configuration_request(credentials))
+    }
+
     fn upload_photo<'a>(
         &'a self,
         credentials: &'a VintedCredentialRecord,
+        upload_session_id: &'a str,
         image: PreparedImage,
     ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>> {
-        Box::pin(self.upload_photo_request(credentials, image))
+        Box::pin(self.upload_photo_request(credentials, upload_session_id, image))
     }
 
     fn mutate<'a>(
@@ -315,6 +421,7 @@ impl VintedPublicationApi for HttpVintedPublicationApi {
     }
 }
 
+#[derive(Clone)]
 pub struct PreparedImage {
     bytes: Vec<u8>,
     file_name: &'static str,
@@ -422,11 +529,50 @@ fn validate_draft_id(id: &str) -> Result<(), AppError> {
     }
 }
 
+fn upload_session_id(configuration: &Value) -> Result<&str, AppError> {
+    let Some(value) = configuration.get("upload_session_id") else {
+        return Err(AppError::upstream(
+            "vinted.upload_session_missing",
+            "Vinted configuration did not provide an upload session",
+        ));
+    };
+    let Some(session) = value.as_str() else {
+        return Err(AppError::upstream(
+            "vinted.upload_session_malformed",
+            "Vinted configuration provided an invalid upload session",
+        ));
+    };
+    if session.is_empty()
+        || session.len() > MAX_UPLOAD_SESSION_BYTES
+        || session.chars().any(char::is_control)
+    {
+        return Err(AppError::upstream(
+            "vinted.upload_session_malformed",
+            "Vinted configuration provided an invalid upload session",
+        ));
+    }
+    Ok(session)
+}
+
+fn is_upload_session_rejection(error: &AppError) -> bool {
+    error.code == "vinted.upload_session_rejected"
+}
+
+fn upload_session_rejected() -> AppError {
+    let mut error = AppError::conflict(
+        "vinted.upload_session_rejected",
+        "Vinted rejected the upload session after one refresh",
+    );
+    error.safe_to_retry = true;
+    error
+}
+
 fn publication_body(
     operation: &PublicationOperation,
     input: ListingInput,
     photos: &[UploadedPhoto],
     upload_session_id: &str,
+    temp_uuid: &str,
 ) -> Value {
     let wrapper = if matches!(operation, PublicationOperation::Publish) {
         "item"
@@ -458,7 +604,7 @@ fn publication_body(
     let item = json!({
         "id": id,
         "currency": currency,
-        "temp_uuid": Uuid::new_v4().to_string(),
+        "temp_uuid": temp_uuid,
         "title": title,
         "description": description,
         "brand_id": brand_id,
@@ -633,10 +779,11 @@ fn value_as_id(value: &Value) -> Option<String> {
 fn upstream_error(status: StatusCode, value: &Value, stage: &str) -> AppError {
     let response_code = value.get("code").cloned().unwrap_or(Value::Null);
     let message_code = value.get("message_code").and_then(Value::as_str);
-    let message = value
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("Vinted rejected the request");
+    let upstream_message = value.get("message").and_then(Value::as_str);
+    if upload_session_rejection(status, message_code, upstream_message) {
+        return upload_session_rejected();
+    }
+    let message = upstream_message.unwrap_or("Vinted rejected the request");
     let gate = message_code.unwrap_or_default().to_ascii_lowercase();
     let (error_code, exit_class) = if gate.contains("verification") || gate.contains("verify") {
         (
@@ -787,6 +934,26 @@ fn mutation_state(
     (resource, explanation)
 }
 
+fn upload_session_rejection(
+    status: StatusCode,
+    message_code: Option<&str>,
+    message: Option<&str>,
+) -> bool {
+    if !matches!(
+        status,
+        StatusCode::BAD_REQUEST | StatusCode::CONFLICT | StatusCode::UNPROCESSABLE_ENTITY
+    ) {
+        return false;
+    }
+    [message_code, message].into_iter().flatten().any(|value| {
+        let normalized = value.to_ascii_lowercase().replace(['-', ' '], "_");
+        normalized.contains("upload_session")
+            && (normalized.contains("expired")
+                || normalized.contains("invalid")
+                || normalized.contains("reject"))
+    })
+}
+
 fn invalid_response(stage: &str) -> AppError {
     AppError::upstream(
         "vinted.invalid_response",
@@ -851,6 +1018,118 @@ fn execution_error(error: TransportError) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        collections::VecDeque,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct FixturePublicationApi {
+        configurations: Mutex<VecDeque<Value>>,
+        uploaded_sessions: Mutex<Vec<String>>,
+        mutation_sessions: Mutex<Vec<String>>,
+        rejected_mutations: AtomicUsize,
+    }
+
+    impl FixturePublicationApi {
+        fn new(configurations: impl IntoIterator<Item = Value>, rejected_mutations: usize) -> Self {
+            Self {
+                configurations: Mutex::new(configurations.into_iter().collect()),
+                uploaded_sessions: Mutex::new(Vec::new()),
+                mutation_sessions: Mutex::new(Vec::new()),
+                rejected_mutations: AtomicUsize::new(rejected_mutations),
+            }
+        }
+    }
+
+    impl VintedPublicationApi for FixturePublicationApi {
+        fn configuration<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async move {
+                Ok(self
+                    .configurations
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("fixture configuration"))
+            })
+        }
+
+        fn upload_photo<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            upload_session_id: &'a str,
+            _image: PreparedImage,
+        ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.uploaded_sessions
+                    .lock()
+                    .unwrap()
+                    .push(upload_session_id.to_owned());
+                Ok(UploadedPhoto {
+                    id: 9,
+                    orientation: 0,
+                    width: 4,
+                    height: 6,
+                })
+            })
+        }
+
+        fn mutate<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            _operation: &'a PublicationOperation,
+            body: Option<Value>,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async move {
+                let session = body
+                    .as_ref()
+                    .and_then(|value| value.get("upload_session_id"))
+                    .and_then(Value::as_str)
+                    .expect("mutation session");
+                self.mutation_sessions
+                    .lock()
+                    .unwrap()
+                    .push(session.to_owned());
+                if self
+                    .rejected_mutations
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_ok()
+                {
+                    Err(upload_session_rejected())
+                } else {
+                    Ok(json!({"item": {"id": 71}}))
+                }
+            })
+        }
+    }
+
+    fn credentials() -> VintedCredentialRecord {
+        VintedCredentialRecord::new_for_adapter(
+            PortalId::Fi,
+            "user".to_owned(),
+            None,
+            "access".to_owned(),
+            "refresh".to_owned(),
+            u64::MAX,
+            "device".to_owned(),
+            "anonymous".to_owned(),
+            None,
+        )
+    }
+
+    fn image_path() -> (tempfile::TempDir, PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fixture.png");
+        image::DynamicImage::new_rgb8(4, 6).save(&path).unwrap();
+        (directory, path)
+    }
 
     fn input() -> ListingInput {
         ListingInput {
@@ -879,6 +1158,84 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn workflow_uses_server_session_for_photos_and_mutation() {
+        let (_directory, path) = image_path();
+        let api = FixturePublicationApi::new([json!({"upload_session_id": "server-session"})], 0);
+        let session = |_: PortalId| Ok(credentials());
+
+        VintedPublication::new(&session, &api)
+            .execute(
+                PortalId::Fi,
+                PublicationOperation::Publish,
+                Some(input()),
+                vec![path],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(*api.uploaded_sessions.lock().unwrap(), ["server-session"]);
+        assert_eq!(*api.mutation_sessions.lock().unwrap(), ["server-session"]);
+    }
+
+    #[tokio::test]
+    async fn rejected_session_is_rediscovered_once_for_the_whole_workflow() {
+        let (_directory, path) = image_path();
+        let api = FixturePublicationApi::new(
+            [
+                json!({"upload_session_id": "expired-session"}),
+                json!({"upload_session_id": "refreshed-session"}),
+            ],
+            1,
+        );
+        let session = |_: PortalId| Ok(credentials());
+
+        VintedPublication::new(&session, &api)
+            .execute(
+                PortalId::Fi,
+                PublicationOperation::Publish,
+                Some(input()),
+                vec![path],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *api.uploaded_sessions.lock().unwrap(),
+            ["expired-session", "refreshed-session"]
+        );
+        assert_eq!(
+            *api.mutation_sessions.lock().unwrap(),
+            ["expired-session", "refreshed-session"]
+        );
+    }
+
+    #[tokio::test]
+    async fn repeated_session_rejection_stops_after_one_rediscovery() {
+        let (_directory, path) = image_path();
+        let api = FixturePublicationApi::new(
+            [
+                json!({"upload_session_id": "expired-session"}),
+                json!({"upload_session_id": "rejected-session"}),
+            ],
+            2,
+        );
+        let session = |_: PortalId| Ok(credentials());
+
+        let error = VintedPublication::new(&session, &api)
+            .execute(
+                PortalId::Fi,
+                PublicationOperation::Publish,
+                Some(input()),
+                vec![path],
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "vinted.upload_session_rejected");
+        assert_eq!(api.mutation_sessions.lock().unwrap().len(), 2);
+    }
+
     #[test]
     fn publication_body_preserves_photo_order_and_dynamic_attributes() {
         let photos = vec![
@@ -895,14 +1252,27 @@ mod tests {
                 height: 100,
             },
         ];
-        let body = publication_body(&PublicationOperation::Publish, input(), &photos, "session");
+        let body = publication_body(
+            &PublicationOperation::Publish,
+            input(),
+            &photos,
+            "server-session/value",
+            "temporary-item-id",
+        );
         assert_eq!(body.pointer("/item/assigned_photos/0/id"), Some(&json!(9)));
         assert_eq!(body.pointer("/item/assigned_photos/1/id"), Some(&json!(7)));
         assert_eq!(
             body.pointer("/item/item_attributes/0/code"),
             Some(&json!("condition"))
         );
-        assert_eq!(body.pointer("/upload_session_id"), Some(&json!("session")));
+        assert_eq!(
+            body.pointer("/upload_session_id"),
+            Some(&json!("server-session/value"))
+        );
+        assert_eq!(
+            body.pointer("/item/temp_uuid"),
+            Some(&json!("temporary-item-id"))
+        );
     }
 
     #[test]
@@ -919,9 +1289,55 @@ mod tests {
                 height: 200,
             }],
             "session",
+            "temporary-item-id",
         );
         assert_eq!(body.pointer("/draft/id"), Some(&json!("42")));
         assert!(body.get("item").is_none());
+    }
+
+    #[test]
+    fn configuration_session_is_opaque_and_unchanged() {
+        let configuration = json!({"upload_session_id": "server/value+with=padding"});
+        assert_eq!(
+            upload_session_id(&configuration).unwrap(),
+            "server/value+with=padding"
+        );
+    }
+
+    #[test]
+    fn configuration_session_must_be_present() {
+        let error = upload_session_id(&json!({})).unwrap_err();
+        assert_eq!(error.code, "vinted.upload_session_missing");
+    }
+
+    #[test]
+    fn configuration_session_must_be_a_bounded_non_control_string() {
+        for configuration in [
+            json!({"upload_session_id": null}),
+            json!({"upload_session_id": 42}),
+            json!({"upload_session_id": ""}),
+            json!({"upload_session_id": "bad\nsession"}),
+            json!({"upload_session_id": "x".repeat(MAX_UPLOAD_SESSION_BYTES + 1)}),
+        ] {
+            let error = upload_session_id(&configuration).unwrap_err();
+            assert_eq!(error.code, "vinted.upload_session_malformed");
+        }
+    }
+
+    #[test]
+    fn identifies_expired_and_rejected_upload_sessions_without_echoing_them() {
+        for (message_code, message) in [
+            (Some("upload_session_expired"), None),
+            (None, Some("Upload session is invalid: private-value")),
+        ] {
+            let error = upstream_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                &json!({"message_code": message_code, "message": message}),
+                "publication",
+            );
+            assert_eq!(error.code, "vinted.upload_session_rejected");
+            assert!(!error.message.contains("private-value"));
+        }
     }
 
     #[test]
