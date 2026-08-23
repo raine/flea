@@ -11,7 +11,10 @@ use serde_json::{Value, json};
 
 use crate::{
     api::listings::{Listings, ListingsApi},
-    cli::draft::{ListingInputArgs, TradeType, parse_price},
+    cli::{
+        draft::{ListingInputArgs, TradeType, parse_price},
+        outcome::CommandOutcome,
+    },
     domain::observation::Observation,
     error::AppError,
 };
@@ -70,7 +73,7 @@ pub enum ListingCommand {
 pub async fn dispatch_with_api(
     command: ListingArgs,
     api: &dyn ListingsApi,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     let listings = Listings::new(api);
     let (value, source) = match command.command {
         ListingCommand::List => (
@@ -101,15 +104,9 @@ pub async fn dispatch_with_api(
         }
     };
     value
-        .map(|mut value| {
-            if let Some(object) = value.as_object_mut() {
-                object.insert(
-                    "_observation".to_owned(),
-                    serde_json::to_value(Observation::confirmed_present(source, None))
-                        .expect("observation is serializable"),
-                );
-            }
-            value
+        .map(|value| {
+            CommandOutcome::new(value)
+                .with_observation(Observation::confirmed_present(source, None))
         })
         .map_err(|error| AppError::output(error.to_string()))
 }

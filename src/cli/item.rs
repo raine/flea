@@ -1,8 +1,8 @@
 use clap::{Args, Subcommand};
-use serde_json::Value;
 
 use crate::{
     api::item::{PublicItemApi, PublicItems},
+    cli::outcome::CommandOutcome,
     domain::observation::Observation,
     error::AppError,
 };
@@ -29,27 +29,25 @@ pub enum ItemCommand {
     },
 }
 
-pub async fn dispatch_with_api(args: ItemArgs, api: &dyn PublicItemApi) -> Result<Value, AppError> {
+pub async fn dispatch_with_api(
+    args: ItemArgs,
+    api: &dyn PublicItemApi,
+) -> Result<CommandOutcome, AppError> {
     match args.command {
         ItemCommand::Show { listing_id, raw } => {
             let (detail, upstream) = PublicItems::new(api).show(&listing_id).await?;
             if raw {
-                return Ok(upstream);
+                return Ok(upstream.into());
             }
-            let mut value = serde_json::to_value(detail).map_err(|error| {
+            let value = serde_json::to_value(detail).map_err(|error| {
                 AppError::output("failed to serialize public item output").with_source(error)
             })?;
-            if let Some(object) = value.as_object_mut() {
-                object.insert(
-                    "_observation".to_owned(),
-                    serde_json::to_value(Observation::confirmed_present(
-                        "public_listing_detail",
-                        None,
-                    ))
-                    .expect("observation is serializable"),
-                );
-            }
-            Ok(value)
+            Ok(
+                CommandOutcome::new(value).with_observation(Observation::confirmed_present(
+                    "public_listing_detail",
+                    None,
+                )),
+            )
         }
     }
 }

@@ -88,22 +88,16 @@ async fn execute_tori(command: ToriCommand) -> Result<super::outcome::CommandOut
         ToriCommand::Favorite(args) => {
             let client = tori_session::authenticated_client().await?;
             let api = HttpFavoritesApi::new(Arc::new(client));
-            favorite::dispatch_with_api(args, &api)
-                .await
-                .map(super::outcome::CommandOutcome::from_legacy_value)
+            favorite::dispatch_with_api(args, &api).await
         }
         ToriCommand::Item(args) => {
             let api = HttpPublicItemApi::new(Arc::new(public_client()));
-            super::item::dispatch_with_api(args, &api)
-                .await
-                .map(super::outcome::CommandOutcome::from_legacy_value)
+            super::item::dispatch_with_api(args, &api).await
         }
         ToriCommand::Listing(args) => {
             let client = tori_session::authenticated_client().await?;
             let api = HttpListingsApi::new(Arc::new(client));
-            listing::dispatch_with_api(args, &api)
-                .await
-                .map(super::outcome::CommandOutcome::from_legacy_value)
+            listing::dispatch_with_api(args, &api).await
         }
         ToriCommand::Search(args) => {
             let search_api = HttpPublicSearchApi::new(Arc::new(public_client()));

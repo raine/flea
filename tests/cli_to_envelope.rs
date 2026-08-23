@@ -113,21 +113,15 @@ impl CommandRuntime for TestRuntime {
                     },
                     ToriCommand::Favorite(args) => {
                         let api = HttpFavoritesApi::new(Arc::new(self.client.clone()));
-                        favorite::dispatch_with_api(args, &api)
-                            .await
-                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value)
+                        favorite::dispatch_with_api(args, &api).await
                     }
                     ToriCommand::Item(args) => {
                         let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
-                        item::dispatch_with_api(args, &api)
-                            .await
-                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value)
+                        item::dispatch_with_api(args, &api).await
                     }
                     ToriCommand::Listing(args) => {
                         let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                        listing::dispatch_with_api(args, &api)
-                            .await
-                            .map(flea::cli::outcome::CommandOutcome::from_legacy_value)
+                        listing::dispatch_with_api(args, &api).await
                     }
                     ToriCommand::Search(args) => {
                         let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));

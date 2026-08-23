@@ -1,8 +1,9 @@
 use clap::{Args, Subcommand};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::{
     api::favorites::{Favorites, FavoritesApi},
+    cli::outcome::CommandOutcome,
     domain::observation::Observation,
     error::AppError,
 };
@@ -57,15 +58,13 @@ pub enum FavoriteCommand {
 pub async fn dispatch_with_api(
     args: FavoriteArgs,
     api: &dyn FavoritesApi,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     let favorites = Favorites::new(api);
     match args.command {
         FavoriteCommand::Folders => {
             let folders = favorites.folders().await?;
-            Ok(json!({
-                "folders": folders,
-                "_observation": Observation::confirmed_present("favorites_folders", None),
-            }))
+            Ok(CommandOutcome::new(json!({ "folders": folders }))
+                .with_observation(Observation::confirmed_present("favorites_folders", None)))
         }
         FavoriteCommand::Status { listing_id } => {
             let status = favorites.status(&listing_id).await?;
@@ -74,31 +73,26 @@ pub async fn dispatch_with_api(
             } else {
                 Observation::confirmed_absent("favorites_minimal", None)
             };
-            let mut value = serde_json::to_value(status).map_err(|error| {
+            let value = serde_json::to_value(status).map_err(|error| {
                 AppError::output("failed to serialize favorite status").with_source(error)
             })?;
-            value
-                .as_object_mut()
-                .expect("favorite status serializes as an object")
-                .insert(
-                    "_observation".to_owned(),
-                    serde_json::to_value(observation).expect("observation is serializable"),
-                );
-            Ok(value)
+            Ok(CommandOutcome::new(value).with_observation(observation))
         }
         FavoriteCommand::Add { listing_id, folder } => {
             let mutation = favorites.add(&listing_id, folder).await?;
-            Ok(mutation_value(mutation)?)
+            mutation_outcome(mutation)
         }
         FavoriteCommand::Remove { listing_id, folder } => {
             let mutation = favorites.remove(&listing_id, folder).await?;
-            Ok(mutation_value(mutation)?)
+            mutation_outcome(mutation)
         }
     }
 }
 
-fn mutation_value(mutation: crate::api::favorites::FavoriteMutation) -> Result<Value, AppError> {
-    let mut value = serde_json::to_value(&mutation).map_err(|error| {
+fn mutation_outcome(
+    mutation: crate::api::favorites::FavoriteMutation,
+) -> Result<CommandOutcome, AppError> {
+    let value = serde_json::to_value(&mutation).map_err(|error| {
         AppError::output("failed to serialize favorite output").with_source(error)
     })?;
     let observation = if mutation.favorite {
@@ -106,12 +100,5 @@ fn mutation_value(mutation: crate::api::favorites::FavoriteMutation) -> Result<V
     } else {
         Observation::confirmed_absent("favorite_mutation_response", None)
     };
-    value
-        .as_object_mut()
-        .expect("favorite mutation serializes as an object")
-        .insert(
-            "_observation".to_owned(),
-            serde_json::to_value(observation).expect("observation is serializable"),
-        );
-    Ok(value)
+    Ok(CommandOutcome::new(value).with_observation(observation))
 }
