@@ -179,7 +179,7 @@ fn unsupported_root_command(parts: &[std::ffi::OsString]) -> AppError {
     )
     .with_details(serde_json::json!({ "command": command }));
     error.next_actions.push(NextAction {
-        command: super::invocation::marketplaces(),
+        command: crate::invocation::marketplaces(),
     });
     error
 }
@@ -195,7 +195,7 @@ fn capability_unavailable(context: MarketplaceContext, command: &str) -> AppErro
         "command": command,
     }));
     error.next_actions.push(NextAction {
-        command: super::invocation::capabilities(context),
+        command: crate::invocation::capabilities(context),
     });
     error
 }
@@ -527,7 +527,7 @@ fn resolution_storage(
                 "stored authentication credentials are malformed",
             );
             malformed.next_actions.push(NextAction {
-                command: crate::cli::invocation::tori("auth login"),
+                command: crate::invocation::tori("auth login"),
             });
             malformed
         }
@@ -573,7 +573,7 @@ fn vinted_auth_storage(
     .with_details(serde_json::json!({ "operation": operation }))
     .with_source(error);
     result.next_actions.push(NextAction {
-        command: crate::cli::invocation::vinted_fi("auth status"),
+        command: crate::invocation::vinted_fi("auth status"),
     });
     result
 }
@@ -582,7 +582,7 @@ fn vinted_auth_required() -> AppError {
     let mut error =
         AppError::authentication("vinted_auth.required", "Vinted authentication is required");
     error.next_actions.push(NextAction {
-        command: crate::cli::invocation::vinted_fi("auth login"),
+        command: crate::invocation::vinted_fi("auth login"),
     });
     error
 }
@@ -601,7 +601,7 @@ fn auth_storage(
     result
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: crate::cli::invocation::tori("auth status"),
+            command: crate::invocation::tori("auth status"),
         });
     result
 }
@@ -611,7 +611,7 @@ fn auth_required() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: crate::cli::invocation::tori("auth login"),
+            command: crate::invocation::tori("auth login"),
         });
     error
 }

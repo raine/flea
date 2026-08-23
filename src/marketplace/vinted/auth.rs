@@ -638,7 +638,7 @@ fn restart_error(code: &str, message: &str) -> AppError {
 
 fn restart_action() -> NextAction {
     NextAction {
-        command: crate::cli::invocation::vinted_fi("auth login"),
+        command: crate::invocation::vinted_fi("auth login"),
     }
 }
 

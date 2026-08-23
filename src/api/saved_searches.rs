@@ -565,7 +565,7 @@ fn api_error(error: SavedSearchApiError, id: Option<&str>, read: bool) -> AppErr
     let mut result = base_error(&error);
     if matches!(error, SavedSearchApiError::Authentication) {
         result.next_actions.push(NextAction {
-            command: crate::cli::invocation::tori("auth login"),
+            command: crate::invocation::tori("auth login"),
         });
     }
     if let Some(id) = id {

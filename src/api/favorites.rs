@@ -348,7 +348,7 @@ fn favorite_error(
 
     if authentication {
         app_error.next_actions.push(NextAction {
-            command: crate::cli::invocation::tori("auth login"),
+            command: crate::invocation::tori("auth login"),
         });
     }
     if read_only && observable_failure {

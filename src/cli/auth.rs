@@ -269,7 +269,7 @@ fn flow_not_found() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: crate::cli::invocation::tori("auth login"),
+            command: crate::invocation::tori("auth login"),
         });
     error
 }
@@ -283,7 +283,7 @@ fn flow_expired() -> AppError {
     error
         .next_actions
         .push(crate::domain::envelope::NextAction {
-            command: crate::cli::invocation::tori("auth login"),
+            command: crate::invocation::tori("auth login"),
         });
     error
 }

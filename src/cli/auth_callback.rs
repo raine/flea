@@ -137,7 +137,7 @@ fn browser_launch_error(
 fn retry_login_error(code: &str, message: impl Into<String>) -> AppError {
     let mut error = AppError::authentication(code, message);
     error.next_actions.push(NextAction {
-        command: crate::cli::invocation::tori("auth login"),
+        command: crate::invocation::tori("auth login"),
     });
     error
 }

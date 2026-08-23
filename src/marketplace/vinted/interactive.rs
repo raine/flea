@@ -175,7 +175,7 @@ fn validation_failure_status(
             retry_action()
         } else {
             NextAction {
-                command: crate::cli::invocation::vinted_fi("auth status"),
+                command: crate::invocation::vinted_fi("auth status"),
             }
         }],
     }
@@ -199,7 +199,7 @@ fn storage_error(
     .with_details(serde_json::json!({ "operation": operation }))
     .with_source(error);
     result.next_actions.push(NextAction {
-        command: crate::cli::invocation::vinted_fi("auth status"),
+        command: crate::invocation::vinted_fi("auth status"),
     });
     result
 }
@@ -253,7 +253,7 @@ fn browser_launch_error(
 
 fn retry_action() -> NextAction {
     NextAction {
-        command: crate::cli::invocation::vinted_fi("auth login"),
+        command: crate::invocation::vinted_fi("auth login"),
     }
 }
 

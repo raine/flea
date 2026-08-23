@@ -4,6 +4,7 @@ pub mod diagnostics;
 pub mod domain;
 pub mod error;
 mod image_processing;
+pub mod invocation;
 pub mod marketplace;
 pub mod output;
 pub mod retry;

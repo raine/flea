@@ -512,7 +512,7 @@ impl<A> BrowserAuth<A> {
             ab_test_device_id: Uuid::new_v4().to_string(),
         };
         let output = AuthStart {
-            completion_command: crate::cli::invocation::tori("auth login"),
+            completion_command: crate::invocation::tori("auth login"),
             flow_id,
             login_url: login_url.into(),
             expires_at_unix,
@@ -697,7 +697,7 @@ fn invalid_callback() -> AppError {
 fn restart_error(code: &str, message: &str) -> AppError {
     let mut error = AppError::new(code, message, ExitClass::Authentication);
     error.next_actions.push(NextAction {
-        command: crate::cli::invocation::tori("auth login"),
+        command: crate::invocation::tori("auth login"),
     });
     error
 }
@@ -740,7 +740,7 @@ fn ensure_refresh_success(status: StatusCode) -> Result<(), AppError> {
         "status": status.as_u16()
     })));
     error.next_actions.push(NextAction {
-        command: crate::cli::invocation::tori("auth login"),
+        command: crate::invocation::tori("auth login"),
     });
     Err(error)
 }
@@ -756,7 +756,7 @@ fn refresh_transport_error() -> AppError {
     ))
     .with_details(serde_json::json!({ "stage": "token_refresh" }));
     error.next_actions.push(NextAction {
-        command: crate::cli::invocation::tori("auth login"),
+        command: crate::invocation::tori("auth login"),
     });
     error
 }
@@ -768,7 +768,7 @@ fn refresh_malformed_error() -> AppError {
     )
     .with_details(serde_json::json!({ "stage": "token_refresh" }));
     error.next_actions.push(NextAction {
-        command: crate::cli::invocation::tori("auth login"),
+        command: crate::invocation::tori("auth login"),
     });
     error
 }
@@ -791,7 +791,7 @@ fn upstream_error(stage: &'static str, upstream_transient: bool) -> AppError {
     error.details = Some(Box::new(serde_json::json!({ "stage": stage })));
     if !error.safe_to_retry {
         error.next_actions.push(NextAction {
-            command: crate::cli::invocation::tori("auth login"),
+            command: crate::invocation::tori("auth login"),
         });
     }
     error
@@ -805,7 +805,7 @@ fn unexpected_response(stage: &'static str) -> AppError {
     );
     error.details = Some(Box::new(serde_json::json!({ "stage": stage })));
     error.next_actions.push(NextAction {
-        command: crate::cli::invocation::tori("auth login"),
+        command: crate::invocation::tori("auth login"),
     });
     error
 }
