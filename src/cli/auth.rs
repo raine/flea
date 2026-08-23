@@ -19,13 +19,13 @@ use crate::{
 };
 
 #[derive(Debug, Args)]
-pub struct AuthArgs {
+pub struct ToriAuthArgs {
     #[command(subcommand)]
-    pub command: AuthCommand,
+    pub command: ToriAuthCommand,
 }
 
 #[derive(Subcommand)]
-pub enum AuthCommand {
+pub enum ToriAuthCommand {
     #[command(
         about = "Sign in through the browser",
         long_about = "Open the selected marketplace sign-in flow in the default browser, wait for its callback receiver, and store account-scoped credentials."
@@ -50,7 +50,7 @@ pub enum AuthCommand {
     Logout,
 }
 
-impl AuthCommand {
+impl ToriAuthCommand {
     pub fn telemetry_name(&self) -> &'static str {
         match self {
             Self::Login => "auth login",
@@ -61,13 +61,48 @@ impl AuthCommand {
     }
 }
 
-impl std::fmt::Debug for AuthCommand {
+impl std::fmt::Debug for ToriAuthCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Login => formatter.write_str("Login"),
             Self::Callback { .. } => formatter.write_str("Callback"),
             Self::Status => formatter.write_str("Status"),
             Self::Logout => formatter.write_str("Logout"),
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub struct VintedAuthArgs {
+    #[command(subcommand)]
+    pub command: VintedAuthCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VintedAuthCommand {
+    #[command(
+        about = "Sign in through the browser",
+        long_about = "Open the Vinted sign-in flow in the default browser, wait for its callback, and store account-scoped credentials."
+    )]
+    Login,
+    #[command(
+        about = "Show authentication status",
+        long_about = "Validate the stored Vinted session with local expiry and an online account request."
+    )]
+    Status,
+    #[command(
+        about = "Clear authentication state",
+        long_about = "Remove stored Vinted credentials for the selected portal."
+    )]
+    Logout,
+}
+
+impl VintedAuthCommand {
+    pub fn telemetry_name(&self) -> &'static str {
+        match self {
+            Self::Login => "auth login",
+            Self::Status => "auth status",
+            Self::Logout => "auth logout",
         }
     }
 }
@@ -160,12 +195,12 @@ fn store_error(error: impl std::error::Error + Send + Sync + 'static) -> AppErro
     .with_source(error)
 }
 
-pub struct AuthCommandHandler<A, S> {
+pub struct ToriAuthCommandHandler<A, S> {
     auth: BrowserAuth<A>,
     store: S,
 }
 
-impl<A, S> AuthCommandHandler<A, S> {
+impl<A, S> ToriAuthCommandHandler<A, S> {
     pub fn new(api: A, store: S) -> Self {
         Self {
             auth: BrowserAuth::new(api),
@@ -174,16 +209,16 @@ impl<A, S> AuthCommandHandler<A, S> {
     }
 }
 
-impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
-    pub async fn dispatch(&self, command: AuthCommand) -> Result<Value, AppError> {
+impl<A: AuthenticationApi, S: AuthStore> ToriAuthCommandHandler<A, S> {
+    pub async fn dispatch(&self, command: ToriAuthCommand) -> Result<Value, AppError> {
         match command {
-            AuthCommand::Login | AuthCommand::Callback { .. } => Err(AppError::unexpected(
+            ToriAuthCommand::Login | ToriAuthCommand::Callback { .. } => Err(AppError::unexpected(
                 "interactive browser login requires the production runtime",
             )),
-            AuthCommand::Status => Err(AppError::unexpected(
+            ToriAuthCommand::Status => Err(AppError::unexpected(
                 "authentication status requires the production runtime",
             )),
-            AuthCommand::Logout => self.logout(),
+            ToriAuthCommand::Logout => self.logout(),
         }
     }
 
@@ -395,21 +430,21 @@ mod tests {
 
     #[tokio::test]
     async fn logout_is_idempotent() {
-        let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
+        let handler = ToriAuthCommandHandler::new(FakeApi, MemoryStore::default());
 
         assert_eq!(
-            handler.dispatch(AuthCommand::Logout).await.unwrap(),
+            handler.dispatch(ToriAuthCommand::Logout).await.unwrap(),
             serde_json::json!({ "authenticated": false })
         );
         assert_eq!(
-            handler.dispatch(AuthCommand::Logout).await.unwrap(),
+            handler.dispatch(ToriAuthCommand::Logout).await.unwrap(),
             serde_json::json!({ "authenticated": false })
         );
     }
 
     #[test]
     fn start_output_contains_only_public_flow_fields() {
-        let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
+        let handler = ToriAuthCommandHandler::new(FakeApi, MemoryStore::default());
 
         let started = handler.start(1_000).unwrap();
         let document = serde_json::to_value(&started).unwrap();
@@ -443,7 +478,7 @@ mod tests {
 
     #[tokio::test]
     async fn completion_output_contains_only_public_account_state() {
-        let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
+        let handler = ToriAuthCommandHandler::new(FakeApi, MemoryStore::default());
         let started = handler.start(1_000).unwrap();
         let flow_id = started.flow_id;
         let state = handler
@@ -480,7 +515,7 @@ mod tests {
 
     #[tokio::test]
     async fn expired_completion_deletes_sensitive_flow_material() {
-        let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
+        let handler = ToriAuthCommandHandler::new(FakeApi, MemoryStore::default());
         let started = handler.start(1_000).unwrap();
         let flow_id = started.flow_id;
 
@@ -496,7 +531,7 @@ mod tests {
 
     #[tokio::test]
     async fn missing_completion_restarts_public_login() {
-        let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
+        let handler = ToriAuthCommandHandler::new(FakeApi, MemoryStore::default());
 
         let error = handler
             .complete("missing", "redacted", 1_000)

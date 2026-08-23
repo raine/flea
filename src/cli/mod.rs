@@ -104,7 +104,7 @@ pub enum ToriCommand {
         about = "Manage browser authentication",
         long_about = "Start, complete, inspect, or clear the Tori browser OAuth authentication session."
     )]
-    Auth(auth::AuthArgs),
+    Auth(auth::ToriAuthArgs),
     #[command(
         about = "Show Tori capabilities",
         long_about = "Show Tori operations, authentication requirements, and implementation maturity without making a network request."
@@ -187,7 +187,7 @@ pub enum VintedCommand {
         about = "Manage Vinted browser authentication",
         long_about = "Sign in, inspect the locally stored session, or clear Vinted credentials."
     )]
-    Auth(auth::AuthArgs),
+    Auth(auth::VintedAuthArgs),
     #[command(
         about = "Show capabilities for this Vinted portal",
         long_about = "Show Vinted operations, authentication requirements, and implementation maturity without making a network request."
@@ -337,17 +337,6 @@ mod tests {
                 "tori location search",
             ),
             (&["vinted", "auth", "login"], "vinted auth login"),
-            (
-                &[
-                    "vinted",
-                    "auth",
-                    "callback",
-                    "--state-root",
-                    "/tmp/flea",
-                    "https://example.com/callback",
-                ],
-                "vinted auth callback",
-            ),
             (&["vinted", "auth", "status"], "vinted auth status"),
             (&["vinted", "auth", "logout"], "vinted auth logout"),
             (
@@ -364,5 +353,20 @@ mod tests {
                 .unwrap_or_else(|error| panic!("failed to parse {args:?}: {error}"));
             assert_eq!(cli.command.telemetry_name(), *expected, "args: {args:?}");
         }
+    }
+
+    #[test]
+    fn vinted_auth_rejects_the_tori_callback_command() {
+        let result = Cli::try_parse_from([
+            "flea",
+            "vinted",
+            "auth",
+            "callback",
+            "--state-root",
+            "/tmp/flea",
+            "vintedfr://auth?code=secret&state=secret",
+        ]);
+
+        assert!(result.is_err());
     }
 }

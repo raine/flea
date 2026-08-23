@@ -158,14 +158,14 @@ fn plain_presentation(format: output::OutputFormat, command: &cli::Command) -> P
         cli::Command::Skill(_) => PlainPresentation::Skill,
         cli::Command::Tori(cli::ToriArgs {
             command:
-                cli::ToriCommand::Auth(cli::auth::AuthArgs {
-                    command: cli::auth::AuthCommand::Login,
+                cli::ToriCommand::Auth(cli::auth::ToriAuthArgs {
+                    command: cli::auth::ToriAuthCommand::Login,
                 }),
         }) if format == output::OutputFormat::Toon => PlainPresentation::AuthLogin,
         cli::Command::Vinted(cli::VintedArgs {
             command:
-                cli::VintedCommand::Auth(cli::auth::AuthArgs {
-                    command: cli::auth::AuthCommand::Login,
+                cli::VintedCommand::Auth(cli::auth::VintedAuthArgs {
+                    command: cli::auth::VintedAuthCommand::Login,
                 }),
             ..
         }) if format == output::OutputFormat::Toon => PlainPresentation::AuthLogin,

@@ -5,7 +5,10 @@ use serde_json::Value;
 use crate::{
     cli::{
         Command, ToriCommand, VintedCommand,
-        auth::{AuthArgs, AuthCommandHandler, FileAuthStore, unix_time_now},
+        auth::{
+            FileAuthStore, ToriAuthArgs, ToriAuthCommand, ToriAuthCommandHandler, VintedAuthArgs,
+            VintedAuthCommand, unix_time_now,
+        },
         auth_callback, category, draft, favorite, listing, saved_search, vinted_search,
     },
     domain::envelope::NextAction,
@@ -36,8 +39,8 @@ use super::outcome::CommandOutcome;
 
 type OutcomeFuture = Pin<Box<dyn Future<Output = Result<CommandOutcome, AppError>>>>;
 type ToriClientFuture = Pin<Box<dyn Future<Output = Result<Arc<dyn ToriClient>, AppError>>>>;
-type ToriAuthHandler = dyn Fn(AuthArgs) -> OutcomeFuture + Send + Sync;
-type VintedAuthHandler = dyn Fn(PortalId, AuthArgs) -> OutcomeFuture + Send + Sync;
+type ToriAuthHandler = dyn Fn(ToriAuthArgs) -> OutcomeFuture + Send + Sync;
+type VintedAuthHandler = dyn Fn(PortalId, VintedAuthArgs) -> OutcomeFuture + Send + Sync;
 type VintedCredentialsProvider =
     dyn Fn(PortalId) -> Result<VintedCredentialRecord, AppError> + Send + Sync;
 
@@ -79,7 +82,7 @@ impl ApplicationDependencies {
 
     pub fn with_tori_auth_handler<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(AuthArgs) -> Fut + Send + Sync + 'static,
+        F: Fn(ToriAuthArgs) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<CommandOutcome, AppError>> + 'static,
     {
         self.tori_auth = Arc::new(move |args| Box::pin(handler(args)));
@@ -88,7 +91,7 @@ impl ApplicationDependencies {
 
     pub fn with_vinted_auth_handler<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(PortalId, AuthArgs) -> Fut + Send + Sync + 'static,
+        F: Fn(PortalId, VintedAuthArgs) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<CommandOutcome, AppError>> + 'static,
     {
         self.vinted_auth = Arc::new(move |portal, args| Box::pin(handler(portal, args)));
@@ -190,16 +193,14 @@ async fn execute_tori(
     }
 }
 
-async fn execute_vinted_auth(portal: PortalId, args: AuthArgs) -> Result<CommandOutcome, AppError> {
+async fn execute_vinted_auth(
+    portal: PortalId,
+    args: VintedAuthArgs,
+) -> Result<CommandOutcome, AppError> {
     let operation = match args.command {
-        super::auth::AuthCommand::Login => vinted_session::AuthOperation::Login,
-        super::auth::AuthCommand::Status => vinted_session::AuthOperation::Status,
-        super::auth::AuthCommand::Logout => vinted_session::AuthOperation::Logout,
-        super::auth::AuthCommand::Callback { .. } => {
-            return Err(AppError::unexpected(
-                "the Vinted callback receiver does not use the CLI callback command",
-            ));
-        }
+        VintedAuthCommand::Login => vinted_session::AuthOperation::Login,
+        VintedAuthCommand::Status => vinted_session::AuthOperation::Status,
+        VintedAuthCommand::Logout => vinted_session::AuthOperation::Logout,
     };
     vinted_session::execute_auth(portal, operation).await
 }
@@ -306,11 +307,9 @@ fn first_external_command(parts: &[std::ffi::OsString]) -> &str {
         .unwrap_or("unknown")
 }
 
-async fn execute_tori_auth(
-    args: super::auth::AuthArgs,
-) -> Result<super::outcome::CommandOutcome, AppError> {
+async fn execute_tori_auth(args: ToriAuthArgs) -> Result<super::outcome::CommandOutcome, AppError> {
     let command = match args.command {
-        super::auth::AuthCommand::Callback {
+        ToriAuthCommand::Callback {
             state_root,
             callback_url,
         } => {
@@ -324,11 +323,11 @@ async fn execute_tori_auth(
     };
     let paths = tori_session::state_paths()?;
     match command {
-        super::auth::AuthCommand::Login => execute_interactive_login(paths).await.map(Into::into),
-        super::auth::AuthCommand::Status => tori_session::status().await,
+        ToriAuthCommand::Login => execute_interactive_login(paths).await.map(Into::into),
+        ToriAuthCommand::Status => tori_session::status().await,
         command => {
             let store = FileAuthStore::new(paths);
-            let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
+            let handler = ToriAuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
             handler.dispatch(command).await.map(Into::into)
         }
     }
@@ -338,7 +337,7 @@ async fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError>
     auth_callback::prepare(&paths)?;
     let result = async {
         let store = FileAuthStore::new(paths.clone());
-        let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
+        let handler = ToriAuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
         let started = handler.start(unix_time_now()?)?;
         let callback =
             auth_callback::open_and_wait(&paths, &started.login_url, started.expires_at_unix)?;
