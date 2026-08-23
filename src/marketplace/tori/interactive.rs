@@ -1,6 +1,7 @@
 use std::{fs, io::Read, path::Path};
 
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::json;
 use url::Url;
 
 use crate::{
@@ -11,6 +12,11 @@ use crate::{
 
 const MAX_CAPTURED_CALLBACK_BYTES: u64 = 8 * 1024;
 const SCHEME: &str = "fi.tori.www.6079834b9b0b741812e7e91f";
+
+#[derive(Debug, Serialize)]
+pub(crate) struct CallbackCapture {
+    captured: bool,
+}
 
 pub fn prepare(paths: &StatePaths) -> Result<(), AppError> {
     paths.ensure().map_err(callback_receiver_error)?;
@@ -60,7 +66,7 @@ pub fn open_and_wait(
     }
 }
 
-pub fn capture(paths: &StatePaths, callback_url: &str) -> Result<Value, AppError> {
+pub fn capture(paths: &StatePaths, callback_url: &str) -> Result<CallbackCapture, AppError> {
     let valid_scheme = callback_url.len() <= MAX_CAPTURED_CALLBACK_BYTES as usize
         && Url::parse(callback_url).is_ok_and(|url| url.scheme() == SCHEME);
     if !valid_scheme {
@@ -72,7 +78,7 @@ pub fn capture(paths: &StatePaths, callback_url: &str) -> Result<Value, AppError
         callback_url.as_bytes(),
     )
     .map_err(|error| callback_capture_error().with_source(error))?;
-    Ok(json!({ "captured": true }))
+    Ok(CallbackCapture { captured: true })
 }
 
 pub fn read(paths: &StatePaths) -> Result<String, AppError> {
@@ -465,7 +471,7 @@ mod tests {
         let callback = format!("{SCHEME}://login?code=code&state=state");
 
         assert_eq!(
-            capture(&paths, &callback).unwrap(),
+            serde_json::to_value(capture(&paths, &callback).unwrap()).unwrap(),
             json!({ "captured": true })
         );
         assert_eq!(read(&paths).unwrap(), callback);

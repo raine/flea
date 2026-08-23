@@ -5,11 +5,8 @@ use serde_json::Value;
 use crate::{
     cli::{
         Command, ToriCommand, VintedCommand,
-        auth::{
-            FileAuthStore, ToriAuthArgs, ToriAuthCommand, ToriAuthCommandHandler, VintedAuthArgs,
-            VintedAuthCommand, unix_time_now,
-        },
-        auth_callback, category, draft, favorite, listing, saved_search, vinted_search,
+        auth::{ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand},
+        category, draft, favorite, listing, saved_search, vinted_search,
     },
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
@@ -20,8 +17,10 @@ use crate::{
             auth::SchibstedToriAuthenticationApi,
             client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport, ToriClient},
             favorites::HttpFavoritesApi,
+            interactive as tori_interactive,
             item::HttpPublicItemApi,
             listings::HttpListingsApi,
+            login::{FileAuthStore, ToriAuthentication, unix_time_now},
             saved_searches::HttpSavedSearchesApi,
             search::HttpPublicSearchApi,
             session as tori_session,
@@ -313,44 +312,62 @@ async fn execute_tori_auth(args: ToriAuthArgs) -> Result<super::outcome::Command
             state_root,
             callback_url,
         } => {
-            return auth_callback::capture(
-                &StatePaths::from_root(state_root, MarketplaceContext::TORI_FI),
-                &callback_url,
-            )
-            .map(Into::into);
+            return serialize_auth_output(
+                tori_interactive::capture(
+                    &StatePaths::from_root(state_root, MarketplaceContext::TORI_FI),
+                    &callback_url,
+                ),
+                "Tori callback",
+            );
         }
         command => command,
     };
     let paths = tori_session::state_paths()?;
     match command {
-        ToriAuthCommand::Login => execute_interactive_login(paths).await.map(Into::into),
+        ToriAuthCommand::Login => execute_interactive_login(paths).await,
         ToriAuthCommand::Status => tori_session::status().await,
-        command => {
+        ToriAuthCommand::Logout => {
             let store = FileAuthStore::new(paths);
-            let handler = ToriAuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
-            handler.dispatch(command).await.map(Into::into)
+            let auth = ToriAuthentication::new(SchibstedToriAuthenticationApi::new(), store);
+            serialize_auth_output(auth.logout(), "Tori logout")
         }
+        ToriAuthCommand::Callback { .. } => unreachable!("callbacks return before dispatch"),
     }
 }
 
-async fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError> {
-    auth_callback::prepare(&paths)?;
+async fn execute_interactive_login(paths: StatePaths) -> Result<CommandOutcome, AppError> {
+    tori_interactive::prepare(&paths)?;
     let result = async {
         let store = FileAuthStore::new(paths.clone());
-        let handler = ToriAuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
+        let handler = ToriAuthentication::new(SchibstedToriAuthenticationApi::new(), store);
         let started = handler.start(unix_time_now()?)?;
         let callback =
-            auth_callback::open_and_wait(&paths, &started.login_url, started.expires_at_unix)?;
+            tori_interactive::open_and_wait(&paths, &started.login_url, started.expires_at_unix)?;
         handler
             .complete(&started.flow_id, &callback, unix_time_now()?)
             .await
     }
     .await;
-    let cleared = auth_callback::clear(&paths);
+    let cleared = tori_interactive::clear(&paths);
     match result {
-        Ok(value) => cleared.map(|()| value),
+        Ok(value) => {
+            cleared?;
+            serialize_auth_output(Ok(value), "Tori login")
+        }
         Err(error) => Err(error),
     }
+}
+
+fn serialize_auth_output<T: serde::Serialize>(
+    result: Result<T, AppError>,
+    stage: &'static str,
+) -> Result<CommandOutcome, AppError> {
+    let value = result?;
+    serde_json::to_value(value)
+        .map(Into::into)
+        .map_err(|error| {
+            AppError::output(format!("failed to serialize {stage} output")).with_source(error)
+        })
 }
 
 fn public_client() -> HttpClient<ReqwestTransport> {

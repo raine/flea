@@ -979,7 +979,8 @@ mod tests {
         assert_eq!(query.get("code_challenge_method").unwrap(), "S256");
         assert_eq!(output.expires_at_unix, 1_600);
         assert_eq!(output.completion_command, "flea tori auth login");
-        let debug = format!("{first:?}");
+        let debug = format!("{first:?} {output:?}");
+        assert!(!debug.contains(&output.login_url));
         assert!(!debug.contains(first.pkce_verifier.expose()));
         assert!(!debug.contains(&first.device_id));
         assert!(!debug.contains(&first.installation_id));

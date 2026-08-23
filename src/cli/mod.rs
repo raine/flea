@@ -1,5 +1,4 @@
 pub mod auth;
-mod auth_callback;
 pub mod category;
 pub mod draft;
 mod draft_input;
