@@ -1,6 +1,7 @@
 pub mod adinput;
 pub mod auth;
 pub mod client;
+pub mod discovery;
 pub mod favorites;
 pub(crate) mod interactive;
 pub mod item;
