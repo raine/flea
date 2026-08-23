@@ -1,4 +1,6 @@
-use flea::domain::observation::{Observation, ObservationOperation, ObservationState};
+use flea::domain::observation::{
+    Observation, ObservationOperation, ObservationState, RetryClassification,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -19,11 +21,9 @@ fn list_and_detail_disagreement_is_not_absence_or_mutation_permission() {
     assert_eq!(observation.state, ObservationState::ConflictingSources);
     assert_eq!(observation.source, "multiple_authoritative_sources");
     assert_eq!(observation.status_evidence.source_states.len(), 2);
-    assert!(
-        !observation
-            .retry_classification(ObservationOperation::Mutation)
-            .safe_to_retry
-    );
+    let retry: RetryClassification =
+        observation.retry_classification(ObservationOperation::Mutation);
+    assert!(!retry.safe_to_retry);
 }
 
 #[test]

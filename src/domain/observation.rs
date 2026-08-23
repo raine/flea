@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::retry::RetryClassification;
+pub use crate::retry::RetryClassification;
 
 /// Semantic identifier for an authoritative remote-state observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
