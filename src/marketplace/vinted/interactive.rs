@@ -151,7 +151,7 @@ const MAC_CALLBACK_BUNDLE_ID: &str = "fi.raine.flea.vinted-auth";
 #[cfg(target_os = "macos")]
 #[derive(Deserialize, Serialize)]
 struct BorrowedUrlHandler {
-    previous_handler: String,
+    previous_handler: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -181,12 +181,7 @@ impl MacCallbackReceiver {
         let app = applications.join("Flea Vinted Auth.app");
         let recovery_file = paths.auth_dir().join("borrowed-url-handler.json");
         recover_interrupted_receiver(&app, &recovery_file)?;
-        let previous_handler = default_url_handler("vintedfr")?.ok_or_else(|| {
-            callback_receiver_error(io::Error::new(
-                io::ErrorKind::NotFound,
-                "Vinted has no URL handler to restore after login",
-            ))
-        })?;
+        let previous_handler = default_url_handler("vintedfr")?;
         paths.ensure().map_err(callback_receiver_error)?;
         let recovery = serde_json::to_vec(&BorrowedUrlHandler {
             previous_handler: previous_handler.clone(),
@@ -199,7 +194,7 @@ impl MacCallbackReceiver {
             app,
             callback_file,
             recovery_file,
-            previous_handler: Some(previous_handler),
+            previous_handler,
             installed: false,
             _temporary: temporary,
         };
@@ -343,16 +338,19 @@ fn recover_interrupted_receiver(app: &Path, recovery_file: &Path) -> Result<(), 
     let record: BorrowedUrlHandler =
         serde_json::from_slice(&fs::read(recovery_file).map_err(callback_receiver_error)?)
             .map_err(callback_receiver_error)?;
-    if record.previous_handler.is_empty()
-        || record.previous_handler == MAC_CALLBACK_BUNDLE_ID
-        || record.previous_handler.chars().any(char::is_control)
-    {
+    if record.previous_handler.as_deref().is_some_and(|handler| {
+        handler.is_empty()
+            || handler == MAC_CALLBACK_BUNDLE_ID
+            || handler.chars().any(char::is_control)
+    }) {
         return Err(callback_receiver_error(io::Error::new(
             io::ErrorKind::InvalidData,
             "the previous URL handler identifier is invalid",
         )));
     }
-    set_default_url_handler("vintedfr", &record.previous_handler)?;
+    if let Some(previous_handler) = &record.previous_handler {
+        set_default_url_handler("vintedfr", previous_handler)?;
+    }
     if app.exists() {
         verify_owned_callback_app(app)?;
         checked_command(launch_services_command().args(["-u", path_text(app)?]))?;
@@ -592,6 +590,30 @@ mod tests {
         assert_eq!(
             error.next_actions[0].command,
             "flea vinted --portal fi auth login"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn callback_recovery_allows_no_previous_url_handler() {
+        let record = BorrowedUrlHandler {
+            previous_handler: None,
+        };
+        let encoded = serde_json::to_vec(&record).unwrap();
+        let decoded: BorrowedUrlHandler = serde_json::from_slice(&encoded).unwrap();
+
+        assert!(decoded.previous_handler.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn callback_recovery_accepts_existing_string_records() {
+        let decoded: BorrowedUrlHandler =
+            serde_json::from_str(r#"{"previous_handler":"com.example.vinted"}"#).unwrap();
+
+        assert_eq!(
+            decoded.previous_handler.as_deref(),
+            Some("com.example.vinted")
         );
     }
 }
