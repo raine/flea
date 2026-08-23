@@ -16,7 +16,7 @@ fn public_search_is_read_only_and_does_not_require_authentication() {
     let query = std::env::var(LIVE_QUERY)
         .expect("FLEA_LIVE_SEARCH_QUERY must contain a harmless marketplace query");
     let output = Command::new(env!("CARGO_BIN_EXE_flea"))
-        .args(["search", &query, "--limit", "1", "--format", "json"])
+        .args(["tori", "search", &query, "--limit", "1", "--format", "json"])
         .env("XDG_STATE_HOME", tempfile::tempdir().unwrap().path())
         .output()
         .expect("flea executable should run");
