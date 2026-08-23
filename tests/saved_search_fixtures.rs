@@ -5,11 +5,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use flea::api::{
-    client::{HttpError, HttpResponse, RequestBody, RequestSpec, ToriClient, compatibility},
-    saved_searches::{
+use flea::{
+    api::saved_searches::{
         CreateSavedSearch, HttpSavedSearchesApi, SavedSearchApiError, SavedSearches,
         SavedSearchesApi,
+    },
+    marketplace::tori::client::{
+        HttpError, HttpResponse, RequestBody, RequestSpec, ToriClient, compatibility,
     },
 };
 use reqwest::StatusCode;

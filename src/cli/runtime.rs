@@ -4,12 +4,8 @@ use serde_json::Value;
 
 use crate::{
     api::{
-        auth::SchibstedToriAuthenticationApi,
-        client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
-        favorites::HttpFavoritesApi,
-        item::HttpPublicItemApi,
-        listings::HttpListingsApi,
-        saved_searches::HttpSavedSearchesApi,
+        auth::SchibstedToriAuthenticationApi, favorites::HttpFavoritesApi, item::HttpPublicItemApi,
+        listings::HttpListingsApi, saved_searches::HttpSavedSearchesApi,
         search::HttpPublicSearchApi,
     },
     cli::{
@@ -23,6 +19,7 @@ use crate::{
         MarketplaceContext, MarketplaceId, marketplace, marketplaces,
         tori::{
             adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
+            client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
             session as tori_session,
         },
     },
@@ -95,7 +92,7 @@ async fn execute_tori(command: ToriCommand) -> Result<super::outcome::CommandOut
             super::search::dispatch_with_apis(*args, &search_api, Some(&item_api)).await
         }
         ToriCommand::SavedSearch(args) => {
-            let client: Arc<dyn crate::api::client::ToriClient> =
+            let client: Arc<dyn crate::marketplace::tori::client::ToriClient> =
                 Arc::new(tori_session::authenticated_client().await?);
             let api = HttpSavedSearchesApi::new(Arc::clone(&client));
             let search_api = HttpPublicSearchApi::new(client);

@@ -4,12 +4,14 @@ use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
     domain::{
         envelope::NextAction,
         observation::{Observation, ObservationOperation},
     },
     error::{AppError, ExitClass},
+    marketplace::tori::client::{
+        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+    },
 };
 
 const AD_ITEM_TYPE: &str = "Ad";
@@ -46,7 +48,7 @@ impl HttpFavoritesApi {
     async fn execute(
         &self,
         request: RequestSpec,
-    ) -> Result<crate::api::client::HttpResponse, FavoritesApiError> {
+    ) -> Result<crate::marketplace::tori::client::HttpResponse, FavoritesApiError> {
         self.client
             .execute(request)
             .await

@@ -15,13 +15,13 @@ use super::types::{
     ImageState, ListingDraftSeed, ProductContext, Publication, PublicationCategory,
     PublicationDraftState, UploadedImage, model_error,
 };
-use crate::api::client::compatibility;
 use crate::domain::commerce::normalized_select_to_machine;
 use crate::domain::observation::Observation;
 use crate::domain::observation::ObservationOperation;
 use crate::domain::observation::ObservationState;
 use crate::domain::observation::SourceStateEvidence;
 use crate::domain::observation::StatusEvidence;
+use crate::marketplace::tori::client::compatibility;
 use crate::retry::FailureKind;
 use crate::retry::OperationMethod;
 use crate::retry::RetryContext;

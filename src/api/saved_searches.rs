@@ -6,12 +6,14 @@ use serde_json::{Value, json};
 use url::form_urlencoded;
 
 use crate::{
-    api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
     domain::{
         envelope::NextAction,
         observation::{Observation, ObservationOperation},
     },
     error::{AppError, ExitClass},
+    marketplace::tori::client::{
+        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+    },
     retry::RetryClassification,
 };
 
@@ -55,7 +57,7 @@ impl HttpSavedSearchesApi {
     async fn execute(
         &self,
         request: RequestSpec,
-    ) -> Result<crate::api::client::HttpResponse, SavedSearchApiError> {
+    ) -> Result<crate::marketplace::tori::client::HttpResponse, SavedSearchApiError> {
         self.client.execute(request).await.map_err(http_error)
     }
 
@@ -85,7 +87,7 @@ impl HttpSavedSearchesApi {
         method: Method,
         target: String,
         body: Option<&Value>,
-    ) -> Result<crate::api::client::HttpResponse, SavedSearchApiError> {
+    ) -> Result<crate::marketplace::tori::client::HttpResponse, SavedSearchApiError> {
         let mut request = RequestSpec::new(method, target, compatibility::SERVICE_SAVED_SEARCHES);
         if let Some(body) = body {
             request = request.body(

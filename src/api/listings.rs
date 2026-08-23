@@ -12,7 +12,6 @@ use serde_json::{Value, json};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::{
-    api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
     domain::{
         commerce::{Price, PriceKind, TradeType, normalize_commerce_fields},
         listing::{
@@ -24,6 +23,9 @@ use crate::{
         observation::{Observation, ObservationOperation},
     },
     error::{AppError, ExitClass},
+    marketplace::tori::client::{
+        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+    },
     retry::{FailureKind, OperationMethod, RetryContext, classify},
 };
 

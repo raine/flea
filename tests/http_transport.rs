@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use flea::api::client::{
+use flea::marketplace::tori::client::{
     ClientConfig, DeviceIdentity, HttpClient, MultipartPart, RequestBody, RequestSpec, Transport,
     TransportError, TransportErrorKind, TransportFuture, TransportRequest, TransportResponse,
     compatibility,

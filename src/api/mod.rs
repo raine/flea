@@ -1,5 +1,8 @@
 pub mod auth;
-pub mod client;
+/// Compatibility path for the Tori HTTP client and transport seams.
+pub mod client {
+    pub use crate::marketplace::tori::client::*;
+}
 pub mod favorites;
 pub mod item;
 pub mod listings;

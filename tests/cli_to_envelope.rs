@@ -12,7 +12,6 @@ use flea::{
             AuthCredentials, AuthenticatedAccount, AuthenticationApi, OAuthFlow, SchibstedTokens,
             SecretString, ToriSession,
         },
-        client::{HttpError, HttpResponse, RequestSpec, ToriClient},
         favorites::{FavoritesApi, HttpFavoritesApi},
         item::HttpPublicItemApi,
         listings::HttpListingsApi,
@@ -25,7 +24,10 @@ use flea::{
         category, draft, favorite, item, listing, location, saved_search, search,
     },
     error::AppError,
-    marketplace::tori::adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
+    marketplace::tori::{
+        adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
+        client::{HttpError, HttpResponse, RequestSpec, ToriClient},
+    },
     run_with_runtime,
 };
 use reqwest::{StatusCode, header::HeaderMap};
@@ -378,7 +380,7 @@ async fn favorite_mutations_send_an_explicit_empty_body() {
     assert!(requests[0].content_length_zero);
     assert!(matches!(
         &requests[0].body,
-        flea::api::client::RequestBody::Bytes(bytes) if bytes.is_empty()
+        flea::marketplace::tori::client::RequestBody::Bytes(bytes) if bytes.is_empty()
     ));
 }
 
@@ -400,11 +402,14 @@ fn draft_create_flows_through_the_http_adapter() {
         "/adinput/ad/withModel/recommerce"
     );
     assert_eq!(requests[0].service, "APPS-ADINPUT");
-    assert_eq!(requests[0].host, flea::api::client::ApiHost::Adinput);
+    assert_eq!(
+        requests[0].host,
+        flea::marketplace::tori::client::ApiHost::Adinput
+    );
     assert!(requests[0].content_length_zero);
     assert!(matches!(
         &requests[0].body,
-        flea::api::client::RequestBody::Bytes(bytes) if bytes.is_empty()
+        flea::marketplace::tori::client::RequestBody::Bytes(bytes) if bytes.is_empty()
     ));
 }
 
@@ -718,13 +723,16 @@ fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
     assert_eq!(requests[1].method, reqwest::Method::PATCH);
     assert_eq!(requests[1].path_and_query, "/items/46031010");
     assert_eq!(requests[1].service, "RC-ITEM-CREATION-FLOW-API");
-    assert_eq!(requests[1].host, flea::api::client::ApiHost::Gateway);
+    assert_eq!(
+        requests[1].host,
+        flea::marketplace::tori::client::ApiHost::Gateway
+    );
     assert_eq!(requests[1].if_match.as_ref().unwrap(), "one");
     assert_eq!(
         requests[1].content_type.as_ref().unwrap(),
         "application/json"
     );
-    let flea::api::client::RequestBody::Bytes(body) = &requests[1].body else {
+    let flea::marketplace::tori::client::RequestBody::Bytes(body) = &requests[1].body else {
         panic!("expected JSON request body")
     };
     assert_eq!(
@@ -1314,7 +1322,7 @@ fn publish_flows_through_every_http_step() {
         requests[11].content_type.as_ref().unwrap(),
         "application/x-www-form-urlencoded"
     );
-    let flea::api::client::RequestBody::Bytes(body) = &requests[11].body else {
+    let flea::marketplace::tori::client::RequestBody::Bytes(body) = &requests[11].body else {
         panic!("expected encoded package choice")
     };
     assert_eq!(body, b"choices=urn%3Aproduct%3Apackage-specification%3A10");

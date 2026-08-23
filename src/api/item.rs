@@ -4,7 +4,6 @@ use reqwest::{Method, StatusCode};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
     domain::{
         commerce::{normalize_price, normalize_trade_type},
         item::{
@@ -13,6 +12,9 @@ use crate::{
         observation::{Observation, ObservationOperation},
     },
     error::{AppError, ExitClass},
+    marketplace::tori::client::{
+        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+    },
 };
 
 pub trait PublicItemApi: Send + Sync {

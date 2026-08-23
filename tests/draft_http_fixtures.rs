@@ -2898,14 +2898,14 @@ async fn remove_and_delete_use_ordered_non_retried_mutations() {
     assert_eq!(requests[4].path, "/search?facet=DRAFT&limit=50&offset=0");
     assert_eq!(
         requests[4].service,
-        Some(flea::api::client::compatibility::SERVICE_AD_SUMMARIES)
+        Some(flea::marketplace::tori::client::compatibility::SERVICE_AD_SUMMARIES)
     );
     assert_eq!(requests[5].method, Method::Delete);
     assert_eq!(requests[5].path, "/items/draft-1");
     assert_eq!(requests[5].retry, RetryPolicy::Never);
     assert_eq!(
         requests[5].service,
-        Some(flea::api::client::compatibility::SERVICE_AD_ACTION)
+        Some(flea::marketplace::tori::client::compatibility::SERVICE_AD_ACTION)
     );
 }
 

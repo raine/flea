@@ -6,13 +6,15 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use url::form_urlencoded;
 
 use crate::{
-    api::client::{HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility},
     domain::search::{
         AppliedFilter, LocationCollection, SearchArea, SearchAreaContext, SearchCollection,
         SearchFacet, SearchFacetOption, SearchFacetRange, SearchListing, SearchLocation,
         SearchLocationContext, SearchPagination, SearchPrice,
     },
     error::{AppError, ExitClass},
+    marketplace::tori::client::{
+        HttpError, RequestSpec, ToriClient, TransportErrorKind, compatibility,
+    },
     retry::{FailureKind, OperationMethod, RetryContext, classify},
 };
 
