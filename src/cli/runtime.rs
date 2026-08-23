@@ -104,6 +104,7 @@ fn execute_auth(args: super::auth::AuthArgs) -> Result<Value, AppError> {
     let paths = state_paths()?;
     match command {
         super::auth::AuthCommand::Login => execute_interactive_login(paths),
+        super::auth::AuthCommand::VintedLoginPoc => super::vinted_auth::execute(),
         super::auth::AuthCommand::Status => auth_status(
             paths,
             &SchibstedToriAuthenticationApi::new(),

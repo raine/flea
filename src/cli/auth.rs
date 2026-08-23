@@ -29,6 +29,8 @@ pub enum AuthCommand {
         long_about = "Open Tori.fi sign-in in the default browser, wait for the Flea callback receiver, and store credentials."
     )]
     Login,
+    #[command(name = "vinted-login-poc", hide = true)]
+    VintedLoginPoc,
     #[command(hide = true)]
     Callback {
         #[arg(long, hide = true)]
@@ -52,6 +54,7 @@ impl std::fmt::Debug for AuthCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Login => formatter.write_str("Login"),
+            Self::VintedLoginPoc => formatter.write_str("VintedLoginPoc"),
             Self::Callback { .. } => formatter.write_str("Callback"),
             Self::Status => formatter.write_str("Status"),
             Self::Logout => formatter.write_str("Logout"),
@@ -181,9 +184,9 @@ impl<A, S> AuthCommandHandler<A, S> {
 impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
     pub async fn dispatch(&self, command: AuthCommand) -> Result<Value, AppError> {
         match command {
-            AuthCommand::Login | AuthCommand::Callback { .. } => Err(AppError::unexpected(
-                "interactive browser login requires the production runtime",
-            )),
+            AuthCommand::Login | AuthCommand::VintedLoginPoc | AuthCommand::Callback { .. } => Err(
+                AppError::unexpected("interactive browser login requires the production runtime"),
+            ),
             AuthCommand::Status => Err(AppError::unexpected(
                 "authentication status requires the production runtime",
             )),

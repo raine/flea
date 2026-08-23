@@ -11,6 +11,7 @@ pub mod runtime;
 pub mod saved_search;
 pub mod search;
 pub mod skill;
+mod vinted_auth;
 
 use clap::{Parser, Subcommand};
 use serde_json::Value;

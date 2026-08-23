@@ -7,3 +7,4 @@ pub mod listings;
 pub mod saved_searches;
 pub mod search;
 pub mod signing;
+pub(crate) mod vinted_auth;

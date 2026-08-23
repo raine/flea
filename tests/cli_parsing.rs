@@ -11,6 +11,7 @@ use flea::{
 fn every_command_leaf_parses() {
     let cases = [
         vec!["flea", "auth", "login"],
+        vec!["flea", "auth", "vinted-login-poc"],
         vec!["flea", "auth", "status"],
         vec!["flea", "auth", "logout"],
         vec!["flea", "category", "search", "chairs"],
