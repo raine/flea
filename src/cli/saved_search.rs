@@ -1,11 +1,12 @@
 use clap::{Args, Subcommand, ValueEnum};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::{
     api::{
         saved_searches::{CreateSavedSearch, SavedSearches, SavedSearchesApi},
         search::PublicSearchApi,
     },
+    cli::outcome::CommandOutcome,
     domain::observation::Observation,
     error::AppError,
 };
@@ -110,7 +111,7 @@ pub async fn dispatch_with_apis(
     args: SavedSearchArgs,
     api: &dyn SavedSearchesApi,
     search_api: &dyn PublicSearchApi,
-) -> Result<Value, AppError> {
+) -> Result<CommandOutcome, AppError> {
     let saved = SavedSearches::new(api);
     match args.command {
         SavedSearchCommand::List { limit } => {
@@ -119,25 +120,26 @@ pub async fn dispatch_with_apis(
             }
             let searches = saved.list(limit).await?;
             let count = searches.len();
-            Ok(json!({
+            Ok(CommandOutcome::new(json!({
                 "saved_searches": searches,
                 "count": count,
-                "_observation": Observation::confirmed_present("saved_search_list", Some(200)),
             }))
+            .with_observation(Observation::confirmed_present(
+                "saved_search_list",
+                Some(200),
+            )))
         }
         SavedSearchCommand::Show { id } => {
             let search = saved.show(&id).await?;
-            let mut value = serde_json::to_value(search).map_err(|error| {
+            let value = serde_json::to_value(search).map_err(|error| {
                 AppError::output("failed to serialize saved search").with_source(error)
             })?;
-            value.as_object_mut().unwrap().insert(
-                "_observation".to_owned(),
-                json!(Observation::confirmed_present(
+            Ok(
+                CommandOutcome::new(value).with_observation(Observation::confirmed_present(
                     "saved_search_show",
-                    Some(200)
+                    Some(200),
                 )),
-            );
-            Ok(value)
+            )
         }
         SavedSearchCommand::Create {
             name,
@@ -187,17 +189,15 @@ pub async fn dispatch_with_apis(
         }
         SavedSearchCommand::Delete { id } => {
             let deleted = saved.delete(&id).await?;
-            let mut value = serde_json::to_value(deleted).map_err(|error| {
+            let value = serde_json::to_value(deleted).map_err(|error| {
                 AppError::output("failed to serialize saved search deletion").with_source(error)
             })?;
-            value.as_object_mut().unwrap().insert(
-                "_observation".to_owned(),
-                json!(Observation::confirmed_absent(
+            Ok(
+                CommandOutcome::new(value).with_observation(Observation::confirmed_absent(
                     "saved_search_show",
-                    Some(200)
+                    Some(200),
                 )),
-            );
-            Ok(value)
+            )
         }
     }
 }
@@ -231,8 +231,8 @@ fn apply_notification(
 fn mutation_value(
     search: crate::api::saved_searches::SavedSearch,
     present: bool,
-) -> Result<Value, AppError> {
-    let mut value = serde_json::to_value(search).map_err(|error| {
+) -> Result<CommandOutcome, AppError> {
+    let value = serde_json::to_value(search).map_err(|error| {
         AppError::output("failed to serialize saved search mutation").with_source(error)
     })?;
     let observation = if present {
@@ -240,9 +240,5 @@ fn mutation_value(
     } else {
         Observation::confirmed_absent("saved_search_show", Some(200))
     };
-    value
-        .as_object_mut()
-        .unwrap()
-        .insert("_observation".to_owned(), json!(observation));
-    Ok(value)
+    Ok(CommandOutcome::new(value).with_observation(observation))
 }
