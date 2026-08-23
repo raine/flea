@@ -12,6 +12,7 @@ use crate::{
             publication::{
                 ListingInput, PublicationOperation, VintedPublication, VintedPublicationApi,
             },
+            readiness::VintedReadinessApi,
             search::VintedSearchSession,
         },
     },
@@ -122,11 +123,24 @@ pub struct DraftCompletionInputArgs {
     pub image: Vec<PathBuf>,
 }
 
+pub async fn execute_readiness(
+    portal: PortalId,
+    session: &dyn VintedSearchSession,
+    readiness_api: &dyn VintedReadinessApi,
+) -> Result<CommandOutcome, AppError> {
+    let credentials = session.credentials(portal)?;
+    let result = readiness_api.readiness(&credentials).await?;
+    Ok(CommandOutcome::new(
+        CommandData::VintedPublicationReadiness(result),
+    ))
+}
+
 pub async fn execute_direct(
     portal: PortalId,
     args: PublicationInputArgs,
     session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationApi,
+    readiness_api: &dyn VintedReadinessApi,
 ) -> Result<CommandOutcome, AppError> {
     execute_operation(
         portal,
@@ -134,6 +148,7 @@ pub async fn execute_direct(
         Some(args),
         session,
         api,
+        readiness_api,
     )
     .await
 }
@@ -144,6 +159,7 @@ pub async fn execute_draft(
     session: &dyn VintedSearchSession,
     publication_api: &dyn VintedPublicationApi,
     draft_api: &dyn VintedDraftApi,
+    readiness_api: &dyn VintedReadinessApi,
 ) -> Result<CommandOutcome, AppError> {
     match command {
         VintedDraftCommand::List { page, limit } => {
@@ -195,7 +211,15 @@ pub async fn execute_draft(
             (PublicationOperation::DeleteDraft { draft_id }, None)
         }
     };
-    execute_operation(portal, operation, values, session, publication_api).await
+    execute_operation(
+        portal,
+        operation,
+        values,
+        session,
+        publication_api,
+        readiness_api,
+    )
+    .await
 }
 
 async fn execute_operation(
@@ -204,12 +228,13 @@ async fn execute_operation(
     values: Option<PublicationInputArgs>,
     session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationApi,
+    readiness_api: &dyn VintedReadinessApi,
 ) -> Result<CommandOutcome, AppError> {
     let (input, images) = match values {
         Some(values) => (Some(read_input(&values.input)?), values.image),
         None => (None, Vec::new()),
     };
-    let result = VintedPublication::new(session, api)
+    let result = VintedPublication::new(session, api, readiness_api)
         .execute(portal, operation, input, images)
         .await?;
     Ok(CommandOutcome::new(CommandData::VintedPublication(result)))

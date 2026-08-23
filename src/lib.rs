@@ -35,6 +35,10 @@ pub mod dependencies {
                     VintedItemApi, VintedItemRequest, VintedItemResult, VintedItemSession,
                     VintedItems,
                 },
+                readiness::{
+                    PrerequisiteCheck, PublicationReadiness, ReadinessState,
+                    SellingPrerequisiteType, SessionReadiness, VintedReadinessApi,
+                },
                 search::{
                     CatalogueSearchRequest, SearchResult as VintedSearchResult, VintedSearchApi,
                 },

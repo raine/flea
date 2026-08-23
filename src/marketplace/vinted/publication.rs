@@ -18,6 +18,7 @@ use crate::{
         vinted::{
             auth::{VintedAuthentication, VintedCredentialRecord},
             binding::VINTED_FI_BINDING,
+            readiness::{PublicationReadiness, VintedReadinessApi, classify_prerequisite},
             search::VintedSearchSession,
         },
     },
@@ -153,11 +154,20 @@ pub trait VintedPublicationApi: Send + Sync {
 pub struct VintedPublication<'a> {
     session: &'a dyn VintedSearchSession,
     api: &'a dyn VintedPublicationApi,
+    readiness_api: &'a dyn VintedReadinessApi,
 }
 
 impl<'a> VintedPublication<'a> {
-    pub fn new(session: &'a dyn VintedSearchSession, api: &'a dyn VintedPublicationApi) -> Self {
-        Self { session, api }
+    pub fn new(
+        session: &'a dyn VintedSearchSession,
+        api: &'a dyn VintedPublicationApi,
+        readiness_api: &'a dyn VintedReadinessApi,
+    ) -> Self {
+        Self {
+            session,
+            api,
+            readiness_api,
+        }
     }
 
     pub async fn execute(
@@ -188,6 +198,11 @@ impl<'a> VintedPublication<'a> {
                 photo_action: None,
                 assigned_photo_ids: Vec::new(),
             });
+        }
+
+        let readiness = self.readiness_api.readiness(&credentials).await?;
+        if readiness.blocked() {
+            return Err(readiness_blocked_error(readiness));
         }
 
         let mut prepared_images = Vec::with_capacity(image_paths.len());
@@ -1027,6 +1042,18 @@ const fn operation_name(operation: &PublicationOperation) -> &'static str {
     }
 }
 
+fn readiness_blocked_error(readiness: PublicationReadiness) -> AppError {
+    let mut error = AppError::validation(
+        "vinted.prerequisite_blocked",
+        "Vinted requires user action before images can be uploaded or a listing can be changed",
+    )
+    .with_details(json!({ "readiness": readiness }));
+    error.next_actions.push(NextAction {
+        command: crate::invocation::vinted_fi("readiness"),
+    });
+    error
+}
+
 fn value_as_id(value: &Value) -> Option<String> {
     value
         .as_str()
@@ -1040,6 +1067,24 @@ fn upstream_error(status: StatusCode, value: &Value, stage: &str) -> AppError {
     let upstream_message = value.get("message").and_then(Value::as_str);
     if upload_session_rejection(status, message_code, upstream_message) {
         return upload_session_rejected();
+    }
+    if let Some(blocker) = classify_prerequisite(value) {
+        let mut error = AppError::validation(
+            "vinted.prerequisite_blocked",
+            "Vinted requires user action before publication can continue",
+        )
+        .with_details(json!({
+            "http_status": status.as_u16(),
+            "prerequisite": blocker.prerequisite_type,
+            "user_action": blocker.user_action,
+            "action_url": blocker.action_url,
+            "response_code": blocker.response_code,
+            "message_code": blocker.message_code
+        }));
+        error.next_actions.push(NextAction {
+            command: crate::invocation::vinted_fi("readiness"),
+        });
+        return error;
     }
     let message = upstream_message.unwrap_or("Vinted rejected the request");
     let gate = message_code.unwrap_or_default().to_ascii_lowercase();
@@ -1205,7 +1250,10 @@ fn publication_error(
         MutationStatus::NotAttempted | MutationStatus::ConfirmedRejected
     ) && (photos.is_empty() || assignments_reusable);
     let (resource, state_explanation) = mutation_state(operation, mutation_status);
+    let blocked = error.code == "vinted.prerequisite_blocked";
     error.partial = Some(Box::new(json!({
+        "operation": operation_name(operation),
+        "draft_id": draft_id(operation),
         "uploaded_photos": photos,
         "uploaded_photo_assignments_reusable": assignments_reusable,
         "mutation_status": mutation_status,
@@ -1213,6 +1261,14 @@ fn publication_error(
             "resource": resource,
             "may_have_changed": mutation_status == MutationStatus::Unknown,
             "explanation": state_explanation
+        },
+        "continuation": if blocked {
+            json!({
+                "readiness_command": crate::invocation::vinted_fi("readiness"),
+                "uploaded_photo_ids_available": assignments_reusable
+            })
+        } else {
+            Value::Null
         }
     })));
     error
@@ -1334,6 +1390,64 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
+
+    use crate::marketplace::vinted::readiness::{
+        PrerequisiteCheck, ReadinessState, SellingPrerequisiteType, SessionReadiness,
+    };
+
+    struct UnknownReadiness;
+
+    impl VintedReadinessApi for UnknownReadiness {
+        fn readiness<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+        ) -> Pin<Box<dyn Future<Output = Result<PublicationReadiness, AppError>> + Send + 'a>>
+        {
+            Box::pin(async { Ok(readiness(ReadinessState::Unknown)) })
+        }
+    }
+
+    static UNKNOWN_READINESS: UnknownReadiness = UnknownReadiness;
+
+    struct SequencedReadiness {
+        calls: AtomicUsize,
+    }
+
+    impl VintedReadinessApi for SequencedReadiness {
+        fn readiness<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+        ) -> Pin<Box<dyn Future<Output = Result<PublicationReadiness, AppError>> + Send + 'a>>
+        {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(readiness(if call == 0 {
+                    ReadinessState::ConfirmedBlocked
+                } else {
+                    ReadinessState::Unknown
+                }))
+            })
+        }
+    }
+
+    fn readiness(status: ReadinessState) -> PublicationReadiness {
+        PublicationReadiness {
+            status,
+            session: SessionReadiness {
+                authenticated: true,
+                status: ReadinessState::ConfirmedReady,
+                health: "valid",
+                validation: "fixture",
+            },
+            prerequisites: vec![PrerequisiteCheck {
+                prerequisite_type: SellingPrerequisiteType::PhoneVerification,
+                status,
+                source: "fixture",
+                user_action: "Complete phone verification in Vinted.".to_owned(),
+                action_url: None,
+            }],
+        }
+    }
 
     struct FixturePublicationApi {
         configurations: Mutex<VecDeque<Value>>,
@@ -1615,12 +1729,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn detectable_blocker_stops_before_image_access_or_upload() {
+        let api = FixturePublicationApi::new([], 0);
+        let readiness_api = SequencedReadiness {
+            calls: AtomicUsize::new(0),
+        };
+        let session = |_: PortalId| Ok(credentials());
+        let error = VintedPublication::new(&session, &api, &readiness_api)
+            .execute(
+                PortalId::Fi,
+                PublicationOperation::Publish,
+                Some(input()),
+                vec![PathBuf::from("missing-image.jpg")],
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "vinted.prerequisite_blocked");
+        assert!(api.uploaded_sessions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn workflow_continues_after_manual_verification() {
+        let (_directory, path) = image_path();
+        let api = FixturePublicationApi::new([json!({"upload_session_id": "server-session"})], 0);
+        let readiness_api = SequencedReadiness {
+            calls: AtomicUsize::new(0),
+        };
+        let session = |_: PortalId| Ok(credentials());
+        let publication = VintedPublication::new(&session, &api, &readiness_api);
+
+        publication
+            .execute(
+                PortalId::Fi,
+                PublicationOperation::Publish,
+                Some(input()),
+                vec![path.clone()],
+            )
+            .await
+            .unwrap_err();
+        let result = publication
+            .execute(
+                PortalId::Fi,
+                PublicationOperation::Publish,
+                Some(input()),
+                vec![path],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.item_id.as_deref(), Some("71"));
+        assert_eq!(api.uploaded_sessions.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn workflow_uses_server_session_for_photos_and_mutation() {
         let (_directory, path) = image_path();
         let api = FixturePublicationApi::new([json!({"upload_session_id": "server-session"})], 0);
         let session = |_: PortalId| Ok(credentials());
 
-        VintedPublication::new(&session, &api)
+        VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
             .execute(
                 PortalId::Fi,
                 PublicationOperation::Publish,
@@ -1646,7 +1814,7 @@ mod tests {
         );
         let session = |_: PortalId| Ok(credentials());
 
-        VintedPublication::new(&session, &api)
+        VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
             .execute(
                 PortalId::Fi,
                 PublicationOperation::Publish,
@@ -1678,7 +1846,7 @@ mod tests {
         );
         let session = |_: PortalId| Ok(credentials());
 
-        let error = VintedPublication::new(&session, &api)
+        let error = VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
             .execute(
                 PortalId::Fi,
                 PublicationOperation::Publish,
@@ -1830,7 +1998,7 @@ mod tests {
     async fn corrected_validation_attempt_reuses_persisted_replacement_without_uploading_again() {
         let api = CompletionApi::new(vec![photo(9)], 1);
         let session = |_| Ok(credentials());
-        let workflow = VintedPublication::new(&session, &api);
+        let workflow = VintedPublication::new(&session, &api, &UNKNOWN_READINESS);
         let (_directory, path) = image_path();
 
         let first = workflow
@@ -1863,7 +2031,7 @@ mod tests {
         let api = CompletionApi::new(vec![photo(9), photo(8)], 0);
         let session = |_| Ok(credentials());
         let (_directory, path) = image_path();
-        let result = VintedPublication::new(&session, &api)
+        let result = VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
             .execute(PortalId::Fi, completion(), Some(input()), vec![path])
             .await
             .unwrap();
@@ -1877,7 +2045,7 @@ mod tests {
     async fn empty_remote_draft_stops_before_final_mutation() {
         let api = CompletionApi::new(Vec::new(), 0);
         let session = |_| Ok(credentials());
-        let error = VintedPublication::new(&session, &api)
+        let error = VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
             .execute(PortalId::Fi, completion(), Some(input()), Vec::new())
             .await
             .unwrap_err();
@@ -1892,7 +2060,7 @@ mod tests {
         let api = CompletionApi::new(vec![photo(9)], 0).rejecting_update();
         let session = |_| Ok(credentials());
         let (_directory, path) = image_path();
-        let error = VintedPublication::new(&session, &api)
+        let error = VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
             .execute(PortalId::Fi, completion(), Some(input()), vec![path])
             .await
             .unwrap_err();
@@ -1998,7 +2166,7 @@ mod tests {
             .unwrap_err(),
         );
 
-        assert_eq!(error.code, "vinted.publication_verification_required");
+        assert_eq!(error.code, "vinted.prerequisite_blocked");
         assert_eq!(
             error.partial.unwrap()["mutation_status"],
             "confirmed_rejected"
@@ -2018,10 +2186,10 @@ mod tests {
             .unwrap_err(),
         );
 
-        assert_eq!(error.code, "vinted.publication_verification_required");
+        assert_eq!(error.code, "vinted.prerequisite_blocked");
         assert_eq!(
             error.next_actions[0].command,
-            crate::invocation::vinted_fi("auth login")
+            crate::invocation::vinted_fi("readiness")
         );
     }
 
@@ -2038,10 +2206,40 @@ mod tests {
             .unwrap_err(),
         );
 
-        assert_eq!(error.code, "vinted.publication_confirmation_required");
+        assert_eq!(error.code, "vinted.prerequisite_blocked");
         assert_eq!(
             error.partial.unwrap()["mutation_status"],
             "confirmed_rejected"
+        );
+    }
+
+    #[test]
+    fn mutation_only_blocker_preserves_draft_and_uploaded_photo_context() {
+        let photo = UploadedPhoto {
+            id: 91,
+            orientation: 0,
+            width: 1,
+            height: 1,
+        };
+        let error = classify_mutation_error(
+            upstream_error(
+                StatusCode::BAD_REQUEST,
+                &json!({"code": 168, "message": "Phone verification required"}),
+                "publication",
+            ),
+            &PublicationOperation::UpdateDraft {
+                draft_id: "42".to_owned(),
+            },
+            &[photo],
+        );
+        let partial = error.partial.unwrap();
+
+        assert_eq!(error.code, "vinted.prerequisite_blocked");
+        assert_eq!(partial["draft_id"], "42");
+        assert_eq!(partial["uploaded_photos"][0]["id"], 91);
+        assert_eq!(
+            partial["continuation"]["readiness_command"],
+            "flea vinted --portal fi readiness"
         );
     }
 

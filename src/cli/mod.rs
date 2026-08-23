@@ -237,6 +237,11 @@ pub enum VintedCommand {
     )]
     Category(vinted_category::VintedCategoryArgs),
     #[command(
+        about = "Check Vinted publication readiness",
+        long_about = "Validate the authenticated session and report selling prerequisites that Vinted exposes without uploading images or mutating a listing. Verification remains a manual user action in Vinted."
+    )]
+    Readiness,
+    #[command(
         about = "Manage Vinted drafts",
         long_about = "List, inspect, validate, create, replace, publish, or delete authoritative Vinted drafts."
     )]
@@ -259,7 +264,7 @@ impl VintedCommand {
             Self::Search(_) => CapabilityId::Search,
             Self::Item(_) => CapabilityId::ItemShow,
             Self::Category(_) => CapabilityId::Category,
-            Self::Draft(_) | Self::Publish(_) => CapabilityId::Draft,
+            Self::Readiness | Self::Draft(_) | Self::Publish(_) => CapabilityId::Draft,
         })
     }
 
@@ -270,6 +275,7 @@ impl VintedCommand {
             Self::Search(_) => "vinted search".to_owned(),
             Self::Item(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Category(args) => format!("vinted {}", args.command.telemetry_name()),
+            Self::Readiness => "vinted readiness".to_owned(),
             Self::Draft(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Publish(_) => "vinted publish".to_owned(),
             Self::Unsupported(_) => "unknown".to_owned(),
@@ -409,6 +415,7 @@ mod tests {
             ),
             (&["vinted", "search", "private query"], "vinted search"),
             (&["vinted", "item", "show", "123"], "vinted item show"),
+            (&["vinted", "readiness"], "vinted readiness"),
             (&["vinted", "draft", "list"], "vinted draft list"),
             (&["vinted", "draft", "show", "123"], "vinted draft show"),
             (

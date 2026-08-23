@@ -149,6 +149,7 @@ flea vinted category compose CATEGORY_ID
 flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted category attributes --input selections.json
 flea vinted category package-sizes CATEGORY_ID
+flea vinted readiness
 flea vinted draft list --page 1 --limit 20
 flea vinted draft show DRAFT_ID
 flea vinted draft validate DRAFT_ID
@@ -183,6 +184,14 @@ editable state and reports photo IDs in display order. Validation separates
 field schema blockers, upstream validation errors, and account prerequisites.
 Draft updates replace the complete image assignment. Draft completion reuses
 remote photos unless `--image` supplies a complete replacement set.
+
+Run `flea vinted readiness` before publication. It validates the authenticated
+session and classifies every selling prerequisite Vinted exposes as
+`confirmed_ready`, `confirmed_blocked`, or `unknown`. Detectable blockers stop
+publication before image upload. Phone, email, identity, and two-factor checks
+remain manual actions in Vinted. When a prerequisite appears only in a mutation
+response, Flea returns the draft ID and uploaded photo metadata as continuation
+context together with the safe user action or Vinted URL.
 
 Run command help for current syntax and constraints:
 

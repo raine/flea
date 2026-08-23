@@ -34,6 +34,7 @@ use crate::{
             publication_discovery::{
                 HttpVintedPublicationDiscoveryApi, VintedPublicationDiscoveryApi,
             },
+            readiness::{HttpVintedReadinessApi, VintedReadinessApi},
             search::{
                 HttpVintedSearchApi, SearchResult as VintedSearchResult, VintedSearch,
                 VintedSearchApi, VintedSearchSession,
@@ -67,6 +68,7 @@ pub struct ApplicationDependencies {
     vinted_draft: Arc<dyn VintedDraftApi>,
     vinted_publication: Arc<dyn VintedPublicationApi>,
     vinted_publication_discovery: Arc<dyn VintedPublicationDiscoveryApi>,
+    vinted_readiness: Arc<dyn VintedReadinessApi>,
 }
 
 impl ApplicationDependencies {
@@ -89,6 +91,7 @@ impl ApplicationDependencies {
             vinted_draft: Arc::new(HttpVintedDraftApi::new()),
             vinted_publication: Arc::new(HttpVintedPublicationApi::new()),
             vinted_publication_discovery: Arc::new(HttpVintedPublicationDiscoveryApi::new()),
+            vinted_readiness: Arc::new(HttpVintedReadinessApi::new()),
         }
     }
 
@@ -155,6 +158,11 @@ impl ApplicationDependencies {
         api: Arc<dyn VintedPublicationDiscoveryApi>,
     ) -> Self {
         self.vinted_publication_discovery = api;
+        self
+    }
+
+    pub fn with_vinted_readiness_api(mut self, api: Arc<dyn VintedReadinessApi>) -> Self {
+        self.vinted_readiness = api;
         self
     }
 
@@ -296,6 +304,14 @@ async fn execute_vinted(
             )
             .await
         }
+        VintedCommand::Readiness => {
+            vinted_publish::execute_readiness(
+                portal,
+                dependencies.vinted_search_session.as_ref(),
+                dependencies.vinted_readiness.as_ref(),
+            )
+            .await
+        }
         VintedCommand::Draft(args) => {
             vinted_publish::execute_draft(
                 portal,
@@ -303,6 +319,7 @@ async fn execute_vinted(
                 dependencies.vinted_search_session.as_ref(),
                 dependencies.vinted_publication.as_ref(),
                 dependencies.vinted_draft.as_ref(),
+                dependencies.vinted_readiness.as_ref(),
             )
             .await
         }
@@ -312,6 +329,7 @@ async fn execute_vinted(
                 args,
                 dependencies.vinted_search_session.as_ref(),
                 dependencies.vinted_publication.as_ref(),
+                dependencies.vinted_readiness.as_ref(),
             )
             .await
         }
