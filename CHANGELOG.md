@@ -1,12 +1,18 @@
 # Changelog
 
-## Unreleased
+## v0.1.2 (2026-08-23)
 
-- Favorites folders and saved status can be inspected, and marketplace listings
-  can be saved to or removed from the default or an explicitly selected folder
-- Saved searches can be listed and inspected, created from public-search filters,
-  renamed, have email, push, or notification-center alerts toggled, and deleted
-  with read-only recovery after uncertain mutations
+- New `flea favorite` commands list favorites folders, check whether a listing
+  is saved, and save or remove a listing in the default or a chosen folder
+- New `flea saved-search` commands list, inspect, rename, and delete search
+  alerts
+- Search alerts can be created with the same query and filter arguments as
+  `flea search`
+- Email, push, and notification-center alerts can be switched on or off per
+  saved search, leaving untouched channels as they are
+- A failed saved-search change reports a read-only recovery command and only
+  calls the change safe to retry once a recovery read confirms it did not take
+  effect
 
 ## v0.1.1 (2026-08-22)
 
