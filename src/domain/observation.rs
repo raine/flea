@@ -3,6 +3,47 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::retry::RetryClassification;
 
+/// Semantic identifier for an authoritative remote-state observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationSource {
+    AuthenticatedListingCollection,
+    CategoryTaxonomy,
+    DeliveryComposer,
+    DraftCategoryPredictions,
+    DraftCreation,
+    DraftDetail,
+    DraftService,
+    ListingCopyEligibility,
+    ListingDetail,
+    PublicationConfirmation,
+    PublicationProductContext,
+}
+
+impl ObservationSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthenticatedListingCollection => "authenticated_listing_collection",
+            Self::CategoryTaxonomy => "category_taxonomy",
+            Self::DeliveryComposer => "delivery_composer",
+            Self::DraftCategoryPredictions => "draft_category_predictions",
+            Self::DraftCreation => "draft_creation",
+            Self::DraftDetail => "draft_detail",
+            Self::DraftService => "draft_service",
+            Self::ListingCopyEligibility => "listing_copy_eligibility",
+            Self::ListingDetail => "listing_detail",
+            Self::PublicationConfirmation => "publication_confirmation",
+            Self::PublicationProductContext => "publication_product_context",
+        }
+    }
+}
+
+impl From<ObservationSource> for String {
+    fn from(source: ObservationSource) -> Self {
+        source.as_str().to_owned()
+    }
+}
+
 /// Stable classification of an attempt to observe remote state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -197,6 +238,47 @@ pub fn observation_timestamp() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn observation_sources_serialize_to_stable_snake_case_values() {
+        let cases = [
+            (
+                ObservationSource::AuthenticatedListingCollection,
+                "authenticated_listing_collection",
+            ),
+            (ObservationSource::CategoryTaxonomy, "category_taxonomy"),
+            (ObservationSource::DeliveryComposer, "delivery_composer"),
+            (
+                ObservationSource::DraftCategoryPredictions,
+                "draft_category_predictions",
+            ),
+            (ObservationSource::DraftCreation, "draft_creation"),
+            (ObservationSource::DraftDetail, "draft_detail"),
+            (ObservationSource::DraftService, "draft_service"),
+            (
+                ObservationSource::ListingCopyEligibility,
+                "listing_copy_eligibility",
+            ),
+            (ObservationSource::ListingDetail, "listing_detail"),
+            (
+                ObservationSource::PublicationConfirmation,
+                "publication_confirmation",
+            ),
+            (
+                ObservationSource::PublicationProductContext,
+                "publication_product_context",
+            ),
+        ];
+
+        for (source, expected) in cases {
+            assert_eq!(serde_json::to_value(source).unwrap(), expected);
+            assert_eq!(source.as_str(), expected);
+            assert_eq!(
+                serde_json::from_value::<ObservationSource>(expected.into()).unwrap(),
+                source
+            );
+        }
+    }
 
     #[test]
     fn retry_classification_depends_on_state_and_operation() {
