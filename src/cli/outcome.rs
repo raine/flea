@@ -2,11 +2,11 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::marketplace::tori::adinput::{
-    AddImagesResult, CreateResult, DraftPreviewOutput, DraftState, PublicationValidation,
-    PublishResult, UpdateResult,
+    AddImagesResult, CreateResult, DraftDeleteOutput, DraftInspectionOutput, DraftPreviewOutput,
+    DraftState, PublicationValidation, PublishResult, UpdateResult,
 };
 use crate::{
-    cli::{draft::DraftInspectionOutput, skill::SkillOutput},
+    cli::skill::SkillOutput,
     domain::{
         envelope::{NextAction, Warning},
         item::PublicItemDetail,
@@ -65,12 +65,6 @@ pub struct FavoriteFoldersOutput {
 pub struct SavedSearchListOutput {
     pub saved_searches: Vec<SavedSearch>,
     pub count: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DraftDeleteOutput {
-    pub draft_id: String,
-    pub deleted: bool,
 }
 
 #[derive(Debug, Serialize)]

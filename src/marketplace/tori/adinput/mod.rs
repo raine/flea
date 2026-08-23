@@ -1,16 +1,21 @@
 mod adapter;
 mod delivery;
+mod execution;
 mod fields;
 mod http;
 mod images;
 mod input;
 mod normalization;
+mod presentation;
 mod recovery;
 mod types;
 mod validation;
 mod workflow;
 
 pub use adapter::{AdInputApi, HttpAdInputApi};
+pub use execution::{
+    DraftDeleteOutput, DraftExecution, DraftRequest, DraftResult, DraftResultData,
+};
 pub use http::{
     ApiError, ClientTransport, HttpRequest, HttpResponse, HttpTransport, Method, RequestBody,
     RetryPolicy,
@@ -19,6 +24,7 @@ pub use images::{PreparedImage, normalize_category, prepare_image};
 pub use input::{
     DraftInput, DraftPreviewOutput, DraftPreviewResult, PreparedDraftInput, prepare, preview,
 };
+pub use presentation::{DraftInspectionOutput, draft_inspection};
 pub(crate) use recovery::completed_steps_have_mutation;
 pub use recovery::{
     AddImagesResult, AttachmentRecoveryStatus, CreateRecoveryContract, CreateResult, FieldRecovery,

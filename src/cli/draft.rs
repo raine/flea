@@ -13,18 +13,11 @@ use serde::{
 use serde_json::{Map, Value, json};
 
 use crate::{
-    cli::outcome::{CommandData, CommandOutcome, DraftDeleteOutput},
-    domain::{
-        envelope::{NextAction, Warning},
-        field::{Field, FieldStatus},
-        observation::Observation,
-    },
+    cli::outcome::{CommandData, CommandOutcome},
     error::{AppError, ExitClass},
     marketplace::tori::adinput::{
-        AdInputApi, CategoryPrediction, CategoryValidation, DeliveryOption, DraftDelivery,
-        DraftImage, DraftInput, DraftState, DraftWorkflow, FieldOption, PublicationRequirement,
-        PublicationValidation, ValidationEvidenceFailure, WorkflowConfig, WorkflowError,
-        WorkflowWarning, completed_steps_have_mutation, prepare, preview,
+        AdInputApi, DraftExecution, DraftInput, DraftRequest, DraftResultData, WorkflowConfig,
+        preview,
     },
     marketplace::tori::listings::TaxonomyApi,
 };
@@ -187,67 +180,6 @@ impl DraftCommand {
             Self::Delete { .. } => "draft delete",
         }
     }
-}
-
-#[derive(Debug, Serialize)]
-pub struct DraftInspectionOutput {
-    draft_id: String,
-    etag: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    revision: Option<String>,
-    values: Map<String, Value>,
-    ready: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    missing: Vec<PublicationRequirement>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    invalid: Vec<PublicationRequirement>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pending: Vec<PublicationRequirement>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    indeterminate: Vec<PublicationRequirement>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    evidence_failures: Vec<ValidationEvidenceFailure>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    category: Option<CategoryValidation>,
-    images: Vec<DraftImage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    delivery: Option<SelectedDelivery>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    cleared_fields: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    category_predictions: Vec<CategoryPrediction>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    option_sets: Vec<OptionSetSummary>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fields: Option<Vec<Field>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    options: Option<Vec<FieldOption>>,
-    #[serde(skip)]
-    next_actions: Vec<NextAction>,
-}
-
-#[derive(Debug, Serialize)]
-struct SelectedDelivery {
-    available: bool,
-    selected: Vec<String>,
-    selected_options: Vec<DeliveryOption>,
-    option_count: usize,
-    options_returned: usize,
-    options_truncated: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    unavailable_reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct OptionSetSummary {
-    field: String,
-    option_count: usize,
-    options_returned: usize,
-    options_truncated: bool,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    allowed_values: Vec<FieldOption>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    discovery_command: Option<String>,
 }
 
 #[derive(Debug, Args, Serialize)]
@@ -582,134 +514,6 @@ fn input_error(message: impl Into<String>) -> AppError {
     error
 }
 
-fn draft_inspection(
-    state: DraftState,
-    validation: PublicationValidation,
-    include_fields: bool,
-    include_options: Option<&str>,
-) -> Result<DraftInspectionOutput, AppError> {
-    const INLINE_ALLOWED_VALUES: usize = 12;
-
-    if let Some(field) = include_options.filter(|field| *field != "*")
-        && !state.fields.iter().any(|candidate| candidate.key == field)
-    {
-        return Err(input_error(format!(
-            "--include-options field `{field}` is absent from the draft schema"
-        )));
-    }
-
-    let mut option_sets = state
-        .fields
-        .iter()
-        .filter(|field| field.option_count > 0)
-        .map(|field| {
-            let relevant = matches!(field.status, FieldStatus::Missing | FieldStatus::Invalid);
-            let small = field.option_count <= INLINE_ALLOWED_VALUES && !field.options_truncated;
-            let allowed_values = if relevant && small {
-                state
-                    .options
-                    .iter()
-                    .filter(|option| option.field == field.key)
-                    .cloned()
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            OptionSetSummary {
-                field: field.key.clone(),
-                option_count: field.option_count,
-                options_returned: field.options_returned,
-                options_truncated: field.options_truncated,
-                allowed_values,
-                discovery_command: (relevant && !small).then(|| {
-                    if field.key == "category" {
-                        "flea tori category search QUERY".to_owned()
-                    } else {
-                        format!(
-                            "flea tori draft show {} --include-options {}",
-                            state.draft_id, field.key
-                        )
-                    }
-                }),
-            }
-        })
-        .collect::<Vec<_>>();
-    option_sets.sort_by(|left, right| left.field.cmp(&right.field));
-
-    let delivery = state.delivery.as_ref().map(selected_delivery);
-    let options = include_options.map(|field| {
-        state
-            .options
-            .iter()
-            .filter(|option| field == "*" || option.field == field)
-            .cloned()
-            .collect::<Vec<_>>()
-    });
-    let mut commands = validation
-        .missing
-        .iter()
-        .chain(&validation.invalid)
-        .chain(&validation.pending)
-        .chain(&validation.unverifiable)
-        .map(|requirement| requirement.command.clone())
-        .chain(
-            validation
-                .evidence_failures
-                .iter()
-                .map(|failure| failure.command.clone()),
-        )
-        .collect::<std::collections::BTreeSet<_>>();
-    if validation.ready {
-        commands.insert(format!(
-            "flea tori draft publish {} --if-revision {}",
-            state.draft_id, validation.revision
-        ));
-    }
-
-    Ok(DraftInspectionOutput {
-        draft_id: state.draft_id,
-        etag: state.etag,
-        revision: state.revision,
-        values: state.values,
-        ready: validation.ready,
-        missing: validation.missing,
-        invalid: validation.invalid,
-        pending: validation.pending,
-        indeterminate: validation.unverifiable,
-        evidence_failures: validation.evidence_failures,
-        category: validation.category_validation,
-        images: state.images,
-        delivery,
-        cleared_fields: state.cleared_fields,
-        category_predictions: state.predictions,
-        option_sets,
-        fields: include_fields.then_some(state.fields),
-        options,
-        next_actions: commands
-            .into_iter()
-            .map(|command| NextAction { command })
-            .collect(),
-    })
-}
-
-fn selected_delivery(delivery: &DraftDelivery) -> SelectedDelivery {
-    let selected_options = delivery
-        .options
-        .iter()
-        .filter(|option| delivery.selected.contains(&option.value))
-        .cloned()
-        .collect();
-    SelectedDelivery {
-        available: delivery.available,
-        selected: delivery.selected.clone(),
-        selected_options,
-        option_count: delivery.option_count,
-        options_returned: delivery.options_returned,
-        options_truncated: delivery.options_truncated,
-        unavailable_reason: delivery.unavailable_reason.clone(),
-    }
-}
-
 pub async fn execute_preview(
     command: DraftCommand,
     taxonomy: Option<&dyn TaxonomyApi>,
@@ -738,306 +542,69 @@ pub async fn execute<A: AdInputApi>(
     if matches!(&command, DraftCommand::Preview { .. }) {
         return execute_preview(command, None).await;
     }
-    let confirms_absence = matches!(&command, DraftCommand::Delete { .. });
-    let mut observation_source = match &command {
-        DraftCommand::Show { .. } => "draft_detail",
-        DraftCommand::Validate { .. } => "draft_validation",
-        DraftCommand::Publish { .. } => "listing_detail",
-        DraftCommand::Image(_) => "draft_images",
-        DraftCommand::Create { .. } => "draft_creation_response",
-        DraftCommand::Update { .. } => "draft_update_response",
-        DraftCommand::Delete { .. } => "draft_delete_response",
-        DraftCommand::Preview { .. } => unreachable!(),
-    };
-    let workflow = DraftWorkflow::new(api, config);
-    let (data, warnings, next_actions) = match command {
+    let request = match command {
         DraftCommand::Create {
             from_listing: Some(listing_id),
             ..
-        } => {
-            let mut result = workflow
-                .create_from_listing(&listing_id)
-                .await
-                .map_err(workflow_error)?;
-            normalize_draft_state(&mut result.draft);
-            let warnings = output_warnings(&result.warnings);
-            (CommandData::DraftCreate(result), warnings, Vec::new())
-        }
+        } => DraftRequest::CreateFromListing { listing_id },
         DraftCommand::Create {
             from_listing: None,
             values,
-        } => {
-            let input = prepare(collect_input(values)?, true)?;
-            let mut result = workflow
-                .create_prepared(input.values, input.images)
-                .await
-                .map_err(workflow_error)?;
-            normalize_draft_state(&mut result.draft);
-            let warnings = output_warnings(&result.warnings);
-            (CommandData::DraftCreate(result), warnings, Vec::new())
-        }
-        DraftCommand::Preview { .. } => {
-            unreachable!("preview returns before authenticated workflow construction")
-        }
+        } => DraftRequest::Create {
+            input: collect_input(values)?,
+        },
+        DraftCommand::Preview { .. } => unreachable!("preview handled before draft execution"),
         DraftCommand::Show {
             draft_id,
             include_fields,
             include_options,
-        } => {
-            let (state, validation) = workflow
-                .inspect(&draft_id, include_options.is_some())
-                .await
-                .map_err(workflow_error)?;
-            let mut inspection = draft_inspection(
-                state,
-                validation,
-                include_fields,
-                include_options.as_deref(),
-            )?;
-            crate::domain::commerce::normalize_commerce_map(&mut inspection.values);
-            let next_actions = std::mem::take(&mut inspection.next_actions);
-            (
-                CommandData::DraftInspection(inspection),
-                Vec::new(),
-                next_actions,
-            )
-        }
-        DraftCommand::Update { draft_id, values } => {
-            let input = collect_input(values)?;
-            if !input.image_paths.is_empty() {
-                return Err(input_error(
-                    "draft update does not accept images; use `draft image add`",
-                ));
-            }
-            let input = prepare(input, false)?;
-            let mut result = workflow
-                .update(&draft_id, &input.values)
-                .await
-                .map_err(workflow_error)?;
-            normalize_draft_state(&mut result.draft);
-            let warnings = output_warnings(&result.warnings);
-            (CommandData::DraftUpdate(result), warnings, Vec::new())
-        }
+        } => DraftRequest::Show {
+            draft_id,
+            include_fields,
+            include_options,
+        },
+        DraftCommand::Update { draft_id, values } => DraftRequest::Update {
+            draft_id,
+            input: collect_input(values)?,
+        },
         DraftCommand::Image(ImageArgs {
             command: ImageCommand::Add { draft_id, paths },
-        }) => {
-            let mut result = workflow
-                .add_images(&draft_id, &paths)
-                .await
-                .map_err(workflow_error)?;
-            normalize_draft_state(&mut result.draft);
-            let warnings = output_warnings(&result.warnings);
-            (CommandData::DraftAddImages(result), warnings, Vec::new())
-        }
+        }) => DraftRequest::AddImages { draft_id, paths },
         DraftCommand::Image(ImageArgs {
             command:
                 ImageCommand::Remove {
                     draft_id,
                     image_ids,
                 },
-        }) => {
-            let mut result = workflow
-                .remove_images(&draft_id, &image_ids)
-                .await
-                .map_err(workflow_error)?;
-            normalize_draft_state(&mut result);
-            (CommandData::DraftState(result), Vec::new(), Vec::new())
-        }
-        DraftCommand::Validate { draft_id } => (
-            CommandData::DraftValidation(
-                workflow.validate(&draft_id).await.map_err(workflow_error)?,
-            ),
-            Vec::new(),
-            Vec::new(),
-        ),
+        }) => DraftRequest::RemoveImages {
+            draft_id,
+            image_ids,
+        },
+        DraftCommand::Validate { draft_id } => DraftRequest::Validate { draft_id },
         DraftCommand::Publish {
             draft_id,
             if_revision,
-        } => {
-            let mut result = workflow
-                .publish(&draft_id, &if_revision)
-                .await
-                .map_err(workflow_error)?;
-            normalize_observed_listing_output(&mut result.observed_listing);
-            let warnings = output_warnings(&result.warnings);
-            (CommandData::DraftPublish(result), warnings, Vec::new())
-        }
-        DraftCommand::Delete { draft_id } => {
-            workflow.delete(&draft_id).await.map_err(workflow_error)?;
-            (
-                CommandData::DraftDelete(DraftDeleteOutput {
-                    draft_id,
-                    deleted: true,
-                }),
-                Vec::new(),
-                Vec::new(),
-            )
-        }
+        } => DraftRequest::Publish {
+            draft_id,
+            if_revision,
+        },
+        DraftCommand::Delete { draft_id } => DraftRequest::Delete { draft_id },
     };
-    let reconciled = warnings.iter().any(|warning| {
-        matches!(
-            warning.code.as_str(),
-            "mutation.response_model_drift" | "mutation.observed_success"
-        )
-    });
-    if reconciled
-        && matches!(
-            observation_source,
-            "draft_creation_response" | "draft_update_response"
-        )
-    {
-        observation_source = "draft_detail";
-    }
-    let observation = if confirms_absence {
-        Observation::confirmed_absent(observation_source, None)
-    } else {
-        Observation::confirmed_present(observation_source, None)
+    let result = DraftExecution::new(api, config).execute(request).await?;
+    let data = match result.data {
+        DraftResultData::Create(value) => CommandData::DraftCreate(value),
+        DraftResultData::Inspection(value) => CommandData::DraftInspection(value),
+        DraftResultData::Update(value) => CommandData::DraftUpdate(value),
+        DraftResultData::AddImages(value) => CommandData::DraftAddImages(value),
+        DraftResultData::State(value) => CommandData::DraftState(value),
+        DraftResultData::Validation(value) => CommandData::DraftValidation(value),
+        DraftResultData::Publish(value) => CommandData::DraftPublish(value),
+        DraftResultData::Delete(value) => CommandData::DraftDelete(value),
     };
     Ok(CommandOutcome::new(data)
-        .with_warnings(warnings)
-        .with_next_actions(next_actions)
-        .with_observation(observation))
-}
-
-fn output_warnings(warnings: &[WorkflowWarning]) -> Vec<Warning> {
-    warnings
-        .iter()
-        .map(|warning| Warning {
-            code: warning.code.to_owned(),
-            message: warning.message.clone(),
-        })
-        .collect()
-}
-
-fn normalize_draft_state(state: &mut DraftState) {
-    crate::domain::commerce::normalize_commerce_map(&mut state.values);
-}
-
-fn normalize_observed_listing_output(value: &mut Value) {
-    let Some(observed) = value.as_object_mut() else {
-        return;
-    };
-    let fields = observed
-        .get("fields")
-        .or_else(|| observed.get("values"))
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_else(|| observed.clone());
-    let (trade_type, price) = crate::domain::commerce::normalize_commerce_fields(&fields);
-    observed.insert(
-        "trade_type".to_owned(),
-        serde_json::to_value(trade_type).expect("trade type serializes"),
-    );
-    observed.insert(
-        "price".to_owned(),
-        serde_json::to_value(price).expect("price serializes"),
-    );
-    if let Some(Value::Object(fields)) = observed.get_mut("fields") {
-        for key in [
-            "price",
-            "price_amount",
-            "priceAmount",
-            "currency",
-            "currencyCode",
-            "currency_code",
-            "trade_type",
-            "tradeType",
-            "adViewTypeLabel",
-            "subtitle",
-        ] {
-            fields.remove(key);
-        }
-    }
-}
-
-fn workflow_error(error: WorkflowError) -> AppError {
-    let mutation_was_attempted = error.source.as_ref().is_some_and(|source| {
-        source
-            .details
-            .as_deref()
-            .and_then(|details| details.get("stage"))
-            .and_then(Value::as_str)
-            == Some("apply_price")
-    });
-    let has_remote_mutation = error
-        .recovery
-        .as_ref()
-        .is_some_and(|recovery| completed_steps_have_mutation(&recovery.completed_steps));
-    let exit_class = match error.code.as_str() {
-        "draft.conflict" if has_remote_mutation => ExitClass::Partial,
-        "draft.conflict" | "draft.revision_conflict" => ExitClass::Conflict,
-        "draft.validation_failed" if has_remote_mutation => ExitClass::Partial,
-        "draft.validation_failed"
-        | "listing.not_copyable"
-        | "draft.invalid_delivery"
-        | "draft.delivery_options_unavailable"
-        | "draft.invalid_image"
-        | "draft.invalid_price"
-        | "draft.price_trade_type_conflict" => ExitClass::Validation,
-        "draft.image_processing" | "mutation.uncertain" => ExitClass::Partial,
-        _ if has_remote_mutation || mutation_was_attempted => ExitClass::Partial,
-        code if code.starts_with("draft.image_") || code.starts_with("draft.heic_") => {
-            ExitClass::Validation
-        }
-        _ => ExitClass::Upstream,
-    };
-    let classification = error
-        .recovery
-        .as_ref()
-        .map(|recovery| (recovery.upstream_transient, recovery.safe_to_retry))
-        .or_else(|| {
-            error
-                .source
-                .as_ref()
-                .map(|source| (source.upstream_transient, source.safe_to_retry))
-        })
-        .unwrap_or((false, false));
-    let next_actions = error
-        .recovery
-        .as_ref()
-        .map(|recovery| {
-            recovery
-                .next_safe_actions
-                .iter()
-                .cloned()
-                .map(|command| NextAction { command })
-                .collect()
-        })
-        .unwrap_or_default();
-    let partial = error
-        .recovery
-        .as_ref()
-        .and_then(|recovery| serde_json::to_value(recovery).ok());
-    let mut app = AppError::new(error.code, error.message, exit_class);
-    app.upstream_transient = classification.0;
-    app.safe_to_retry = classification.1;
-    app.observation = error
-        .source
-        .as_ref()
-        .and_then(|source| source.observation.clone())
-        .or_else(|| {
-            error.recovery.as_ref().map(|recovery| Observation {
-                state: recovery.observation.state,
-                source: recovery.observation.source.clone(),
-                observed_at: recovery
-                    .observation
-                    .observed_at
-                    .clone()
-                    .unwrap_or_else(crate::domain::observation::observation_timestamp),
-                status_evidence: recovery.observation.status_evidence.clone(),
-            })
-        });
-    app.details = error
-        .details
-        .or_else(|| {
-            error
-                .source
-                .and_then(|source| source.details.map(|details| *details))
-        })
-        .map(Box::new);
-    app.partial = partial.map(Box::new);
-    app.next_actions = next_actions;
-    app
+        .with_warnings(result.warnings)
+        .with_next_actions(result.next_actions)
+        .with_observation(result.observation))
 }
 
 #[cfg(test)]
