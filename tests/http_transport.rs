@@ -1,6 +1,9 @@
 use std::{
     collections::VecDeque,
+    io::{Read, Write},
+    net::TcpListener,
     sync::{Arc, Mutex},
+    thread,
     time::Duration,
 };
 
@@ -66,6 +69,90 @@ fn client(transport: FixtureTransport) -> HttpClient<FixtureTransport> {
         Some("bearer-fixture-secret".to_owned()),
         transport,
     )
+}
+
+fn transport_request(
+    url: String,
+    deadline: Duration,
+    max_response_bytes: usize,
+) -> TransportRequest {
+    TransportRequest {
+        method: Method::GET,
+        url,
+        path_and_query: "/policy".to_owned(),
+        headers: HeaderMap::new(),
+        body: RequestBody::Empty,
+        deadline,
+        max_response_bytes,
+    }
+}
+
+fn serve_once(
+    handler: impl FnOnce(std::net::TcpStream) + Send + 'static,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/policy", listener.local_addr().unwrap());
+    let worker = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request).unwrap();
+        handler(stream);
+    });
+    (url, worker)
+}
+
+#[tokio::test]
+async fn reqwest_transport_does_not_follow_redirects() {
+    let (url, worker) = serve_once(|mut stream| {
+        stream
+            .write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/followed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .unwrap();
+    });
+
+    let response = flea::marketplace::tori::client::ReqwestTransport::default()
+        .execute(transport_request(url, Duration::from_secs(1), 1024))
+        .await
+        .unwrap();
+    worker.join().unwrap();
+
+    assert_eq!(response.status, StatusCode::FOUND);
+    assert_eq!(response.headers["location"], "http://127.0.0.1:1/followed");
+}
+
+#[tokio::test]
+async fn reqwest_transport_enforces_deadlines() {
+    let (url, worker) = serve_once(|mut stream| {
+        thread::sleep(Duration::from_millis(100));
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+    });
+
+    let error = flea::marketplace::tori::client::ReqwestTransport::default()
+        .execute(transport_request(url, Duration::from_millis(10), 1024))
+        .await
+        .unwrap_err();
+    worker.join().unwrap();
+
+    assert_eq!(error.kind, TransportErrorKind::Timeout);
+}
+
+#[tokio::test]
+async fn reqwest_transport_bounds_streamed_responses_without_content_length() {
+    let (url, worker) = serve_once(|mut stream| {
+        let _ = stream.write_all(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n4\r\n1234\r\n4\r\n5678\r\n0\r\n\r\n",
+        );
+    });
+
+    let error = flea::marketplace::tori::client::ReqwestTransport::default()
+        .execute(transport_request(url, Duration::from_secs(1), 7))
+        .await
+        .unwrap_err();
+    worker.join().unwrap();
+
+    assert_eq!(error.kind, TransportErrorKind::Other);
 }
 
 #[tokio::test]
