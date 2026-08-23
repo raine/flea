@@ -684,6 +684,11 @@ fn transport_request(
 }
 
 fn token_execution_error(error: TransportError) -> AppError {
+    if let Some(status) = error.status
+        && let Err(status_error) = ensure_token_success(status)
+    {
+        return status_error;
+    }
     if error.phase == TransportErrorPhase::Response {
         unexpected_response("token_exchange").with_source(error)
     } else {
@@ -692,6 +697,11 @@ fn token_execution_error(error: TransportError) -> AppError {
 }
 
 fn validation_execution_error(error: TransportError) -> AppError {
+    if let Some(status) = error.status
+        && let Err(status_error) = ensure_validation_success(status)
+    {
+        return status_error;
+    }
     if error.phase == TransportErrorPhase::Response {
         unexpected_response("current_user").with_source(error)
     } else {
@@ -1017,6 +1027,16 @@ mod tests {
         for secret in ["access-secret", "refresh-secret", "device-token-secret"] {
             assert!(!debug.contains(secret));
         }
+    }
+
+    #[test]
+    fn bounded_error_responses_preserve_protocol_status_classification() {
+        let error = token_execution_error(TransportError::response(
+            TransportErrorKind::ResponseTooLarge,
+            StatusCode::BAD_REQUEST,
+        ));
+
+        assert_eq!(error.code, "vinted_auth.exchange_rejected");
     }
 
     #[test]

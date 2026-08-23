@@ -424,6 +424,11 @@ fn transport_error(error: TransportError) -> AppError {
 }
 
 fn execution_error(error: TransportError) -> AppError {
+    if let Some(status) = error.status
+        && !status.is_success()
+    {
+        return status_error(status);
+    }
     if error.kind == TransportErrorKind::ResponseTooLarge {
         unexpected_response("response exceeded the size limit")
     } else {
@@ -643,6 +648,16 @@ mod tests {
             validate_request(&request).unwrap_err().exit_class,
             ExitClass::Usage
         );
+    }
+
+    #[test]
+    fn bounded_error_responses_preserve_protocol_status_classification() {
+        let error = execution_error(TransportError::response(
+            TransportErrorKind::ResponseTooLarge,
+            StatusCode::UNAUTHORIZED,
+        ));
+
+        assert_eq!(error.code, "vinted_search.authentication_required");
     }
 
     #[test]

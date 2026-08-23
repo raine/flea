@@ -140,6 +140,7 @@ pub enum TransportErrorPhase {
 pub struct TransportError {
     pub kind: TransportErrorKind,
     pub phase: TransportErrorPhase,
+    pub status: Option<StatusCode>,
 }
 
 impl TransportError {
@@ -147,13 +148,15 @@ impl TransportError {
         Self {
             kind,
             phase: TransportErrorPhase::Request,
+            status: None,
         }
     }
 
-    pub const fn response(kind: TransportErrorKind) -> Self {
+    pub const fn response(kind: TransportErrorKind, status: StatusCode) -> Self {
         Self {
             kind,
             phase: TransportErrorPhase::Response,
+            status: Some(status),
         }
     }
 }
@@ -164,6 +167,7 @@ impl fmt::Debug for TransportError {
             .debug_struct("TransportError")
             .field("kind", &self.kind)
             .field("phase", &self.phase)
+            .field("status", &self.status)
             .finish()
     }
 }
@@ -245,16 +249,22 @@ impl Transport for ReqwestTransport {
             {
                 return Err(TransportError::response(
                     TransportErrorKind::ResponseTooLarge,
+                    response.status(),
                 ));
             }
 
             let status = response.status();
             let headers = response.headers().clone();
             let mut bytes = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(classify_response_error)? {
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|error| classify_response_error(error, status))?
+            {
                 if bytes.len().saturating_add(chunk.len()) > max_response_bytes {
                     return Err(TransportError::response(
                         TransportErrorKind::ResponseTooLarge,
+                        status,
                     ));
                 }
                 bytes.extend_from_slice(&chunk);
@@ -313,8 +323,8 @@ fn classify_reqwest_error(error: reqwest::Error) -> TransportError {
     TransportError::request(reqwest_error_kind(&error))
 }
 
-fn classify_response_error(error: reqwest::Error) -> TransportError {
-    TransportError::response(reqwest_error_kind(&error))
+fn classify_response_error(error: reqwest::Error, status: StatusCode) -> TransportError {
+    TransportError::response(reqwest_error_kind(&error), status)
 }
 
 fn reqwest_error_kind(error: &reqwest::Error) -> TransportErrorKind {

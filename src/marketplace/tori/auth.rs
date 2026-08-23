@@ -691,6 +691,11 @@ fn provider_request(
 }
 
 fn auth_execution_error(error: TransportError, stage: &'static str) -> AppError {
+    if let Some(status) = error.status
+        && let Err(status_error) = ensure_success(status, stage)
+    {
+        return status_error;
+    }
     if error.phase == TransportErrorPhase::Response {
         unexpected_response(stage)
     } else {
@@ -699,6 +704,11 @@ fn auth_execution_error(error: TransportError, stage: &'static str) -> AppError 
 }
 
 fn refresh_execution_error(error: TransportError) -> AppError {
+    if let Some(status) = error.status
+        && let Err(status_error) = ensure_refresh_success(status)
+    {
+        return status_error;
+    }
     if error.kind == TransportErrorKind::ResponseTooLarge {
         refresh_malformed_error()
     } else {
@@ -1337,6 +1347,19 @@ mod tests {
         assert_eq!(error.code, "auth.refresh_transport_failed");
         assert!(error.upstream_transient);
         assert!(!error.safe_to_retry);
+    }
+
+    #[test]
+    fn bounded_error_responses_preserve_protocol_status_classification() {
+        let oversized = TransportError::response(
+            TransportErrorKind::ResponseTooLarge,
+            StatusCode::BAD_REQUEST,
+        );
+        let exchange = auth_execution_error(oversized.clone(), "token_exchange");
+        let refresh = refresh_execution_error(oversized);
+
+        assert_eq!(exchange.code, "auth.exchange_rejected");
+        assert_eq!(refresh.code, "auth.refresh_rejected");
     }
 
     #[test]
