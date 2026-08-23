@@ -66,12 +66,54 @@ impl std::fmt::Debug for OAuthFlow {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Eq, PartialEq, Serialize)]
 pub struct AuthStart {
     pub flow_id: String,
     pub login_url: String,
     pub expires_at_unix: u64,
     pub completion_command: String,
+}
+
+impl std::fmt::Debug for AuthStart {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AuthStart")
+            .field("flow_id", &self.flow_id)
+            .field("login_url", &"<redacted>")
+            .field("expires_at_unix", &self.expires_at_unix)
+            .field("completion_command", &self.completion_command)
+            .finish()
+    }
+}
+
+impl From<&OAuthFlow> for crate::storage::auth_flow::AuthFlow {
+    fn from(flow: &OAuthFlow) -> Self {
+        Self {
+            flow_id: flow.flow_id.clone(),
+            expires_at_unix: flow.expires_at_unix,
+            state: flow.state.expose().to_owned(),
+            nonce: flow.nonce.expose().to_owned(),
+            pkce_verifier: flow.pkce_verifier.expose().to_owned(),
+            device_id: flow.device_id.clone(),
+            installation_id: flow.installation_id.clone(),
+            ab_test_device_id: flow.ab_test_device_id.clone(),
+        }
+    }
+}
+
+impl From<crate::storage::auth_flow::AuthFlow> for OAuthFlow {
+    fn from(flow: crate::storage::auth_flow::AuthFlow) -> Self {
+        Self {
+            flow_id: flow.flow_id,
+            expires_at_unix: flow.expires_at_unix,
+            state: SecretString::new(flow.state),
+            nonce: SecretString::new(flow.nonce),
+            pkce_verifier: SecretString::new(flow.pkce_verifier),
+            device_id: flow.device_id,
+            installation_id: flow.installation_id,
+            ab_test_device_id: flow.ab_test_device_id,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

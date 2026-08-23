@@ -340,17 +340,10 @@ async fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError>
         let store = FileAuthStore::new(paths.clone());
         let handler = AuthCommandHandler::new(SchibstedToriAuthenticationApi::new(), store);
         let started = handler.start(unix_time_now()?)?;
-        let flow_id = auth_value(&started, "flow_id")?.to_owned();
-        let login_url = auth_value(&started, "login_url")?;
-        let expires_at_unix = started
-            .get("expires_at_unix")
-            .and_then(Value::as_u64)
-            .ok_or_else(|| {
-                AppError::unexpected("authentication start returned an invalid expiry")
-            })?;
-        let callback = auth_callback::open_and_wait(&paths, login_url, expires_at_unix)?;
+        let callback =
+            auth_callback::open_and_wait(&paths, &started.login_url, started.expires_at_unix)?;
         handler
-            .complete(&flow_id, &callback, unix_time_now()?)
+            .complete(&started.flow_id, &callback, unix_time_now()?)
             .await
     }
     .await;
@@ -359,16 +352,6 @@ async fn execute_interactive_login(paths: StatePaths) -> Result<Value, AppError>
         Ok(value) => cleared.map(|()| value),
         Err(error) => Err(error),
     }
-}
-
-fn auth_value<'a>(value: &'a Value, key: &str) -> Result<&'a str, AppError> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::unexpected(format!("authentication start returned an invalid {key}"))
-        })
 }
 
 fn public_client() -> HttpClient<ReqwestTransport> {

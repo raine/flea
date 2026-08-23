@@ -7,7 +7,10 @@ use crate::{
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::MarketplaceContext,
-    marketplace::tori::auth::{GatewaySigner, RefreshRequest, SchibstedToriAuthenticationApi},
+    marketplace::tori::auth::{
+        AuthCredentials, GatewaySigner, RefreshRequest, SchibstedToriAuthenticationApi,
+        SecretString,
+    },
     marketplace::tori::client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
     storage::{
         StatePaths,
@@ -31,6 +34,39 @@ pub(crate) struct CredentialRecord {
 impl CredentialRecord {
     pub(crate) fn bearer_is_valid_at(&self, now_unix: u64, minimum_remaining_seconds: u64) -> bool {
         self.bearer_expires_at_unix.saturating_sub(now_unix) > minimum_remaining_seconds
+    }
+}
+
+impl From<&AuthCredentials> for CredentialRecord {
+    fn from(credentials: &AuthCredentials) -> Self {
+        Self {
+            user_id: credentials.user_id.clone(),
+            refresh_token: credentials.refresh_token.expose().to_owned(),
+            bearer_token: credentials.bearer_token.expose().to_owned(),
+            id_token: credentials
+                .id_token
+                .as_ref()
+                .map(|token| token.expose().to_owned()),
+            bearer_expires_at_unix: credentials.bearer_expires_at_unix,
+            device_id: credentials.device_id.clone(),
+            installation_id: credentials.installation_id.clone(),
+            ab_test_device_id: credentials.ab_test_device_id.clone(),
+        }
+    }
+}
+
+impl From<CredentialRecord> for AuthCredentials {
+    fn from(record: CredentialRecord) -> Self {
+        Self {
+            user_id: record.user_id,
+            refresh_token: SecretString::new(record.refresh_token),
+            bearer_token: SecretString::new(record.bearer_token),
+            id_token: record.id_token.map(SecretString::new),
+            bearer_expires_at_unix: record.bearer_expires_at_unix,
+            device_id: record.device_id,
+            installation_id: record.installation_id,
+            ab_test_device_id: record.ab_test_device_id,
+        }
     }
 }
 
@@ -206,16 +242,7 @@ async fn resolve_credentials_with<S: GatewaySigner>(
             stored_bearer_state: Some(stored_bearer_state),
             bearer_expires_at_unix: Some(expires_at),
         })?;
-    record = serde_json::to_value(credentials)
-        .and_then(serde_json::from_value)
-        .map_err(|error| CredentialResolutionFailure {
-            error: Box::new(
-                AppError::unexpected("authentication state types are incompatible")
-                    .with_source(error),
-            ),
-            stored_bearer_state: Some(stored_bearer_state),
-            bearer_expires_at_unix: Some(expires_at),
-        })?;
+    record = CredentialRecord::from(&credentials);
     locked
         .save(&record)
         .map_err(|error| resolution_storage(error, "write"))?;

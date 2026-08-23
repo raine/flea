@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::{
     error::{AppError, ExitClass},
     marketplace::tori::{
-        auth::{AuthCredentials, AuthenticationApi, BrowserAuth, OAuthFlow},
+        auth::{AuthCredentials, AuthStart, AuthenticationApi, BrowserAuth, OAuthFlow},
         session::{CredentialRecord, CredentialStore},
     },
     storage::{
@@ -76,8 +76,6 @@ pub trait AuthStore: Send + Sync {
     fn save_flow(&self, flow: &OAuthFlow) -> Result<(), AppError>;
     fn load_flow(&self, flow_id: &str) -> Result<Option<OAuthFlow>, AppError>;
     fn delete_flow(&self, flow_id: &str) -> Result<(), AppError>;
-    fn load_credentials(&self) -> Result<Option<AuthCredentials>, AppError>;
-
     /// Stores credentials and removes their OAuth flow as one recoverable transaction.
     fn commit_credentials(
         &self,
@@ -109,12 +107,12 @@ impl FileAuthStore {
 
 impl AuthStore for FileAuthStore {
     fn save_flow(&self, flow: &OAuthFlow) -> Result<(), AppError> {
-        self.flow_store().save(&convert(flow)?).map_err(store_error)
+        self.flow_store().save(&flow.into()).map_err(store_error)
     }
 
     fn load_flow(&self, flow_id: &str) -> Result<Option<OAuthFlow>, AppError> {
         match self.flow_store().load(flow_id, 0) {
-            Ok(flow) => convert(&flow).map(Some),
+            Ok(flow) => Ok(Some(flow.into())),
             Err(AuthFlowStoreError::NotFound) => Ok(None),
             Err(error) => Err(store_error(error)),
         }
@@ -124,21 +122,14 @@ impl AuthStore for FileAuthStore {
         self.flow_store().delete(flow_id).map_err(store_error)
     }
 
-    fn load_credentials(&self) -> Result<Option<AuthCredentials>, AppError> {
-        self.credential_store()
-            .load()
-            .map_err(store_error)?
-            .map(|record| convert(&record))
-            .transpose()
-    }
-
     fn commit_credentials(
         &self,
         flow_id: &str,
         credentials: &AuthCredentials,
     ) -> Result<(), AppError> {
-        let record: CredentialRecord = convert(credentials)?;
-        self.credential_store().save(&record).map_err(store_error)?;
+        self.credential_store()
+            .save(&CredentialRecord::from(credentials))
+            .map_err(store_error)?;
         self.flow_store().delete(flow_id).map_err(store_error)
     }
 
@@ -158,14 +149,6 @@ impl AuthStore for FileAuthStore {
         }
         Ok(())
     }
-}
-
-fn convert<T: Serialize, U: serde::de::DeserializeOwned>(value: &T) -> Result<U, AppError> {
-    serde_json::to_value(value)
-        .and_then(serde_json::from_value)
-        .map_err(|error| {
-            AppError::unexpected("authentication state types are incompatible").with_source(error)
-        })
 }
 
 fn store_error(error: impl std::error::Error + Send + Sync + 'static) -> AppError {
@@ -204,10 +187,10 @@ impl<A: AuthenticationApi, S: AuthStore> AuthCommandHandler<A, S> {
         }
     }
 
-    pub(crate) fn start(&self, now_unix: u64) -> Result<Value, AppError> {
+    pub(crate) fn start(&self, now_unix: u64) -> Result<AuthStart, AppError> {
         let (flow, output) = self.auth.start(now_unix)?;
         self.store.save_flow(&flow).map_err(storage_error)?;
-        serialize(output)
+        Ok(output)
     }
 
     pub(crate) async fn complete(
@@ -394,10 +377,6 @@ mod tests {
             Ok(())
         }
 
-        fn load_credentials(&self) -> Result<Option<AuthCredentials>, AppError> {
-            Ok(self.credentials.lock().unwrap().clone())
-        }
-
         fn commit_credentials(
             &self,
             flow_id: &str,
@@ -433,7 +412,8 @@ mod tests {
         let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
 
         let started = handler.start(1_000).unwrap();
-        let object = started.as_object().unwrap();
+        let document = serde_json::to_value(&started).unwrap();
+        let object = document.as_object().unwrap();
 
         assert_eq!(object.len(), 4);
         assert!(
@@ -448,7 +428,7 @@ mod tests {
         );
         assert_eq!(object["expires_at_unix"], 1_600);
         assert_eq!(object["completion_command"], "flea tori auth login");
-        let rendered = started.to_string();
+        let rendered = document.to_string();
         let flow = handler.store.flow.lock().unwrap();
         let flow = flow.as_ref().unwrap();
         for secret in [
@@ -465,7 +445,7 @@ mod tests {
     async fn completion_output_contains_only_public_account_state() {
         let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
         let started = handler.start(1_000).unwrap();
-        let flow_id = started["flow_id"].as_str().unwrap().to_owned();
+        let flow_id = started.flow_id;
         let state = handler
             .store
             .flow
@@ -502,7 +482,7 @@ mod tests {
     async fn expired_completion_deletes_sensitive_flow_material() {
         let handler = AuthCommandHandler::new(FakeApi, MemoryStore::default());
         let started = handler.start(1_000).unwrap();
-        let flow_id = started["flow_id"].as_str().unwrap().to_owned();
+        let flow_id = started.flow_id;
 
         let error = handler
             .complete(&flow_id, "redacted", 1_600)
