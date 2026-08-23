@@ -404,7 +404,7 @@ impl HttpVintedPublicationApi {
     pub fn new() -> Self {
         Self {
             auth: VintedAuthentication::new(),
-            api_base_url: VINTED_FI_BINDING.api_host.to_owned(),
+            api_base_url: VINTED_FI_BINDING.host.to_owned(),
         }
     }
 

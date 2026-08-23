@@ -47,7 +47,7 @@ impl HttpVintedPublicationDiscoveryApi {
     pub fn new() -> Self {
         Self {
             auth: VintedAuthentication::new(),
-            api_base_url: VINTED_FI_BINDING.api_host.to_owned(),
+            api_base_url: VINTED_FI_BINDING.host.to_owned(),
         }
     }
 
@@ -57,7 +57,7 @@ impl HttpVintedPublicationDiscoveryApi {
         request: &DiscoveryRequest,
     ) -> Result<Value, AppError> {
         let (method, path) = endpoint(request);
-        let mut url = self.url(&path)?;
+        let mut url = self.url(request, &path)?;
         apply_query(&mut url, request);
         let mut transport_request = self.auth.authenticated_request(
             method,
@@ -117,11 +117,19 @@ impl HttpVintedPublicationDiscoveryApi {
         }
     }
 
-    fn url(&self, path: &str) -> Result<Url, AppError> {
-        let mut url = Url::parse(&self.api_base_url).map_err(|error| {
+    fn url(&self, request: &DiscoveryRequest, path: &str) -> Result<Url, AppError> {
+        let base_url = match request {
+            DiscoveryRequest::PackageSizes { .. } => VINTED_FI_BINDING.shipping_host,
+            _ => &self.api_base_url,
+        };
+        let mut url = Url::parse(base_url).map_err(|error| {
             AppError::unexpected("Vinted API binding is invalid").with_source(error)
         })?;
-        url.set_path(&format!("{API_V2_PATH}{path}"));
+        let prefix = match request {
+            DiscoveryRequest::PackageSizes { .. } => "/",
+            _ => API_V2_PATH,
+        };
+        url.set_path(&format!("{prefix}{path}"));
         Ok(url)
     }
 
@@ -303,8 +311,19 @@ mod tests {
         let api = HttpVintedPublicationDiscoveryApi::new()
             .with_api_base_url("http://127.0.0.1:9".to_owned());
         assert_eq!(
-            api.url("item_upload/catalogs").unwrap().as_str(),
+            api.url(&DiscoveryRequest::Catalogs, "item_upload/catalogs")
+                .unwrap()
+                .as_str(),
             "http://127.0.0.1:9/api/v2/item_upload/catalogs"
+        );
+        assert_eq!(
+            api.url(
+                &DiscoveryRequest::PackageSizes { category_id: 42 },
+                "shipping-estimation/external/catalogs/42/package_sizes",
+            )
+            .unwrap()
+            .as_str(),
+            "https://api.vinted.fi/shipping-estimation/external/catalogs/42/package_sizes"
         );
     }
 }
