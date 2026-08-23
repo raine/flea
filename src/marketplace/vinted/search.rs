@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{future::Future, pin::Pin, str::FromStr};
 
 use reqwest::{Method, StatusCode};
 use serde_json::{Map, Number, Value};
@@ -51,6 +51,14 @@ pub struct SearchRequest {
     pub limit: usize,
 }
 
+pub trait VintedSearchApi: Send + Sync {
+    fn execute<'a>(
+        &'a self,
+        credentials: &'a VintedCredentialRecord,
+        request: &'a SearchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<(SearchCollection, Value), AppError>> + Send + 'a>>;
+}
+
 pub struct VintedSearch {
     auth: VintedAuthentication,
     api_base_url: String,
@@ -64,7 +72,7 @@ impl VintedSearch {
         }
     }
 
-    pub async fn execute(
+    async fn execute_request(
         &self,
         credentials: &VintedCredentialRecord,
         request: &SearchRequest,
@@ -90,6 +98,17 @@ impl VintedSearch {
     fn with_api_base_url(mut self, api_base_url: String) -> Self {
         self.api_base_url = api_base_url;
         self
+    }
+}
+
+impl VintedSearchApi for VintedSearch {
+    fn execute<'a>(
+        &'a self,
+        credentials: &'a VintedCredentialRecord,
+        request: &'a SearchRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<(SearchCollection, Value), AppError>> + Send + 'a>>
+    {
+        Box::pin(self.execute_request(credentials, request))
     }
 }
 

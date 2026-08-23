@@ -14,7 +14,7 @@ pub mod search;
 pub mod skill;
 pub mod vinted_search;
 
-use std::{ffi::OsString, future::Future, pin::Pin};
+use std::ffi::OsString;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -213,22 +213,11 @@ impl VintedCommand {
     }
 }
 
-pub type CommandFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<outcome::CommandOutcome, AppError>> + 'a>>;
-
-pub trait CommandRuntime {
-    fn execute(&self, command: Command) -> CommandFuture<'_>;
-}
-
-pub async fn dispatch(command: Command) -> Result<outcome::CommandOutcome, AppError> {
-    runtime::ProductionRuntime.execute(command).await
-}
-
-pub async fn dispatch_with_runtime(
+pub async fn dispatch(
     command: Command,
-    runtime: &dyn CommandRuntime,
+    dependencies: &runtime::ApplicationDependencies,
 ) -> Result<outcome::CommandOutcome, AppError> {
-    runtime.execute(command).await
+    runtime::dispatch(command, dependencies).await
 }
 
 #[cfg(test)]

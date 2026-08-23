@@ -68,12 +68,12 @@ where
         }
     };
     let plain_presentation = plain_presentation(cli.format, &cli.command);
-    let runtime = cli::runtime::ProductionRuntime;
+    let dependencies = cli::runtime::ApplicationDependencies::production();
     session.run(&command, || {
         let result = catch_unwind(AssertUnwindSafe(|| {
             finish(
                 cli.format,
-                execute_command(cli.command, &runtime),
+                execute_command(cli.command, &dependencies),
                 Some(session.context()),
                 plain_presentation,
                 context,
@@ -93,7 +93,10 @@ where
     })
 }
 
-pub fn run_with_runtime<I, T>(args: I, runtime: &dyn cli::CommandRuntime) -> RunResult
+pub fn run_with_dependencies<I, T>(
+    args: I,
+    dependencies: &cli::runtime::ApplicationDependencies,
+) -> RunResult
 where
     I: IntoIterator<Item = T>,
     T: Into<OsString>,
@@ -109,7 +112,7 @@ where
     catch_unwind(AssertUnwindSafe(|| {
         finish(
             cli.format,
-            execute_command(cli.command, runtime),
+            execute_command(cli.command, dependencies),
             None,
             plain_presentation,
             context,
@@ -128,13 +131,13 @@ where
 
 fn execute_command(
     command: cli::Command,
-    runtime: &dyn cli::CommandRuntime,
+    dependencies: &cli::runtime::ApplicationDependencies,
 ) -> Result<cli::outcome::CommandOutcome, AppError> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("the Tokio runtime uses static configuration")
-        .block_on(cli::dispatch_with_runtime(command, runtime))
+        .block_on(cli::dispatch(command, dependencies))
 }
 
 fn clap_presentation(error: clap::Error) -> RunResult {

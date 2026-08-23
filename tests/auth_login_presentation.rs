@@ -1,20 +1,15 @@
-use flea::{
-    Presentation,
-    cli::{CommandFuture, CommandRuntime},
-};
+use flea::{Presentation, cli::runtime::ApplicationDependencies};
 use serde_json::{Value, json};
 
-struct AuthLoginRuntime;
-
-impl CommandRuntime for AuthLoginRuntime {
-    fn execute(&self, _command: flea::cli::Command) -> CommandFuture<'_> {
-        Box::pin(async { Ok(json!({ "authenticated": true, "user_id": "42" }).into()) })
-    }
+fn dependencies() -> ApplicationDependencies {
+    ApplicationDependencies::production().with_tori_auth_handler(|_| async {
+        Ok(json!({ "authenticated": true, "user_id": "42" }).into())
+    })
 }
 
 #[test]
 fn default_auth_login_reports_human_success() {
-    let result = flea::run_with_runtime(["flea", "tori", "auth", "login"], &AuthLoginRuntime);
+    let result = flea::run_with_dependencies(["flea", "tori", "auth", "login"], &dependencies());
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.presentation, Presentation::PlainStdout);
@@ -23,9 +18,9 @@ fn default_auth_login_reports_human_success() {
 
 #[test]
 fn explicit_json_auth_login_keeps_the_structured_envelope() {
-    let result = flea::run_with_runtime(
+    let result = flea::run_with_dependencies(
         ["flea", "tori", "auth", "login", "--format", "json"],
-        &AuthLoginRuntime,
+        &dependencies(),
     );
 
     assert_eq!(result.exit_code, 0);

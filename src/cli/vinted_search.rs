@@ -6,7 +6,7 @@ use crate::{
     error::AppError,
     marketplace::vinted::{
         auth::VintedCredentialRecord,
-        search::{SEARCH_LIMIT_DEFAULT, SearchRequest, SearchSort, VintedSearch},
+        search::{SEARCH_LIMIT_DEFAULT, SearchRequest, SearchSort, VintedSearchApi},
     },
 };
 
@@ -64,6 +64,7 @@ pub struct VintedSearchArgs {
 pub async fn dispatch(
     args: VintedSearchArgs,
     credentials: &VintedCredentialRecord,
+    api: &dyn VintedSearchApi,
 ) -> Result<Value, AppError> {
     let request = SearchRequest {
         query: args.query.unwrap_or_default(),
@@ -73,7 +74,7 @@ pub async fn dispatch(
         page: args.page.unwrap_or(1),
         limit: args.limit.unwrap_or(SEARCH_LIMIT_DEFAULT),
     };
-    let (normalized, raw) = VintedSearch::new().execute(credentials, &request).await?;
+    let (normalized, raw) = api.execute(credentials, &request).await?;
     if args.raw {
         return Ok(raw);
     }

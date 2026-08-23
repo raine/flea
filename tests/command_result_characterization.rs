@@ -1,83 +1,72 @@
 use flea::{
     Presentation,
-    cli::{Command, CommandFuture, CommandRuntime, outcome::CommandOutcome},
+    cli::{outcome::CommandOutcome, runtime::ApplicationDependencies},
     domain::{
         envelope::{NextAction, Warning},
         observation::Observation,
     },
-    run_with_runtime,
+    run_with_dependencies,
 };
 use serde_json::{Value, json};
 
-struct MetadataRuntime;
-
-impl CommandRuntime for MetadataRuntime {
-    fn execute(&self, _command: Command) -> CommandFuture<'_> {
-        Box::pin(async {
-            let mut observation = Observation::confirmed_present("fixture", Some(200));
-            observation.observed_at = "2026-01-02T03:04:05Z".to_owned();
-            Ok(CommandOutcome::new(json!({ "result": "kept" }))
-                .with_next_actions(vec![NextAction {
-                    command: "flea marketplaces".to_owned(),
-                }])
-                .with_observation(observation))
-        })
-    }
+fn metadata_dependencies() -> ApplicationDependencies {
+    ApplicationDependencies::production().with_tori_auth_handler(|_| async {
+        let mut observation = Observation::confirmed_present("fixture", Some(200));
+        observation.observed_at = "2026-01-02T03:04:05Z".to_owned();
+        Ok(CommandOutcome::new(json!({ "result": "kept" }))
+            .with_next_actions(vec![NextAction {
+                command: "flea marketplaces".to_owned(),
+            }])
+            .with_observation(observation))
+    })
 }
 
-struct WarningRuntime;
-
-impl CommandRuntime for WarningRuntime {
-    fn execute(&self, _command: Command) -> CommandFuture<'_> {
-        Box::pin(async {
-            let messages = [
-                (
-                    "mutation.response_model_drift",
-                    "Tori returned an unrecognized successful mutation response: fixture",
-                ),
-                (
-                    "mutation.observed_success",
-                    "Tori returned an ambiguous mutation response: fixture",
-                ),
-                (
-                    "workflow.best_effort_failed",
-                    "confirmation tracking failed: fixture",
-                ),
-            ];
-            Ok(CommandOutcome::new(json!({
-                "warnings": messages.map(|(_, message)| message)
-            }))
-            .with_warnings(
-                messages
-                    .map(|(code, message)| Warning {
-                        code: code.to_owned(),
-                        message: message.to_owned(),
-                    })
-                    .into_iter()
-                    .collect(),
-            ))
-        })
-    }
+fn warning_dependencies() -> ApplicationDependencies {
+    ApplicationDependencies::production().with_tori_auth_handler(|_| async {
+        let messages = [
+            (
+                "mutation.response_model_drift",
+                "Tori returned an unrecognized successful mutation response: fixture",
+            ),
+            (
+                "mutation.observed_success",
+                "Tori returned an ambiguous mutation response: fixture",
+            ),
+            (
+                "workflow.best_effort_failed",
+                "confirmation tracking failed: fixture",
+            ),
+        ];
+        Ok(CommandOutcome::new(json!({
+            "warnings": messages.map(|(_, message)| message)
+        }))
+        .with_warnings(
+            messages
+                .map(|(code, message)| Warning {
+                    code: code.to_owned(),
+                    message: message.to_owned(),
+                })
+                .into_iter()
+                .collect(),
+        ))
+    })
 }
 
-struct InvalidAuthRuntime;
-
-impl CommandRuntime for InvalidAuthRuntime {
-    fn execute(&self, _command: Command) -> CommandFuture<'_> {
-        Box::pin(async { Ok(json!({ "authenticated": false }).into()) })
-    }
+fn invalid_auth_dependencies() -> ApplicationDependencies {
+    ApplicationDependencies::production()
+        .with_tori_auth_handler(|_| async { Ok(json!({ "authenticated": false }).into()) })
 }
 
-fn structured(runtime: &dyn CommandRuntime, format: &str) -> flea::RunResult {
-    run_with_runtime(
-        ["flea", "tori", "capabilities", "--format", format],
-        runtime,
+fn structured(dependencies: &ApplicationDependencies, format: &str) -> flea::RunResult {
+    run_with_dependencies(
+        ["flea", "tori", "auth", "status", "--format", format],
+        dependencies,
     )
 }
 
 #[test]
 fn typed_metadata_produces_the_exact_json_envelope() {
-    let result = structured(&MetadataRuntime, "json");
+    let result = structured(&metadata_dependencies(), "json");
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.presentation, Presentation::Structured);
@@ -104,7 +93,7 @@ fn typed_metadata_produces_the_exact_json_envelope() {
 
 #[test]
 fn typed_metadata_produces_the_exact_toon_envelope() {
-    let result = structured(&MetadataRuntime, "toon");
+    let result = structured(&metadata_dependencies(), "toon");
 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.presentation, Presentation::Structured);
@@ -131,7 +120,7 @@ fn typed_metadata_produces_the_exact_toon_envelope() {
 
 #[test]
 fn typed_warnings_produce_the_exact_envelope_codes() {
-    let result = structured(&WarningRuntime, "json");
+    let result = structured(&warning_dependencies(), "json");
     let envelope: Value = serde_json::from_str(&result.document).unwrap();
 
     assert_eq!(result.exit_code, 0);
@@ -164,9 +153,9 @@ fn typed_warnings_produce_the_exact_envelope_codes() {
 
 #[test]
 fn invalid_plain_auth_output_falls_back_to_the_exact_structured_failure() {
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         ["flea", "tori", "auth", "login", "--format", "toon"],
-        &InvalidAuthRuntime,
+        &invalid_auth_dependencies(),
     );
 
     assert_eq!(result.exit_code, 40);

@@ -515,6 +515,15 @@ pub trait ToriClient: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<HttpResponse, HttpError>> + Send + '_>>;
 }
 
+impl<T: ToriClient + ?Sized> ToriClient for Arc<T> {
+    fn execute(
+        &self,
+        request: RequestSpec,
+    ) -> Pin<Box<dyn Future<Output = Result<HttpResponse, HttpError>> + Send + '_>> {
+        self.as_ref().execute(request)
+    }
+}
+
 pub struct HttpClient<T: Transport = ReqwestTransport> {
     config: ClientConfig,
     identity: DeviceIdentity,

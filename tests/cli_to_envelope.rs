@@ -7,26 +7,17 @@ use std::{
 
 use flea::{
     Presentation,
-    cli::{
-        Command, CommandFuture, CommandRuntime, ToriCommand,
-        auth::{AuthCommandHandler, AuthStore},
-        category, draft, favorite, item, listing, location, saved_search, search,
-    },
+    cli::auth::{AuthCommandHandler, AuthStore},
     error::AppError,
     marketplace::tori::{
-        adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
         auth::{
             AuthCredentials, AuthenticatedAccount, AuthenticationApi, OAuthFlow, SchibstedTokens,
             SecretString, ToriSession,
         },
         client::{HttpError, HttpResponse, RequestSpec, ToriClient},
         favorites::{FavoritesApi, HttpFavoritesApi},
-        item::HttpPublicItemApi,
-        listings::HttpListingsApi,
-        saved_searches::HttpSavedSearchesApi,
-        search::HttpPublicSearchApi,
     },
-    run_with_runtime,
+    run_with_dependencies,
 };
 use reqwest::{StatusCode, header::HeaderMap};
 use serde_json::{Value, json};
@@ -62,88 +53,25 @@ impl ToriClient for MockClient {
     }
 }
 
-struct TestRuntime {
+struct FixtureApplication {
     client: MockClient,
 }
 
-impl CommandRuntime for TestRuntime {
-    fn execute(&self, command: Command) -> CommandFuture<'_> {
-        Box::pin(async move {
-            match command {
-                Command::Tori(args) => match args.command {
-                    ToriCommand::Auth(args) => match args.command {
-                        flea::cli::auth::AuthCommand::Login => {
-                            Ok(json!({ "authenticated": true, "user_id": "user-1" }).into())
-                        }
-                        command => AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
-                            .dispatch(command)
-                            .await
-                            .map(Into::into),
-                    },
-                    ToriCommand::Capabilities => {
-                        unreachable!("capabilities use the production runtime")
+impl FixtureApplication {
+    fn dependencies(&self) -> flea::cli::runtime::ApplicationDependencies {
+        flea::cli::runtime::ApplicationDependencies::production()
+            .with_tori_client(Arc::new(self.client.clone()))
+            .with_tori_auth_handler(|args| async move {
+                match args.command {
+                    flea::cli::auth::AuthCommand::Login => {
+                        Ok(json!({ "authenticated": true, "user_id": "user-1" }).into())
                     }
-                    ToriCommand::Category(args) => {
-                        let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                        category::dispatch_with_api(args, &api).await
-                    }
-                    ToriCommand::Draft(args) => match args.command {
-                        command @ flea::cli::draft::DraftCommand::Preview {
-                            verify_category: false,
-                            ..
-                        } => draft::execute_preview(command, None).await,
-                        command @ flea::cli::draft::DraftCommand::Preview {
-                            verify_category: true,
-                            ..
-                        } => {
-                            let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                            draft::execute_preview(command, Some(&api)).await
-                        }
-                        command => {
-                            draft::execute(
-                                command,
-                                HttpAdInputApi::new(ClientTransport::new(self.client.clone())),
-                                WorkflowConfig::default(),
-                            )
-                            .await
-                        }
-                    },
-                    ToriCommand::Favorite(args) => {
-                        let api = HttpFavoritesApi::new(Arc::new(self.client.clone()));
-                        favorite::dispatch_with_api(args, &api).await
-                    }
-                    ToriCommand::Item(args) => {
-                        let api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
-                        item::dispatch_with_api(args, &api).await
-                    }
-                    ToriCommand::Listing(args) => {
-                        let api = HttpListingsApi::new(Arc::new(self.client.clone()));
-                        listing::dispatch_with_api(args, &api).await
-                    }
-                    ToriCommand::Search(args) => {
-                        let search_api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                        let item_api = HttpPublicItemApi::new(Arc::new(self.client.clone()));
-                        search::dispatch_with_apis(*args, &search_api, Some(&item_api)).await
-                    }
-                    ToriCommand::SavedSearch(args) => {
-                        let api = HttpSavedSearchesApi::new(Arc::new(self.client.clone()));
-                        let search_api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                        saved_search::dispatch_with_apis(*args, &api, &search_api).await
-                    }
-                    ToriCommand::Location(args) => {
-                        let api = HttpPublicSearchApi::new(Arc::new(self.client.clone()));
-                        location::dispatch_with_api(args, &api)
-                            .await
-                            .map(Into::into)
-                    }
-                },
-                Command::Skill(args) => flea::cli::skill::dispatch(args).map(Into::into),
-                Command::Capabilities
-                | Command::Marketplaces
-                | Command::Vinted(_)
-                | Command::Unsupported(_) => unreachable!("command uses the production runtime"),
-            }
-        })
+                    command => AuthCommandHandler::new(FakeAuthApi, MemoryAuthStore::default())
+                        .dispatch(command)
+                        .await
+                        .map(Into::into),
+                }
+            })
     }
 }
 
@@ -233,7 +161,7 @@ impl AuthenticationApi for FakeAuthApi {
 #[test]
 fn auth_login_flows_from_parser_to_one_envelope() {
     let value = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: MockClient::default(),
         },
         ["flea", "--format", "json", "tori", "auth", "login"],
@@ -249,7 +177,7 @@ fn auth_login_flows_from_parser_to_one_envelope() {
 fn draft_preview_is_offline_and_performs_zero_transport_requests() {
     let client = MockClient::default();
     let value = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
         },
         [
@@ -298,7 +226,7 @@ fn draft_preview_enrichment_uses_only_the_read_only_taxonomy_request() {
         }),
     )]);
     let value = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
         },
         [
@@ -328,7 +256,7 @@ fn draft_preview_enrichment_uses_only_the_read_only_taxonomy_request() {
 #[test]
 fn invalid_create_and_update_inputs_fail_before_transport_access() {
     let client = MockClient::default();
-    let runtime = TestRuntime {
+    let runtime = FixtureApplication {
         client: client.clone(),
     };
 
@@ -357,7 +285,7 @@ fn invalid_create_and_update_inputs_fail_before_transport_access() {
             "pickup",
         ],
     ] {
-        let result = run_with_runtime(arguments, &runtime);
+        let result = run_with_dependencies(arguments, &runtime.dependencies());
         let value: Value = serde_json::from_str(&result.document).unwrap();
         assert_eq!(result.exit_code, 20, "{}", result.document);
         assert_eq!(value["error"]["code"], "draft.input_invalid");
@@ -387,7 +315,7 @@ async fn favorite_mutations_send_an_explicit_empty_body() {
 fn draft_create_flows_through_the_http_adapter() {
     let client = MockClient::with_responses([response(StatusCode::CREATED, draft_state("one"))]);
     let value = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
         },
         ["flea", "--format", "json", "tori", "draft", "create"],
@@ -471,7 +399,7 @@ fn draft_show_is_compact_by_default_and_expands_deterministically() {
     };
 
     let compact = invoke(
-        &TestRuntime { client: client() },
+        &FixtureApplication { client: client() },
         [
             "flea", "--format", "json", "tori", "draft", "show", "draft-1",
         ],
@@ -488,7 +416,7 @@ fn draft_show_is_compact_by_default_and_expands_deterministically() {
     assert!(!compact_text.contains("Category 259"));
 
     let expanded = invoke(
-        &TestRuntime { client: client() },
+        &FixtureApplication { client: client() },
         [
             "flea",
             "--format",
@@ -506,13 +434,13 @@ fn draft_show_is_compact_by_default_and_expands_deterministically() {
     assert_eq!(expanded["data"]["options"].as_array().unwrap().len(), 593);
     assert_eq!(expanded["data"]["options"][258]["label"], "Category 258");
 
-    let toon = run_with_runtime(
+    let toon = run_with_dependencies(
         ["flea", "tori", "draft", "show", "draft-1"],
-        &TestRuntime { client: client() },
+        &FixtureApplication { client: client() }.dependencies(),
     );
-    let toon_again = run_with_runtime(
+    let toon_again = run_with_dependencies(
         ["flea", "tori", "draft", "show", "draft-1"],
-        &TestRuntime { client: client() },
+        &FixtureApplication { client: client() }.dependencies(),
     );
     assert_eq!(toon.exit_code, 0, "{}", toon.document);
     assert_eq!(toon.document, toon_again.document);
@@ -520,7 +448,7 @@ fn draft_show_is_compact_by_default_and_expands_deterministically() {
     assert_eq!(decoded["data"]["revision"], "revision-7");
     assert!(decoded["data"].get("options").is_none());
 
-    let expanded_toon = run_with_runtime(
+    let expanded_toon = run_with_dependencies(
         [
             "flea",
             "tori",
@@ -531,7 +459,7 @@ fn draft_show_is_compact_by_default_and_expands_deterministically() {
             "--include-options",
             "category",
         ],
-        &TestRuntime { client: client() },
+        &FixtureApplication { client: client() }.dependencies(),
     );
     assert_eq!(expanded_toon.exit_code, 0, "{}", expanded_toon.document);
     let decoded: Value = toon_format::decode_default(&expanded_toon.document).unwrap();
@@ -548,11 +476,12 @@ fn draft_show_compact_and_expanded_output_matches_json_and_toon_snapshots() {
         if expanded {
             args.extend(["--include-fields", "--include-options", "category"]);
         }
-        let result = run_with_runtime(
+        let result = run_with_dependencies(
             args,
-            &TestRuntime {
+            &FixtureApplication {
                 client: draft_show_snapshot_client(),
-            },
+            }
+            .dependencies(),
         );
         assert_eq!(result.exit_code, 0, "{}", result.document);
         normalize_observation_timestamp(result.document)
@@ -618,7 +547,7 @@ fn draft_validate_is_compact_deterministic_and_read_only_in_json_and_toon() {
     };
     let json_client = client();
     let value = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: json_client.clone(),
         },
         [
@@ -653,13 +582,13 @@ fn draft_validate_is_compact_deterministic_and_read_only_in_json_and_toon() {
     );
     drop(requests);
 
-    let first = run_with_runtime(
+    let first = run_with_dependencies(
         ["flea", "tori", "draft", "validate", "draft-1"],
-        &TestRuntime { client: client() },
+        &FixtureApplication { client: client() }.dependencies(),
     );
-    let second = run_with_runtime(
+    let second = run_with_dependencies(
         ["flea", "tori", "draft", "validate", "draft-1"],
-        &TestRuntime { client: client() },
+        &FixtureApplication { client: client() }.dependencies(),
     );
     assert_eq!(first.document, second.document);
     assert!(first.document.contains("ready: true"));
@@ -705,7 +634,7 @@ fn draft_price_update_uses_the_item_creation_service_and_source_shape() {
         ),
     ]);
     let value = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
         },
         [
@@ -774,13 +703,14 @@ fn html_price_failure_is_transient_but_unsafe_partial_envelope() {
         ),
     ]);
 
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         [
             "flea", "--format", "json", "tori", "draft", "update", "46031010", "--price", "5",
         ],
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
-        },
+        }
+        .dependencies(),
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
@@ -823,7 +753,7 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
         ),
         response(StatusCode::OK, draft_state("one")),
     ]);
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         [
             "flea",
             "--format",
@@ -834,7 +764,7 @@ fn partial_draft_failure_preserves_recovery_envelope_and_exit_code() {
             "--category",
             "chairs",
         ],
-        &TestRuntime { client },
+        &FixtureApplication { client }.dependencies(),
     );
     let value: Value = serde_json::from_str(&result.document).expect("one JSON envelope");
 
@@ -882,9 +812,9 @@ fn uncertain_creation_separates_transience_from_replay_safety() {
         body: b"<html>unsupported success</html>".to_vec(),
     }]);
 
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         ["flea", "--format", "json", "tori", "draft", "create"],
-        &TestRuntime { client },
+        &FixtureApplication { client }.dependencies(),
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
@@ -909,11 +839,11 @@ fn bad_gateway_read_is_transient_and_safe_to_retry() {
         StatusCode::BAD_GATEWAY,
         json!({ "message": "gateway unavailable" }),
     )]);
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         [
             "flea", "--format", "json", "tori", "draft", "show", "draft-1",
         ],
-        &TestRuntime { client },
+        &FixtureApplication { client }.dependencies(),
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
@@ -943,11 +873,11 @@ fn bad_gateway_after_draft_mutation_is_transient_but_unsafe_to_retry() {
         ),
         response(StatusCode::OK, draft_state("one")),
     ]);
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         [
             "flea", "--format", "json", "tori", "draft", "update", "draft-1", "--title", "Chair",
         ],
-        &TestRuntime { client },
+        &FixtureApplication { client }.dependencies(),
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
@@ -980,11 +910,11 @@ fn malformed_read_success_is_safe_to_repeat_but_not_transient() {
         headers,
         body: b"<html>unsupported success</html>".to_vec(),
     }]);
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         [
             "flea", "--format", "json", "tori", "draft", "show", "draft-1",
         ],
-        &TestRuntime { client },
+        &FixtureApplication { client }.dependencies(),
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
@@ -1000,16 +930,17 @@ fn malformed_read_success_is_safe_to_repeat_but_not_transient() {
 
 #[test]
 fn draft_http_absence_is_the_only_draft_not_found_outcome() {
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         [
             "flea", "--format", "json", "tori", "draft", "show", "draft-1",
         ],
-        &TestRuntime {
+        &FixtureApplication {
             client: MockClient::with_responses([
                 response(StatusCode::NOT_FOUND, Value::Null),
                 response(StatusCode::OK, json!({ "summaries": [], "total": 0 })),
             ]),
-        },
+        }
+        .dependencies(),
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
@@ -1046,7 +977,7 @@ fn image_add_flows_through_upload_and_ordering() {
         response(StatusCode::OK, draft_with_images("three", "processing")),
     ]);
     let value = invoke_vec(
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
         },
         vec![
@@ -1085,7 +1016,7 @@ fn deterministic_publish_validation_has_local_remediation_guidance() {
         response(StatusCode::OK, delivery_page(false)),
         response(StatusCode::OK, json!({ "categories": [] })),
     ]);
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         [
             "flea",
             "--format",
@@ -1097,7 +1028,7 @@ fn deterministic_publish_validation_has_local_remediation_guidance() {
             "--if-revision",
             "one",
         ],
-        &TestRuntime { client },
+        &FixtureApplication { client }.dependencies(),
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
@@ -1152,7 +1083,7 @@ fn stale_publish_revision_has_structured_read_only_recovery() {
         response(StatusCode::OK, valid),
     ]);
 
-    let result = run_with_runtime(
+    let result = run_with_dependencies(
         [
             "flea",
             "--format",
@@ -1164,9 +1095,10 @@ fn stale_publish_revision_has_structured_read_only_recovery() {
             "--if-revision",
             "expected",
         ],
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
-        },
+        }
+        .dependencies(),
     );
     let value: Value = serde_json::from_str(&result.document).unwrap();
 
@@ -1270,7 +1202,7 @@ fn publish_flows_through_every_http_step() {
         ),
     ]);
     let value = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
         },
         [
@@ -1348,7 +1280,7 @@ fn public_search_flows_without_authentication_through_one_envelope() {
         }),
     )]);
     let value = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
         },
         ["flea", "--format", "json", "tori", "search", "tuoli"],
@@ -1393,7 +1325,7 @@ fn public_search_detail_explanation_uses_public_item_evidence() {
     ]);
 
     let value = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
         },
         [
@@ -1451,7 +1383,7 @@ fn public_search_result_flows_into_unauthenticated_item_detail() {
             }),
         ),
     ]);
-    let runtime = TestRuntime {
+    let runtime = FixtureApplication {
         client: client.clone(),
     };
     let search = invoke(
@@ -1498,7 +1430,7 @@ fn category_and_listing_commands_flow_through_http_normalization() {
         }),
     )]);
     let category = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: categories.clone(),
         },
         ["flea", "--format", "json", "tori", "category", "list"],
@@ -1521,7 +1453,7 @@ fn category_and_listing_commands_flow_through_http_normalization() {
         }),
     )]);
     let listing = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: listings.clone(),
         },
         [
@@ -1562,7 +1494,7 @@ fn truncated_category_search_actions_preserve_query_and_hierarchy_context() {
         response(StatusCode::OK, taxonomy.clone()),
         response(StatusCode::OK, taxonomy),
     ]);
-    let runtime = TestRuntime { client };
+    let runtime = FixtureApplication { client };
 
     let by_parent = invoke(
         &runtime,
@@ -1614,7 +1546,7 @@ fn truncated_category_search_actions_preserve_query_and_hierarchy_context() {
 #[test]
 fn category_http_failures_have_specific_structured_errors() {
     let endpoint = invoke_error(
-        &TestRuntime {
+        &FixtureApplication {
             client: MockClient::with_responses([response(StatusCode::NOT_FOUND, Value::Null)]),
         },
         ["flea", "--format", "json", "tori", "category", "list"],
@@ -1622,7 +1554,7 @@ fn category_http_failures_have_specific_structured_errors() {
     assert_eq!(endpoint["error"]["code"], "category.endpoint_unavailable");
 
     let authentication = invoke_error(
-        &TestRuntime {
+        &FixtureApplication {
             client: MockClient::with_responses([response(StatusCode::UNAUTHORIZED, Value::Null)]),
         },
         ["flea", "--format", "json", "tori", "category", "list"],
@@ -1633,7 +1565,7 @@ fn category_http_failures_have_specific_structured_errors() {
     );
 
     let malformed = invoke_error(
-        &TestRuntime {
+        &FixtureApplication {
             client: MockClient::with_responses([response(
                 StatusCode::OK,
                 json!({ "categories": [{ "id": "bad" }] }),
@@ -1647,7 +1579,7 @@ fn category_http_failures_have_specific_structured_errors() {
 #[test]
 fn changed_listing_detail_model_is_unrecognized_instead_of_not_found() {
     let value = invoke_error(
-        &TestRuntime {
+        &FixtureApplication {
             client: MockClient::with_responses([
                 response(StatusCode::OK, json!({ "model": 2 })),
                 response(StatusCode::OK, json!({ "summaries": [], "total": 0 })),
@@ -1704,7 +1636,7 @@ fn listing_list_uses_the_published_listing_search_endpoint_and_paginates() {
     let client = MockClient::with_responses(responses);
 
     let output = invoke(
-        &TestRuntime {
+        &FixtureApplication {
             client: client.clone(),
         },
         ["flea", "--format", "json", "tori", "listing", "list"],
@@ -1725,22 +1657,22 @@ fn listing_list_uses_the_published_listing_search_endpoint_and_paginates() {
     assert_eq!(requests[51].path_and_query, "/search?limit=50&offset=50");
 }
 
-fn invoke<const N: usize>(runtime: &TestRuntime, args: [&str; N]) -> Value {
-    let result = run_with_runtime(args, runtime);
+fn invoke<const N: usize>(runtime: &FixtureApplication, args: [&str; N]) -> Value {
+    let result = run_with_dependencies(args, &runtime.dependencies());
     assert_eq!(result.exit_code, 0, "{}", result.document);
     assert_eq!(result.presentation, Presentation::Structured);
     serde_json::from_str(&result.document).expect("one JSON envelope")
 }
 
-fn invoke_error<const N: usize>(runtime: &TestRuntime, args: [&str; N]) -> Value {
-    let result = run_with_runtime(args, runtime);
+fn invoke_error<const N: usize>(runtime: &FixtureApplication, args: [&str; N]) -> Value {
+    let result = run_with_dependencies(args, &runtime.dependencies());
     assert_ne!(result.exit_code, 0, "{}", result.document);
     assert_eq!(result.presentation, Presentation::Structured);
     serde_json::from_str(&result.document).expect("one JSON envelope")
 }
 
-fn invoke_vec(runtime: &TestRuntime, args: Vec<String>) -> Value {
-    let result = run_with_runtime(args, runtime);
+fn invoke_vec(runtime: &FixtureApplication, args: Vec<String>) -> Value {
+    let result = run_with_dependencies(args, &runtime.dependencies());
     assert_eq!(result.exit_code, 0, "{}", result.document);
     assert_eq!(result.presentation, Presentation::Structured);
     serde_json::from_str(&result.document).expect("one JSON envelope")

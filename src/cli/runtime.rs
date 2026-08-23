@@ -1,21 +1,21 @@
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use serde_json::Value;
 
 use crate::{
     cli::{
-        Command, CommandFuture, CommandRuntime, ToriCommand, VintedCommand,
-        auth::{AuthCommandHandler, FileAuthStore, unix_time_now},
+        Command, ToriCommand, VintedCommand,
+        auth::{AuthArgs, AuthCommandHandler, FileAuthStore, unix_time_now},
         auth_callback, category, draft, favorite, listing, saved_search, vinted_search,
     },
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     marketplace::{
-        MarketplaceContext, MarketplaceId, marketplace, marketplaces,
+        MarketplaceContext, MarketplaceId, PortalId, marketplace, marketplaces,
         tori::{
             adinput::{ClientTransport, HttpAdInputApi, WorkflowConfig},
             auth::SchibstedToriAuthenticationApi,
-            client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
+            client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport, ToriClient},
             favorites::HttpFavoritesApi,
             item::HttpPublicItemApi,
             listings::HttpListingsApi,
@@ -23,35 +23,120 @@ use crate::{
             search::HttpPublicSearchApi,
             session as tori_session,
         },
+        vinted::{
+            auth::VintedCredentialRecord,
+            search::{VintedSearch, VintedSearchApi},
+            session as vinted_session,
+        },
     },
     storage::StatePaths,
 };
 
-#[derive(Default)]
-pub struct ProductionRuntime;
+use super::outcome::CommandOutcome;
 
-impl CommandRuntime for ProductionRuntime {
-    fn execute(&self, command: Command) -> CommandFuture<'_> {
-        Box::pin(async move {
-            match command {
-                Command::Capabilities => capabilities_output().map(Into::into),
-                Command::Marketplaces => marketplaces_output().map(Into::into),
-                Command::Tori(args) => execute_tori(args.command).await,
-                Command::Vinted(args) => execute_vinted(args.portal, args.command).await,
-                Command::Skill(args) => super::skill::dispatch(args).map(Into::into),
-                Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
-            }
-        })
+type OutcomeFuture = Pin<Box<dyn Future<Output = Result<CommandOutcome, AppError>>>>;
+type ToriClientFuture = Pin<Box<dyn Future<Output = Result<Arc<dyn ToriClient>, AppError>>>>;
+type ToriAuthHandler = dyn Fn(AuthArgs) -> OutcomeFuture + Send + Sync;
+type VintedAuthHandler = dyn Fn(PortalId, AuthArgs) -> OutcomeFuture + Send + Sync;
+type VintedCredentialsProvider =
+    dyn Fn(PortalId) -> Result<VintedCredentialRecord, AppError> + Send + Sync;
+
+pub struct ApplicationDependencies {
+    public_tori_client: Arc<dyn ToriClient>,
+    authenticated_tori_client: Arc<dyn Fn() -> ToriClientFuture + Send + Sync>,
+    tori_auth: Arc<ToriAuthHandler>,
+    vinted_auth: Arc<VintedAuthHandler>,
+    vinted_credentials: Arc<VintedCredentialsProvider>,
+    vinted_search: Arc<dyn VintedSearchApi>,
+}
+
+impl ApplicationDependencies {
+    pub fn production() -> Self {
+        Self {
+            public_tori_client: Arc::new(public_client()),
+            authenticated_tori_client: Arc::new(|| {
+                Box::pin(async {
+                    tori_session::authenticated_client()
+                        .await
+                        .map(|client| Arc::new(client) as Arc<dyn ToriClient>)
+                })
+            }),
+            tori_auth: Arc::new(|args| Box::pin(execute_tori_auth(args))),
+            vinted_auth: Arc::new(|portal, args| Box::pin(execute_vinted_auth(portal, args))),
+            vinted_credentials: Arc::new(vinted_session::credentials),
+            vinted_search: Arc::new(VintedSearch::new()),
+        }
+    }
+
+    pub fn with_tori_client(mut self, client: Arc<dyn ToriClient>) -> Self {
+        self.public_tori_client = Arc::clone(&client);
+        self.authenticated_tori_client = Arc::new(move || {
+            let client = Arc::clone(&client);
+            Box::pin(async move { Ok(client) })
+        });
+        self
+    }
+
+    pub fn with_tori_auth_handler<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(AuthArgs) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<CommandOutcome, AppError>> + 'static,
+    {
+        self.tori_auth = Arc::new(move |args| Box::pin(handler(args)));
+        self
+    }
+
+    pub fn with_vinted_auth_handler<F, Fut>(mut self, handler: F) -> Self
+    where
+        F: Fn(PortalId, AuthArgs) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<CommandOutcome, AppError>> + 'static,
+    {
+        self.vinted_auth = Arc::new(move |portal, args| Box::pin(handler(portal, args)));
+        self
+    }
+
+    pub fn with_vinted_credentials_provider<F>(mut self, provider: F) -> Self
+    where
+        F: Fn(PortalId) -> Result<VintedCredentialRecord, AppError> + Send + Sync + 'static,
+    {
+        self.vinted_credentials = Arc::new(provider);
+        self
+    }
+
+    pub fn with_vinted_search_api(mut self, api: Arc<dyn VintedSearchApi>) -> Self {
+        self.vinted_search = api;
+        self
+    }
+
+    async fn authenticated_tori_client(&self) -> Result<Arc<dyn ToriClient>, AppError> {
+        (self.authenticated_tori_client)().await
     }
 }
 
-async fn execute_tori(command: ToriCommand) -> Result<super::outcome::CommandOutcome, AppError> {
+pub async fn dispatch(
+    command: Command,
+    dependencies: &ApplicationDependencies,
+) -> Result<CommandOutcome, AppError> {
     match command {
-        ToriCommand::Auth(args) => execute_tori_auth(args).await,
+        Command::Capabilities => capabilities_output().map(Into::into),
+        Command::Marketplaces => marketplaces_output().map(Into::into),
+        Command::Tori(args) => execute_tori(args.command, dependencies).await,
+        Command::Vinted(args) => execute_vinted(args.portal, args.command, dependencies).await,
+        Command::Skill(args) => super::skill::dispatch(args).map(Into::into),
+        Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
+    }
+}
+
+async fn execute_tori(
+    command: ToriCommand,
+    dependencies: &ApplicationDependencies,
+) -> Result<CommandOutcome, AppError> {
+    match command {
+        ToriCommand::Auth(args) => (dependencies.tori_auth)(args).await,
         ToriCommand::Capabilities => marketplace_capabilities(MarketplaceId::Tori).map(Into::into),
         ToriCommand::Category(args) => {
-            let client = tori_session::authenticated_client().await?;
-            let api = HttpListingsApi::new(Arc::new(client));
+            let client = dependencies.authenticated_tori_client().await?;
+            let api = HttpListingsApi::new(client);
             category::dispatch_with_api(args, &api).await
         }
         ToriCommand::Draft(args) => match args.command {
@@ -63,44 +148,43 @@ async fn execute_tori(command: ToriCommand) -> Result<super::outcome::CommandOut
                 verify_category: true,
                 ..
             } => {
-                let client = tori_session::authenticated_client().await?;
-                let api = HttpListingsApi::new(Arc::new(client));
+                let client = dependencies.authenticated_tori_client().await?;
+                let api = HttpListingsApi::new(client);
                 draft::execute_preview(command, Some(&api)).await
             }
             command => {
-                let client = tori_session::authenticated_client().await?;
+                let client = dependencies.authenticated_tori_client().await?;
                 let api = HttpAdInputApi::new(ClientTransport::new(client));
                 draft::execute(command, api, WorkflowConfig::default()).await
             }
         },
         ToriCommand::Favorite(args) => {
-            let client = tori_session::authenticated_client().await?;
-            let api = HttpFavoritesApi::new(Arc::new(client));
+            let client = dependencies.authenticated_tori_client().await?;
+            let api = HttpFavoritesApi::new(client);
             favorite::dispatch_with_api(args, &api).await
         }
         ToriCommand::Item(args) => {
-            let api = HttpPublicItemApi::new(Arc::new(public_client()));
+            let api = HttpPublicItemApi::new(Arc::clone(&dependencies.public_tori_client));
             super::item::dispatch_with_api(args, &api).await
         }
         ToriCommand::Listing(args) => {
-            let client = tori_session::authenticated_client().await?;
-            let api = HttpListingsApi::new(Arc::new(client));
+            let client = dependencies.authenticated_tori_client().await?;
+            let api = HttpListingsApi::new(client);
             listing::dispatch_with_api(args, &api).await
         }
         ToriCommand::Search(args) => {
-            let search_api = HttpPublicSearchApi::new(Arc::new(public_client()));
-            let item_api = HttpPublicItemApi::new(Arc::new(public_client()));
+            let search_api = HttpPublicSearchApi::new(Arc::clone(&dependencies.public_tori_client));
+            let item_api = HttpPublicItemApi::new(Arc::clone(&dependencies.public_tori_client));
             super::search::dispatch_with_apis(*args, &search_api, Some(&item_api)).await
         }
         ToriCommand::SavedSearch(args) => {
-            let client: Arc<dyn crate::marketplace::tori::client::ToriClient> =
-                Arc::new(tori_session::authenticated_client().await?);
+            let client = dependencies.authenticated_tori_client().await?;
             let api = HttpSavedSearchesApi::new(Arc::clone(&client));
             let search_api = HttpPublicSearchApi::new(client);
             saved_search::dispatch_with_apis(*args, &api, &search_api).await
         }
         ToriCommand::Location(args) => {
-            let api = HttpPublicSearchApi::new(Arc::new(public_client()));
+            let api = HttpPublicSearchApi::new(Arc::clone(&dependencies.public_tori_client));
             super::location::dispatch_with_api(args, &api)
                 .await
                 .map(Into::into)
@@ -108,32 +192,33 @@ async fn execute_tori(command: ToriCommand) -> Result<super::outcome::CommandOut
     }
 }
 
-async fn execute_vinted(
-    portal: crate::marketplace::PortalId,
-    command: VintedCommand,
-) -> Result<super::outcome::CommandOutcome, AppError> {
-    match command {
-        VintedCommand::Auth(args) => {
-            use crate::marketplace::vinted::session::{self, AuthOperation};
-
-            let operation = match args.command {
-                super::auth::AuthCommand::Login => AuthOperation::Login,
-                super::auth::AuthCommand::Status => AuthOperation::Status,
-                super::auth::AuthCommand::Logout => AuthOperation::Logout,
-                super::auth::AuthCommand::Callback { .. } => {
-                    return Err(AppError::unexpected(
-                        "the Vinted callback receiver does not use the CLI callback command",
-                    ));
-                }
-            };
-            session::execute_auth(portal, operation).await
+async fn execute_vinted_auth(portal: PortalId, args: AuthArgs) -> Result<CommandOutcome, AppError> {
+    let operation = match args.command {
+        super::auth::AuthCommand::Login => vinted_session::AuthOperation::Login,
+        super::auth::AuthCommand::Status => vinted_session::AuthOperation::Status,
+        super::auth::AuthCommand::Logout => vinted_session::AuthOperation::Logout,
+        super::auth::AuthCommand::Callback { .. } => {
+            return Err(AppError::unexpected(
+                "the Vinted callback receiver does not use the CLI callback command",
+            ));
         }
+    };
+    vinted_session::execute_auth(portal, operation).await
+}
+
+async fn execute_vinted(
+    portal: PortalId,
+    command: VintedCommand,
+    dependencies: &ApplicationDependencies,
+) -> Result<CommandOutcome, AppError> {
+    match command {
+        VintedCommand::Auth(args) => (dependencies.vinted_auth)(portal, args).await,
         VintedCommand::Capabilities => {
             marketplace_capabilities(MarketplaceId::Vinted).map(Into::into)
         }
         VintedCommand::Search(args) => {
-            let credentials = crate::marketplace::vinted::session::credentials(portal)?;
-            vinted_search::dispatch(args, &credentials)
+            let credentials = (dependencies.vinted_credentials)(portal)?;
+            vinted_search::dispatch(args, &credentials, dependencies.vinted_search.as_ref())
                 .await
                 .map(Into::into)
         }
