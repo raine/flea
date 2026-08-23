@@ -20,6 +20,7 @@ use crate::{
         tori::{
             favorites::{FavoriteFolder, FavoriteMutation, FavoriteStatus},
             interactive::CallbackCapture,
+            listings::DeletedListing,
             login::{AuthCompleteOutput, AuthLogoutOutput},
             saved_searches::{DeletedSavedSearch, SavedSearch},
             session::AuthStatusOutput,
@@ -66,12 +67,6 @@ pub struct SavedSearchListOutput {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ListingDeleteOutput {
-    pub listing_id: String,
-    pub deleted: bool,
-}
-
-#[derive(Debug, Serialize)]
 pub struct DraftDeleteOutput {
     pub draft_id: String,
     pub deleted: bool,
@@ -105,7 +100,7 @@ pub enum CommandData {
     ListingCollection(ListingCollection),
     ListingDetail(ListingDetail),
     ListingMutation(ListingMutation),
-    ListingDelete(ListingDeleteOutput),
+    ListingDelete(DeletedListing),
     DraftPreview(DraftPreviewOutput),
     DraftInspection(DraftInspectionOutput),
     DraftCreate(CreateResult),

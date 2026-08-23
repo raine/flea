@@ -12,11 +12,10 @@ use serde_json::Value;
 use crate::{
     cli::{
         draft::{ListingInputArgs, TradeType, parse_price},
-        outcome::{CommandData, CommandOutcome, ListingDeleteOutput},
+        outcome::{CommandData, CommandOutcome},
     },
-    domain::observation::Observation,
     error::AppError,
-    marketplace::tori::listings::{Listings, ListingsApi},
+    marketplace::tori::listings::{ListingRequest, ListingResult, Listings, ListingsApi},
 };
 
 #[derive(Debug, Args)]
@@ -86,39 +85,35 @@ pub async fn dispatch(
     command: ListingArgs,
     api: &dyn ListingsApi,
 ) -> Result<CommandOutcome, AppError> {
-    let listings = Listings::new(api);
-    let (data, source) = match command.command {
-        ListingCommand::List => (
-            CommandData::ListingCollection(listings.list().await?),
-            "listing_collection",
-        ),
-        ListingCommand::Show { listing_id } => (
-            CommandData::ListingDetail(listings.show(&listing_id).await?),
-            "listing_detail",
-        ),
-        ListingCommand::Update { listing_id, values } => {
-            let changes = listing_changes(*values)?;
-            (
-                CommandData::ListingDetail(listings.update(&listing_id, changes).await?),
-                "listing_update_response",
-            )
-        }
-        ListingCommand::Dispose { listing_id } => (
-            CommandData::ListingMutation(listings.dispose(&listing_id).await?),
-            "listing_dispose_response",
-        ),
-        ListingCommand::Delete { listing_id } => {
-            let deleted = listings.delete(&listing_id).await?;
-            (
-                CommandData::ListingDelete(ListingDeleteOutput {
-                    listing_id: deleted.listing_id,
-                    deleted: true,
-                }),
-                "listing_delete_response",
-            )
-        }
+    let request = match command.command {
+        ListingCommand::List => ListingRequest::List,
+        ListingCommand::Show { listing_id } => ListingRequest::Show { listing_id },
+        ListingCommand::Update { listing_id, values } => ListingRequest::Update {
+            listing_id,
+            changes: listing_changes(*values)?,
+        },
+        ListingCommand::Dispose { listing_id } => ListingRequest::Dispose { listing_id },
+        ListingCommand::Delete { listing_id } => ListingRequest::Delete { listing_id },
     };
-    Ok(CommandOutcome::new(data).with_observation(Observation::confirmed_present(source, None)))
+    let (data, observation) = match Listings::new(api).execute(request).await? {
+        ListingResult::Collection {
+            collection,
+            observation,
+        } => (CommandData::ListingCollection(collection), observation),
+        ListingResult::Detail {
+            detail,
+            observation,
+        } => (CommandData::ListingDetail(detail), observation),
+        ListingResult::Mutation {
+            mutation,
+            observation,
+        } => (CommandData::ListingMutation(mutation), observation),
+        ListingResult::Deleted {
+            deleted,
+            observation,
+        } => (CommandData::ListingDelete(deleted), observation),
+    };
+    Ok(CommandOutcome::new(data).with_observation(observation))
 }
 
 pub fn listing_changes(values: ListingInputArgs) -> Result<BTreeMap<String, Value>, AppError> {

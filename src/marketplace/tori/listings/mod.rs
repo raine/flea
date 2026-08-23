@@ -29,6 +29,7 @@ use scan::{
     CollectionScanError, scan_collection,
 };
 
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
@@ -72,6 +73,50 @@ impl CollectionPageSource for ListingCollectionSource<'_> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum ListingRequest {
+    List,
+    Show {
+        listing_id: String,
+    },
+    Update {
+        listing_id: String,
+        changes: BTreeMap<String, Value>,
+    },
+    Dispose {
+        listing_id: String,
+    },
+    Delete {
+        listing_id: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct DeletedListing {
+    pub listing_id: String,
+    pub deleted: bool,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ListingResult {
+    Collection {
+        collection: ListingCollection,
+        observation: Observation,
+    },
+    Detail {
+        detail: ListingDetail,
+        observation: Observation,
+    },
+    Mutation {
+        mutation: ListingMutation,
+        observation: Observation,
+    },
+    Deleted {
+        deleted: DeletedListing,
+        observation: Observation,
+    },
+}
+
 pub struct Listings<'a> {
     api: &'a dyn ListingsApi,
 }
@@ -79,6 +124,40 @@ pub struct Listings<'a> {
 impl<'a> Listings<'a> {
     pub fn new(api: &'a dyn ListingsApi) -> Self {
         Self { api }
+    }
+
+    pub async fn execute(&self, request: ListingRequest) -> Result<ListingResult, AppError> {
+        match request {
+            ListingRequest::List => Ok(ListingResult::Collection {
+                collection: self.list().await?,
+                observation: Observation::confirmed_present("listing_collection", None),
+            }),
+            ListingRequest::Show { listing_id } => Ok(ListingResult::Detail {
+                detail: self.show(&listing_id).await?,
+                observation: Observation::confirmed_present("listing_detail", None),
+            }),
+            ListingRequest::Update {
+                listing_id,
+                changes,
+            } => Ok(ListingResult::Detail {
+                detail: self.update(&listing_id, changes).await?,
+                observation: Observation::confirmed_present("listing_update_response", None),
+            }),
+            ListingRequest::Dispose { listing_id } => Ok(ListingResult::Mutation {
+                mutation: self.dispose(&listing_id).await?,
+                observation: Observation::confirmed_present("listing_dispose_response", None),
+            }),
+            ListingRequest::Delete { listing_id } => {
+                let deleted = self.delete(&listing_id).await?;
+                Ok(ListingResult::Deleted {
+                    deleted: DeletedListing {
+                        listing_id: deleted.listing_id,
+                        deleted: true,
+                    },
+                    observation: Observation::confirmed_present("listing_delete_response", None),
+                })
+            }
+        }
     }
 
     pub async fn list(&self) -> Result<ListingCollection, AppError> {
