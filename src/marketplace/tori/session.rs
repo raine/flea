@@ -1,4 +1,6 @@
-use serde::Serialize;
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 use crate::{
     cli::outcome::CommandOutcome,
@@ -9,9 +11,70 @@ use crate::{
     marketplace::tori::client::{ClientConfig, DeviceIdentity, HttpClient, ReqwestTransport},
     storage::{
         StatePaths,
-        credentials::{CredentialRecord, CredentialStore, CredentialStoreError},
+        credentials::{CredentialStoreError, StoredCredential, TypedCredentialStore},
     },
 };
+
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct CredentialRecord {
+    pub(crate) user_id: String,
+    pub(crate) refresh_token: String,
+    pub(crate) bearer_token: String,
+    #[serde(default)]
+    pub(crate) id_token: Option<String>,
+    pub(crate) bearer_expires_at_unix: u64,
+    pub(crate) device_id: String,
+    pub(crate) installation_id: String,
+    pub(crate) ab_test_device_id: String,
+}
+
+impl CredentialRecord {
+    pub(crate) fn bearer_is_valid_at(&self, now_unix: u64, minimum_remaining_seconds: u64) -> bool {
+        self.bearer_expires_at_unix.saturating_sub(now_unix) > minimum_remaining_seconds
+    }
+}
+
+impl fmt::Debug for CredentialRecord {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CredentialRecord")
+            .field("user_id", &"[REDACTED]")
+            .field("refresh_token", &"[REDACTED]")
+            .field("bearer_token", &"[REDACTED]")
+            .field("id_token", &"[REDACTED]")
+            .field("bearer_expires_at_unix", &self.bearer_expires_at_unix)
+            .field("device_id", &"[REDACTED]")
+            .field("installation_id", &"[REDACTED]")
+            .field("ab_test_device_id", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl StoredCredential for CredentialRecord {
+    fn account_id(&self) -> &str {
+        &self.user_id
+    }
+
+    fn validate(&self) -> Result<(), CredentialStoreError> {
+        let required = [
+            self.user_id.as_str(),
+            self.refresh_token.as_str(),
+            self.bearer_token.as_str(),
+            self.device_id.as_str(),
+            self.installation_id.as_str(),
+            self.ab_test_device_id.as_str(),
+        ];
+        if required.iter().any(|value| value.is_empty())
+            || self.id_token.as_deref() == Some("")
+            || self.bearer_expires_at_unix == 0
+        {
+            return Err(CredentialStoreError::MissingRequiredValue);
+        }
+        Ok(())
+    }
+}
+
+pub(crate) type CredentialStore = TypedCredentialStore<CredentialRecord>;
 
 pub(crate) async fn authenticated_client() -> Result<HttpClient<ReqwestTransport>, AppError> {
     authenticated_client_with(

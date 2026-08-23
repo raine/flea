@@ -8,11 +8,13 @@ use serde_json::Value;
 
 use crate::{
     error::{AppError, ExitClass},
-    marketplace::tori::auth::{AuthCredentials, AuthenticationApi, BrowserAuth, OAuthFlow},
+    marketplace::tori::{
+        auth::{AuthCredentials, AuthenticationApi, BrowserAuth, OAuthFlow},
+        session::{CredentialRecord, CredentialStore},
+    },
     storage::{
         StatePaths,
         auth_flow::{AuthFlowStore, AuthFlowStoreError},
-        credentials::{CredentialRecord, CredentialStore},
     },
 };
 
