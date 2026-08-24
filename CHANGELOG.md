@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Replace the duplicate Vinted `auth` and `auth web` trees with one
+  `auth login/status/logout` command set that manages both catalog credentials
+  and the publication browser by default; `--api` and `--browser` select one
+  layer, and existing state remains in place
 - Show required Vinted category attributes and executable option-selection
   actions in the primary publication composer
 - Treat confirmed Vinted publications under review as pending successes with

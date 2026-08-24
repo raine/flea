@@ -42,6 +42,35 @@ use crate::{
 };
 
 #[derive(Debug, Serialize)]
+pub struct VintedAuthReadiness {
+    pub catalog: bool,
+    pub publication: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VintedCombinedAuthLogin {
+    pub authenticated: bool,
+    pub api: VintedLoginResult,
+    pub browser: VintedWebAuthStatus,
+    pub ready: VintedAuthReadiness,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VintedCombinedAuthStatus {
+    pub authenticated: bool,
+    pub api: VintedAuthStatus,
+    pub browser: VintedWebAuthStatus,
+    pub ready: VintedAuthReadiness,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VintedCombinedAuthLogout {
+    pub authenticated: bool,
+    pub api: VintedLogoutOutput,
+    pub browser: VintedWebLogoutOutput,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CapabilitiesOutput {
     pub marketplaces: &'static [MarketplaceDescriptor],
 }
@@ -89,6 +118,9 @@ pub enum CommandData {
     VintedAuthLogin(VintedLoginResult),
     VintedAuthLogout(VintedLogoutOutput),
     VintedAuthStatus(VintedAuthStatus),
+    VintedCombinedAuthLogin(VintedCombinedAuthLogin),
+    VintedCombinedAuthStatus(VintedCombinedAuthStatus),
+    VintedCombinedAuthLogout(VintedCombinedAuthLogout),
     VintedWebAuthStatus(VintedWebAuthStatus),
     VintedWebAuthLogout(VintedWebLogoutOutput),
     VintedDraftCollection(VintedDraftCollection),

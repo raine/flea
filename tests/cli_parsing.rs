@@ -22,8 +22,11 @@ fn every_command_leaf_parses() {
         vec!["flea", "tori", "auth", "logout"],
         vec!["flea", "tori", "capabilities"],
         vec!["flea", "vinted", "auth", "login"],
+        vec!["flea", "vinted", "auth", "login", "--api"],
         vec!["flea", "vinted", "auth", "status"],
+        vec!["flea", "vinted", "auth", "status", "--browser"],
         vec!["flea", "vinted", "auth", "logout"],
+        vec!["flea", "vinted", "auth", "logout", "--api"],
         vec!["flea", "vinted", "capabilities"],
         vec!["flea", "vinted", "search", "takki"],
         vec!["flea", "vinted", "item", "show", "9757271392"],
@@ -158,6 +161,14 @@ fn every_command_leaf_parses() {
         Cli::try_parse_from(&arguments)
             .unwrap_or_else(|error| panic!("failed to parse {arguments:?}: {error}"));
     }
+}
+
+#[test]
+fn vinted_auth_has_one_command_set_with_exclusive_scope_flags() {
+    assert!(Cli::try_parse_from(["flea", "vinted", "auth", "web", "status"]).is_err());
+    assert!(
+        Cli::try_parse_from(["flea", "vinted", "auth", "status", "--api", "--browser",]).is_err()
+    );
 }
 
 #[test]

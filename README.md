@@ -187,17 +187,24 @@ brew install agent-browser
 agent-browser install
 ```
 
-Open the browser session and sign in once:
+Set up authentication and sign in once:
 
 ```sh
-flea vinted auth web login
-flea vinted auth web status
+flea vinted auth login
+flea vinted auth status
 ```
 
-The login command leaves the visible browser open when sign-in or a human check
-needs user interaction. Complete that interaction in the browser, then run the
-status command. Flea stores the dedicated Chrome profile under its private state
-directory. `flea vinted auth web logout` clears its cookies and browser storage.
+Vinted authentication has two layers. Account credentials support catalog,
+discovery, and account reads. A persistent Chrome profile supplies the cookies,
+CSRF state, and human verification required for publication. The unqualified
+commands manage both layers and report `ready.catalog` and `ready.publication`.
+Use `--api` or `--browser` when only one layer should be changed or inspected.
+
+The login command leaves the visible publication browser open when sign-in or a
+human check needs user interaction. Complete that interaction in the browser,
+then run `flea vinted auth status --browser`. Flea stores account credentials
+and the dedicated Chrome profile in their established private state locations. `flea vinted auth logout` clears both layers; `--api` or `--browser`
+limits the clear operation to one layer.
 
 ```sh
 flea --format json vinted category search SEARCH_TEXT
@@ -335,7 +342,7 @@ flea vinted item show --help
 flea vinted listing --help
 flea vinted draft --help
 flea vinted publish --help
-flea vinted auth web --help
+flea vinted auth --help
 ```
 
 ## Structured output

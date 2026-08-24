@@ -3,9 +3,7 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use crate::{
     cli::{
         Command, ToriCommand, VintedCommand,
-        auth::{
-            ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand, VintedWebAuthCommand,
-        },
+        auth::{ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand, VintedAuthScope},
         category, draft, favorite, listing, saved_search, vinted_category, vinted_publish,
     },
     domain::{
@@ -58,7 +56,8 @@ use crate::{
 
 use super::outcome::{
     CapabilitiesOutput, CommandData, CommandOutcome, MarketplaceCapabilitiesOutput,
-    MarketplaceSummary, MarketplacesOutput,
+    MarketplaceSummary, MarketplacesOutput, VintedAuthReadiness, VintedCombinedAuthLogin,
+    VintedCombinedAuthLogout, VintedCombinedAuthStatus,
 };
 
 type OutcomeFuture = Pin<Box<dyn Future<Output = Result<CommandOutcome, AppError>>>>;
@@ -287,31 +286,131 @@ async fn execute_vinted_auth(
     portal: PortalId,
     args: VintedAuthArgs,
 ) -> Result<CommandOutcome, AppError> {
-    let operation = match args.command {
-        VintedAuthCommand::Web(args) => {
-            return match args.command {
-                VintedWebAuthCommand::Login => vinted_web::login(portal)
-                    .map(CommandData::VintedWebAuthStatus)
-                    .map(CommandOutcome::new),
-                VintedWebAuthCommand::Status => {
-                    let status = vinted_web::status(portal)?;
-                    let authenticated = status.authenticated;
-                    let outcome = CommandOutcome::new(CommandData::VintedWebAuthStatus(status));
-                    if authenticated {
-                        Ok(outcome)
-                    } else {
-                        Ok(outcome.with_next_actions(vec![vinted_web::login_action(portal)]))
-                    }
+    match args.command {
+        VintedAuthCommand::Login(scope) => match scope.scope() {
+            VintedAuthScope::Api => {
+                execute_vinted_api_auth(portal, vinted_session::AuthOperation::Login).await
+            }
+            VintedAuthScope::Browser => browser_login(portal),
+            VintedAuthScope::All => {
+                let api = match vinted_session::execute_auth(
+                    portal,
+                    vinted_session::AuthOperation::Login,
+                )
+                .await?
+                {
+                    vinted_session::AuthResult::Login(login) => login,
+                    _ => unreachable!("login returns login data"),
+                };
+                let browser = vinted_web::begin_login(portal).map_err(|error| {
+                    error.with_partial(serde_json::json!({
+                        "api": api,
+                        "ready": { "catalog": true, "publication": false }
+                    }))
+                })?;
+                let publication = browser.authenticated;
+                let mut outcome = CommandOutcome::new(CommandData::VintedCombinedAuthLogin(
+                    VintedCombinedAuthLogin {
+                        authenticated: publication,
+                        api,
+                        browser,
+                        ready: VintedAuthReadiness {
+                            catalog: true,
+                            publication,
+                        },
+                    },
+                ));
+                if !publication {
+                    outcome = outcome
+                        .with_warnings(vec![Warning {
+                            code: "vinted.browser_sign_in_pending".to_owned(),
+                            message: "Complete Vinted sign-in and any human verification in the open browser window".to_owned(),
+                        }])
+                        .with_next_actions(vec![vinted_web::status_action(portal)]);
                 }
-                VintedWebAuthCommand::Logout => vinted_web::logout(portal)
-                    .map(CommandData::VintedWebAuthLogout)
-                    .map(CommandOutcome::new),
-            };
-        }
-        VintedAuthCommand::Login => vinted_session::AuthOperation::Login,
-        VintedAuthCommand::Status => vinted_session::AuthOperation::Status,
-        VintedAuthCommand::Logout => vinted_session::AuthOperation::Logout,
-    };
+                Ok(outcome)
+            }
+        },
+        VintedAuthCommand::Status(scope) => match scope.scope() {
+            VintedAuthScope::Api => {
+                execute_vinted_api_auth(portal, vinted_session::AuthOperation::Status).await
+            }
+            VintedAuthScope::Browser => browser_status(portal),
+            VintedAuthScope::All => {
+                let api = match vinted_session::execute_auth(
+                    portal,
+                    vinted_session::AuthOperation::Status,
+                )
+                .await?
+                {
+                    vinted_session::AuthResult::Status(status) => status,
+                    _ => unreachable!("status returns status data"),
+                };
+                let browser = vinted_web::status(portal).map_err(|error| {
+                    error.with_partial(serde_json::json!({
+                        "api": api.data,
+                        "ready": { "catalog": api.data.authenticated(), "publication": false }
+                    }))
+                })?;
+                let catalog = api.data.authenticated();
+                let publication = catalog && browser.authenticated;
+                let mut next_actions = api.next_actions;
+                if !browser.authenticated {
+                    next_actions.push(vinted_web::login_action(portal));
+                }
+                Ok(CommandOutcome::new(CommandData::VintedCombinedAuthStatus(
+                    VintedCombinedAuthStatus {
+                        authenticated: publication,
+                        api: api.data,
+                        browser,
+                        ready: VintedAuthReadiness {
+                            catalog,
+                            publication,
+                        },
+                    },
+                ))
+                .with_next_actions(next_actions))
+            }
+        },
+        VintedAuthCommand::Logout(scope) => match scope.scope() {
+            VintedAuthScope::Api => {
+                execute_vinted_api_auth(portal, vinted_session::AuthOperation::Logout).await
+            }
+            VintedAuthScope::Browser => vinted_web::logout(portal)
+                .map(CommandData::VintedWebAuthLogout)
+                .map(CommandOutcome::new),
+            VintedAuthScope::All => {
+                let api = match vinted_session::execute_auth(
+                    portal,
+                    vinted_session::AuthOperation::Logout,
+                )
+                .await?
+                {
+                    vinted_session::AuthResult::Logout(logout) => logout,
+                    _ => unreachable!("logout returns logout data"),
+                };
+                let browser = vinted_web::logout(portal).map_err(|error| {
+                    error.with_partial(serde_json::json!({
+                        "authenticated": false,
+                        "api": api
+                    }))
+                })?;
+                Ok(CommandOutcome::new(CommandData::VintedCombinedAuthLogout(
+                    VintedCombinedAuthLogout {
+                        authenticated: false,
+                        api,
+                        browser,
+                    },
+                )))
+            }
+        },
+    }
+}
+
+async fn execute_vinted_api_auth(
+    portal: PortalId,
+    operation: vinted_session::AuthOperation,
+) -> Result<CommandOutcome, AppError> {
     match vinted_session::execute_auth(portal, operation).await? {
         vinted_session::AuthResult::Login(login) => {
             let authenticated = login.authenticated;
@@ -325,6 +424,23 @@ async fn execute_vinted_auth(
         vinted_session::AuthResult::Logout(logout) => {
             Ok(CommandOutcome::new(CommandData::VintedAuthLogout(logout)))
         }
+    }
+}
+
+fn browser_login(portal: PortalId) -> Result<CommandOutcome, AppError> {
+    vinted_web::login(portal)
+        .map(CommandData::VintedWebAuthStatus)
+        .map(CommandOutcome::new)
+}
+
+fn browser_status(portal: PortalId) -> Result<CommandOutcome, AppError> {
+    let status = vinted_web::status(portal)?;
+    let authenticated = status.authenticated;
+    let outcome = CommandOutcome::new(CommandData::VintedWebAuthStatus(status));
+    if authenticated {
+        Ok(outcome)
+    } else {
+        Ok(outcome.with_next_actions(vec![vinted_web::login_action(portal)]))
     }
 }
 

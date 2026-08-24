@@ -75,50 +75,49 @@ pub struct VintedAuthArgs {
 #[derive(Debug, Subcommand)]
 pub enum VintedAuthCommand {
     #[command(
-        about = "Sign in through the browser",
-        long_about = "Open the Vinted sign-in flow in the default browser, wait for its callback, and store account-scoped credentials."
+        about = "Sign in for Vinted catalog and publication commands",
+        long_about = "Set up both Vinted authentication layers: account credentials for catalog operations and the persistent interactive browser required for publication. Use --api or --browser to set up only one layer."
     )]
-    Login,
+    Login(VintedAuthScopeArgs),
     #[command(
-        about = "Show authentication status",
-        long_about = "Refresh the stored Vinted session when needed and validate it with an online account request."
+        about = "Show Vinted catalog and publication authentication status",
+        long_about = "Validate both Vinted authentication layers and report whether catalog and publication commands are ready. Use --api or --browser to inspect only one layer."
     )]
-    Status,
+    Status(VintedAuthScopeArgs),
     #[command(
-        about = "Clear authentication state",
-        long_about = "Remove stored Vinted credentials for the selected portal."
+        about = "Clear Vinted authentication state",
+        long_about = "Clear both account credentials and the persistent publication browser profile. Use --api or --browser to clear only one layer."
     )]
-    Logout,
-    #[command(
-        about = "Manage the interactive Vinted web session",
-        long_about = "Open, inspect, or clear the persistent browser session used by web publication transport. Human verification remains interactive in the visible browser."
-    )]
-    Web(VintedWebAuthArgs),
+    Logout(VintedAuthScopeArgs),
 }
 
-#[derive(Debug, Args)]
-pub struct VintedWebAuthArgs {
-    #[command(subcommand)]
-    pub command: VintedWebAuthCommand,
+#[derive(Clone, Copy, Debug, Default, Args)]
+pub struct VintedAuthScopeArgs {
+    /// Operate only on account credentials used by catalog API requests.
+    #[arg(long, conflicts_with = "browser")]
+    pub api: bool,
+    /// Operate only on the persistent browser used by publication requests.
+    #[arg(long, conflicts_with = "api")]
+    pub browser: bool,
 }
 
-#[derive(Debug, Subcommand)]
-pub enum VintedWebAuthCommand {
-    #[command(
-        about = "Open the persistent Vinted publication browser",
-        long_about = "Open Vinted in a visible persistent browser. Sign in and complete any human verification shown before retrying web publication."
-    )]
-    Login,
-    #[command(
-        about = "Check the persistent Vinted web session",
-        long_about = "Open the persistent publication browser and validate its Vinted web session with an online current-user request."
-    )]
-    Status,
-    #[command(
-        about = "Clear the persistent Vinted web session",
-        long_about = "Clear cookies and browser storage, close the publication browser, and remove its persistent profile."
-    )]
-    Logout,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VintedAuthScope {
+    All,
+    Api,
+    Browser,
+}
+
+impl VintedAuthScopeArgs {
+    pub const fn scope(self) -> VintedAuthScope {
+        if self.api {
+            VintedAuthScope::Api
+        } else if self.browser {
+            VintedAuthScope::Browser
+        } else {
+            VintedAuthScope::All
+        }
+    }
 }
 
 impl VintedAuthCommand {
@@ -126,35 +125,17 @@ impl VintedAuthCommand {
         use crate::marketplace::CapabilityId;
 
         match self {
-            Self::Login
-            | Self::Web(VintedWebAuthArgs {
-                command: VintedWebAuthCommand::Login,
-            }) => CapabilityId::AuthLogin,
-            Self::Status
-            | Self::Web(VintedWebAuthArgs {
-                command: VintedWebAuthCommand::Status,
-            }) => CapabilityId::AuthStatus,
-            Self::Logout
-            | Self::Web(VintedWebAuthArgs {
-                command: VintedWebAuthCommand::Logout,
-            }) => CapabilityId::AuthLogout,
+            Self::Login(_) => CapabilityId::AuthLogin,
+            Self::Status(_) => CapabilityId::AuthStatus,
+            Self::Logout(_) => CapabilityId::AuthLogout,
         }
     }
 
     pub fn telemetry_name(&self) -> &'static str {
         match self {
-            Self::Login => "auth login",
-            Self::Status => "auth status",
-            Self::Logout => "auth logout",
-            Self::Web(VintedWebAuthArgs {
-                command: VintedWebAuthCommand::Login,
-            }) => "auth web login",
-            Self::Web(VintedWebAuthArgs {
-                command: VintedWebAuthCommand::Status,
-            }) => "auth web status",
-            Self::Web(VintedWebAuthArgs {
-                command: VintedWebAuthCommand::Logout,
-            }) => "auth web logout",
+            Self::Login(_) => "auth login",
+            Self::Status(_) => "auth status",
+            Self::Logout(_) => "auth logout",
         }
     }
 }

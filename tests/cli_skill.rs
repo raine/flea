@@ -72,7 +72,9 @@ fn vinted_skill_preserves_complete_operating_guidance() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), VINTED_SKILL);
     for guidance in [
-        "search requires authentication",
+        "search requires account authentication",
+        "Unqualified auth commands",
+        "`--api` or `--browser` selects one layer",
         "flea vinted filter facets CODE",
         "flea vinted filter search CODE OPTION_TEXT",
         "flea vinted search [QUERY]",

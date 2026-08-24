@@ -229,10 +229,14 @@ impl AgentBrowserSession {
     }
 }
 
-pub fn login(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
+pub fn begin_login(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
     let session = AgentBrowserSession::discover(portal)?;
     session.open()?;
-    let status = status_with_session(&session)?;
+    status_with_session(&session)
+}
+
+pub fn login(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
+    let status = begin_login(portal)?;
     if status.authenticated {
         return Ok(status);
     }
@@ -245,7 +249,7 @@ pub fn login(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
         "user_action": "Sign in to Vinted and complete any human verification shown in the browser."
     }));
     error.safe_to_retry = true;
-    error.next_actions.push(web_status_action(portal));
+    error.next_actions.push(status_action(portal));
     Err(error)
 }
 
@@ -441,13 +445,13 @@ fn web_publication_url() -> &'static str {
 
 pub fn login_action(portal: PortalId) -> NextAction {
     NextAction {
-        command: format!("flea vinted --portal {portal} auth web login"),
+        command: format!("flea vinted --portal {portal} auth login --browser"),
     }
 }
 
-fn web_status_action(portal: PortalId) -> NextAction {
+pub fn status_action(portal: PortalId) -> NextAction {
     NextAction {
-        command: format!("flea vinted --portal {portal} auth web status"),
+        command: format!("flea vinted --portal {portal} auth status --browser"),
     }
 }
 
@@ -510,12 +514,12 @@ mod tests {
     #[test]
     fn web_actions_are_portal_scoped() {
         assert_eq!(
-            web_status_action(PortalId::Fi).command,
-            "flea vinted --portal fi auth web status"
+            status_action(PortalId::Fi).command,
+            "flea vinted --portal fi auth status --browser"
         );
         assert_eq!(
             login_action(PortalId::Fi).command,
-            "flea vinted --portal fi auth web login"
+            "flea vinted --portal fi auth login --browser"
         );
     }
 

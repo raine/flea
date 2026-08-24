@@ -364,7 +364,7 @@ fn browser_gate_error(status: StatusCode) -> Option<AppError> {
     }));
     error.safe_to_retry = true;
     error.next_actions.push(NextAction {
-        command: "flea vinted --portal fi auth web status".to_owned(),
+        command: "flea vinted --portal fi auth status --browser".to_owned(),
     });
     Some(error)
 }
@@ -452,7 +452,7 @@ mod tests {
         assert!(error.safe_to_retry);
         assert_eq!(
             error.next_actions[0].command,
-            "flea vinted --portal fi auth web status"
+            "flea vinted --portal fi auth status --browser"
         );
     }
 

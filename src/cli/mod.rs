@@ -216,8 +216,8 @@ impl ToriCommand {
 #[derive(Debug, Subcommand)]
 pub enum VintedCommand {
     #[command(
-        about = "Manage Vinted browser authentication",
-        long_about = "Sign in, inspect the locally stored session, or clear Vinted credentials."
+        about = "Manage Vinted authentication",
+        long_about = "Set up, inspect, or clear the account credentials and persistent browser session used by Vinted catalog and publication commands."
     )]
     Auth(auth::VintedAuthArgs),
     #[command(
@@ -425,17 +425,13 @@ mod tests {
                 "tori location search",
             ),
             (&["vinted", "auth", "login"], "vinted auth login"),
+            (
+                &["vinted", "auth", "login", "--browser"],
+                "vinted auth login",
+            ),
             (&["vinted", "auth", "status"], "vinted auth status"),
+            (&["vinted", "auth", "status", "--api"], "vinted auth status"),
             (&["vinted", "auth", "logout"], "vinted auth logout"),
-            (&["vinted", "auth", "web", "login"], "vinted auth web login"),
-            (
-                &["vinted", "auth", "web", "status"],
-                "vinted auth web status",
-            ),
-            (
-                &["vinted", "auth", "web", "logout"],
-                "vinted auth web logout",
-            ),
             (
                 &["vinted", "--portal", "fi", "capabilities"],
                 "vinted capabilities",

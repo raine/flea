@@ -82,6 +82,12 @@ pub struct VintedAuthStatus {
     next_actions: Vec<NextAction>,
 }
 
+impl VintedAuthStatus {
+    pub const fn authenticated(&self) -> bool {
+        self.authenticated
+    }
+}
+
 const MINIMUM_ACCESS_LIFETIME_SECONDS: u64 = 30;
 
 struct ResolvedCredentials {

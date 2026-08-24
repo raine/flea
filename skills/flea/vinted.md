@@ -18,9 +18,11 @@ support.
 
 ## Find Vinted listings
 
-Vinted search requires authentication. Follow login actions for missing or
-expired short-lived tokens. Filter codes and option IDs are contextual.
-Discover them instead of guessing or reusing examples.
+Vinted search requires account authentication. Follow login actions for missing
+or expired short-lived tokens. Filter codes and option IDs are contextual.
+Discover them instead of guessing or reusing examples. Unqualified auth commands
+manage both account credentials and the persistent publication browser;
+`--api` or `--browser` selects one layer.
 
 ```sh
 flea vinted auth status
@@ -50,11 +52,13 @@ presentation text. `--raw` preserves upstream JSON.
 
 ## Publish Vinted listings
 
-Web commands use Chrome cookies and human verification through `agent-browser`:
+Publication commands use Chrome cookies and human verification through
+`agent-browser`. Publication also uses account credentials for discovery and
+account reads, so set up both layers:
 
 ```sh
-flea vinted auth web login
-flea vinted auth web status
+flea vinted auth login
+flea vinted auth status
 flea --format json vinted category search SEARCH_TEXT
 flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted category compose CATEGORY_ID --input listing.json --readiness
@@ -108,5 +112,6 @@ Completion reuses photos; `--image` replaces them. Publication results keep
 `display_order`. Both reflect authoritative post-mutation draft or listing
 state. `uploaded_photo_ids` are temporary upload-session mutation inputs, even
 when their values equal assigned IDs. Use assigned IDs to correlate remote
-photos. Complete verification manually, inspect before retrying, and clear
-cookies with `auth web logout`.
+photos. Complete verification manually and inspect before retrying. `auth
+logout` clears both authentication layers; `auth logout --browser` clears only
+browser cookies and profile state.
