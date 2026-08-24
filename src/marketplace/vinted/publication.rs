@@ -6,7 +6,10 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    domain::envelope::NextAction,
+    domain::{
+        envelope::NextAction,
+        vinted_listing::{VintedListingDetail, VintedListingState},
+    },
     error::{AppError, ExitClass},
     image_processing,
     marketplace::vinted::readiness::classify_prerequisite,
@@ -99,13 +102,27 @@ pub struct AssignedPhotoResult {
     pub display_order: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicationStatus {
+    Succeeded,
+    Pending,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PublicationResult {
     pub operation: &'static str,
+    pub status: PublicationStatus,
+    /// Repeating a confirmed publication mutation can create a duplicate listing.
+    pub safe_to_retry: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub draft_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authoritative_state: Option<VintedListingState>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub after_upload_actions: Vec<String>,
     pub uploaded_images: usize,
@@ -174,8 +191,12 @@ impl<'a> VintedPublication<'a> {
                 .map_err(|error| classify_mutation_error(error, &operation, &[]))?;
             return Ok(PublicationResult {
                 operation: "delete_draft",
+                status: PublicationStatus::Succeeded,
+                safe_to_retry: false,
                 draft_id: draft_id(&operation).map(ToOwned::to_owned),
                 item_id: None,
+                canonical_url: None,
+                authoritative_state: None,
                 after_upload_actions: Vec::new(),
                 uploaded_images: 0,
                 photo_action: None,
@@ -317,14 +338,26 @@ impl<'a> VintedPublication<'a> {
                                 MutationStatus::ConfirmedApplied,
                             )
                         })?;
-                    let assigned_photos = self
+                    let assigned_photos = match self
                         .fetch_assigned_photos(
                             &item_id,
                             &operation,
                             &uploaded_photos,
                             MutationStatus::ConfirmedApplied,
                         )
-                        .await?;
+                        .await
+                    {
+                        Ok(photos) => photos,
+                        Err(error) => {
+                            return Err(enrich_confirmed_inspection_error(
+                                error,
+                                &item_id,
+                                uploaded_images,
+                                photo_action,
+                                &response,
+                            ));
+                        }
+                    };
                     return normalize_result(
                         &operation,
                         uploaded_images,
@@ -850,8 +883,12 @@ fn normalize_result(
     }
     Ok(PublicationResult {
         operation: operation_name,
+        status: PublicationStatus::Succeeded,
+        safe_to_retry: false,
         draft_id,
         item_id,
+        canonical_url: None,
+        authoritative_state: None,
         after_upload_actions,
         uploaded_images,
         photo_action,
@@ -865,6 +902,130 @@ fn normalize_result(
             })
             .collect(),
         assigned_photo_ids: assigned_photos.iter().map(|photo| photo.id).collect(),
+    })
+}
+
+fn enrich_confirmed_inspection_error(
+    mut error: AppError,
+    item_id: &str,
+    uploaded_images: usize,
+    photo_action: &'static str,
+    response: &Value,
+) -> AppError {
+    if let Some(partial) = error.partial.as_deref_mut().and_then(Value::as_object_mut) {
+        partial.insert("item_id".to_owned(), json!(item_id));
+        partial.insert("uploaded_images".to_owned(), json!(uploaded_images));
+        partial.insert("photo_action".to_owned(), json!(photo_action));
+        partial.insert(
+            "after_upload_actions".to_owned(),
+            response
+                .get("after_upload_actions")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        );
+    }
+    error
+}
+
+pub(crate) fn review_pending_item_id(error: &AppError) -> Option<&str> {
+    let inspection_not_found = error
+        .details
+        .as_deref()
+        .and_then(|details| details.get("http_status"))
+        .and_then(Value::as_u64)
+        == Some(StatusCode::NOT_FOUND.as_u16().into());
+    let confirmed = error
+        .partial
+        .as_deref()
+        .and_then(|partial| partial.get("mutation_status"))
+        .and_then(Value::as_str)
+        == Some("confirmed_applied");
+    (inspection_not_found && confirmed)
+        .then(|| {
+            error
+                .partial
+                .as_deref()
+                .and_then(|partial| partial.get("item_id"))
+                .and_then(Value::as_str)
+        })
+        .flatten()
+}
+
+pub(crate) fn review_pending_result(
+    operation: &PublicationOperation,
+    error: &AppError,
+    detail: &VintedListingDetail,
+) -> Option<PublicationResult> {
+    if !matches!(
+        operation,
+        PublicationOperation::Publish | PublicationOperation::CompleteDraft { .. }
+    ) {
+        return None;
+    }
+    let item_id = review_pending_item_id(error)?;
+    if detail.listing_id != item_id
+        || !matches!(
+            detail.state,
+            VintedListingState::Moderated | VintedListingState::Hidden
+        )
+    {
+        return None;
+    }
+    let partial = error.partial.as_deref()?;
+    let uploaded_photos = partial
+        .get("uploaded_photos")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let uploaded_photo_ids = uploaded_photos
+        .iter()
+        .filter_map(|photo| photo.get("id").and_then(Value::as_u64))
+        .collect();
+    let assigned_photos = detail
+        .photos
+        .iter()
+        .filter_map(|photo| {
+            photo
+                .id
+                .as_deref()
+                .and_then(|id| id.parse().ok())
+                .map(|photo_id| AssignedPhotoResult {
+                    photo_id,
+                    display_order: photo.order,
+                })
+        })
+        .collect::<Vec<_>>();
+    let assigned_photo_ids = assigned_photos.iter().map(|photo| photo.photo_id).collect();
+    Some(PublicationResult {
+        operation: operation_name(operation),
+        status: PublicationStatus::Pending,
+        safe_to_retry: false,
+        draft_id: draft_id(operation).map(ToOwned::to_owned),
+        item_id: Some(item_id.to_owned()),
+        canonical_url: detail.canonical_url.clone(),
+        authoritative_state: Some(detail.state),
+        after_upload_actions: partial
+            .get("after_upload_actions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+        uploaded_images: partial
+            .get("uploaded_images")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(uploaded_photos.len()),
+        photo_action: match partial.get("photo_action").and_then(Value::as_str) {
+            Some("reused") => Some("reused"),
+            Some("replaced") => Some("replaced"),
+            Some("uploaded") => Some("uploaded"),
+            _ => None,
+        },
+        uploaded_photo_ids,
+        assigned_photos,
+        assigned_photo_ids,
     })
 }
 
@@ -1229,6 +1390,7 @@ mod tests {
         uploaded_sessions: Mutex<Vec<String>>,
         mutation_sessions: Mutex<Vec<String>>,
         rejected_mutations: AtomicUsize,
+        inspection_not_found: bool,
     }
 
     impl FixturePublicationApi {
@@ -1238,7 +1400,13 @@ mod tests {
                 uploaded_sessions: Mutex::new(Vec::new()),
                 mutation_sessions: Mutex::new(Vec::new()),
                 rejected_mutations: AtomicUsize::new(rejected_mutations),
+                inspection_not_found: false,
             }
+        }
+
+        fn with_review_pending_inspection(mut self) -> Self {
+            self.inspection_not_found = true;
+            self
         }
     }
 
@@ -1261,6 +1429,13 @@ mod tests {
             item_id: &'a str,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
             Box::pin(async move {
+                if self.inspection_not_found {
+                    return Err(upstream_error(
+                        StatusCode::NOT_FOUND,
+                        &json!({"message_code": "item_not_found"}),
+                        "draft inspection",
+                    ));
+                }
                 Ok(json!({
                     "item": {
                         "id": item_id,
@@ -1613,6 +1788,57 @@ mod tests {
 
         assert_eq!(*api.uploaded_sessions.lock().unwrap(), ["server-session"]);
         assert_eq!(*api.mutation_sessions.lock().unwrap(), ["server-session"]);
+        assert_eq!(result.uploaded_photo_ids, [9]);
+        assert_eq!(result.assigned_photo_ids, [109]);
+    }
+
+    #[tokio::test]
+    async fn confirmed_publication_with_inspection_404_recovers_as_review_pending() {
+        let (_directory, path) = image_path();
+        let api = FixturePublicationApi::new([json!({"upload_session_id": "server-session"})], 0)
+            .with_review_pending_inspection();
+        let operation = PublicationOperation::Publish;
+
+        let error = VintedPublication::new(&api)
+            .execute(operation.clone(), Some(input()), vec![path])
+            .await
+            .unwrap_err();
+        assert_eq!(review_pending_item_id(&error), Some("71"));
+        assert!(!error.safe_to_retry);
+
+        let detail = VintedListingDetail {
+            listing_id: "71".to_owned(),
+            state: VintedListingState::Moderated,
+            title: Some("Known item".to_owned()),
+            description: None,
+            price: None,
+            condition: None,
+            category: None,
+            brand: None,
+            colors: Vec::new(),
+            shipping: None,
+            photos: vec![crate::domain::vinted_listing::VintedListingPhoto {
+                order: 0,
+                id: Some("109".to_owned()),
+                url: None,
+                width: None,
+                height: None,
+            }],
+            canonical_url: Some("https://www.vinted.fi/items/71-known-item".to_owned()),
+        };
+        let result = review_pending_result(&operation, &error, &detail).unwrap();
+
+        assert_eq!(result.status, PublicationStatus::Pending);
+        assert!(!result.safe_to_retry);
+        assert_eq!(result.item_id.as_deref(), Some("71"));
+        assert_eq!(
+            result.authoritative_state,
+            Some(VintedListingState::Moderated)
+        );
+        assert_eq!(
+            result.canonical_url.as_deref(),
+            Some("https://www.vinted.fi/items/71-known-item")
+        );
         assert_eq!(result.uploaded_photo_ids, [9]);
         assert_eq!(result.assigned_photo_ids, [109]);
     }

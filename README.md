@@ -248,6 +248,13 @@ existing flat field for structured-output compatibility and contains the same
 authoritative IDs in display order. ID equality between the two sets carries no
 meaning.
 
+A confirmed publication can remain hidden while Vinted reviews it. When direct
+item inspection returns HTTP 404, Flea checks the authenticated account listing
+and returns `status: "pending"` with the listing ID, canonical URL, and
+`authoritative_state` when that listing is hidden or moderated. The result sets
+`safe_to_retry` to `false`: inspect the existing listing instead of publishing
+the item again.
+
 `category compose` is the guided publication entry point. Category search emits
 one compose action per leaf result. Composer issues link to focused discovery or
 a correction command. When partial input supplies a brand name outside the

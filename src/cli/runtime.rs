@@ -363,6 +363,7 @@ async fn execute_vinted(
                 dependencies.vinted_publication.as_ref(),
                 dependencies.vinted_publication_discovery.as_ref(),
                 dependencies.vinted_draft.as_ref(),
+                dependencies.vinted_listing.as_ref(),
             )
             .await
         }
@@ -373,6 +374,7 @@ async fn execute_vinted(
                 dependencies.vinted_search_session.as_ref(),
                 dependencies.vinted_publication.as_ref(),
                 dependencies.vinted_publication_discovery.as_ref(),
+                dependencies.vinted_listing.as_ref(),
             )
             .await
         }

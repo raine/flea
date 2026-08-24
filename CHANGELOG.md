@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Treat confirmed Vinted publications under review as pending successes with
+  authoritative account state and duplicate-safe retry guidance
 - Link supplied Vinted brands outside initial composer suggestions directly to
   focused category-scoped discovery
 - Add concise Vinted composer readiness output with selected values and

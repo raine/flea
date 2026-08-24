@@ -4,15 +4,19 @@ use clap::{Args, Subcommand};
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
-    domain::envelope::NextAction,
+    domain::envelope::{NextAction, Warning},
     error::AppError,
     marketplace::{
         PortalId,
         vinted::{
             brand::validate_listing_brand,
             draft::{DEFAULT_PAGE_SIZE, DraftListRequest, VintedDraftApi, VintedDrafts},
+            listing::{
+                VintedListingApi, VintedListingRequest, VintedListingResult, VintedListings,
+            },
             publication::{
                 ListingInput, PublicationOperation, VintedPublication, VintedPublicationApi,
+                review_pending_item_id, review_pending_result,
             },
             publication_discovery::VintedPublicationDiscoveryApi,
             readiness::VintedReadinessApi,
@@ -144,6 +148,7 @@ pub async fn execute_direct(
     session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationApi,
     discovery_api: &dyn VintedPublicationDiscoveryApi,
+    listing_api: &dyn VintedListingApi,
 ) -> Result<CommandOutcome, AppError> {
     execute_operation(
         portal,
@@ -152,6 +157,7 @@ pub async fn execute_direct(
         session,
         api,
         discovery_api,
+        listing_api,
     )
     .await
 }
@@ -163,6 +169,7 @@ pub async fn execute_draft(
     publication_api: &dyn VintedPublicationApi,
     discovery_api: &dyn VintedPublicationDiscoveryApi,
     draft_api: &dyn VintedDraftApi,
+    listing_api: &dyn VintedListingApi,
 ) -> Result<CommandOutcome, AppError> {
     match command {
         VintedDraftCommand::List { page, limit } => {
@@ -221,6 +228,7 @@ pub async fn execute_draft(
         session,
         publication_api,
         discovery_api,
+        listing_api,
     )
     .await
 }
@@ -232,6 +240,7 @@ async fn execute_operation(
     session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationApi,
     discovery_api: &dyn VintedPublicationDiscoveryApi,
+    listing_api: &dyn VintedListingApi,
 ) -> Result<CommandOutcome, AppError> {
     let (input, images) = match values {
         Some(values) => (Some(read_input(&values.input)?), values.image),
@@ -240,11 +249,53 @@ async fn execute_operation(
     if let Some(input) = input.as_ref() {
         validate_listing_brand(portal, input, session, discovery_api).await?;
     }
-    let result = VintedPublication::new(api)
-        .execute(operation, input, images)
-        .await?;
+    let publication = VintedPublication::new(api)
+        .execute(operation.clone(), input, images)
+        .await;
+    let (result, pending) = match publication {
+        Ok(result) => (result, false),
+        Err(error) => {
+            if !matches!(
+                operation,
+                PublicationOperation::Publish | PublicationOperation::CompleteDraft { .. }
+            ) {
+                return Err(error);
+            }
+            let Some(item_id) = review_pending_item_id(&error) else {
+                return Err(error);
+            };
+            let credentials = match session.credentials(portal).await {
+                Ok(credentials) => credentials,
+                Err(_) => return Err(error),
+            };
+            let inspection_session = move |_| Ok(credentials.clone());
+            let inspection = VintedListings::new(&inspection_session, listing_api)
+                .execute(
+                    portal,
+                    VintedListingRequest::Show {
+                        item_id: item_id.to_owned(),
+                    },
+                )
+                .await;
+            let Ok(VintedListingResult::Detail(detail)) = inspection else {
+                return Err(error);
+            };
+            let Some(result) = review_pending_result(&operation, &error, &detail) else {
+                return Err(error);
+            };
+            (result, true)
+        }
+    };
     let next_actions = publication_next_actions(portal, result.item_id.as_deref());
-    Ok(CommandOutcome::new(CommandData::VintedPublication(result)).with_next_actions(next_actions))
+    let mut outcome =
+        CommandOutcome::new(CommandData::VintedPublication(result)).with_next_actions(next_actions);
+    if pending {
+        outcome = outcome.with_warnings(vec![Warning {
+            code: "vinted.publication_review_pending".to_owned(),
+            message: "Vinted confirmed publication and the account listing is pending review or hidden. Do not publish the item again; inspect the existing listing until review completes.".to_owned(),
+        }]);
+    }
+    Ok(outcome)
 }
 
 fn publication_next_actions(portal: PortalId, item_id: Option<&str>) -> Vec<NextAction> {
