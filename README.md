@@ -165,6 +165,32 @@ bounds, and package IDs are runtime portal values. The publication composer
 combines those sources into normalized fields, options, requirements, validation
 issues, and a direct `ListingInput` value when all seller facts are confirmed.
 
+Publication supports `native` and `web` transports. The web transport executes
+Vinted API requests inside a visible, persistent Google Chrome session so Vinted
+receives the browser cookies, CSRF state, and human-verification state associated
+with that session. Flea launches ordinary Chrome with a dedicated profile and a
+localhost debugging port. `agent-browser` connects to that Chrome instance as a
+client and does not launch its automation-oriented Chromium build. The web
+transport relies on the browser login and requires no native Vinted token.
+Install the client:
+
+```sh
+brew install agent-browser
+agent-browser install
+```
+
+Open the browser session and sign in once:
+
+```sh
+flea vinted auth web login
+flea vinted auth web status
+```
+
+The login command leaves the visible browser open when sign-in or a human check
+needs user interaction. Complete that interaction in the browser, then run the
+status command. Flea stores the dedicated Chrome profile under its private state
+directory. `flea vinted auth web logout` clears its cookies and browser storage.
+
 ```sh
 flea vinted category search lukko
 flea vinted category compose CATEGORY_ID
@@ -179,7 +205,7 @@ flea vinted draft create --input listing.json --image front.heic
 flea vinted draft update DRAFT_ID --input listing.json --image front.jpg
 flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
-flea vinted publish --input listing.json --image front.jpg
+flea vinted publish --transport web --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
 flea vinted listing list
 ```
@@ -239,6 +265,7 @@ flea vinted item show --help
 flea vinted listing --help
 flea vinted draft --help
 flea vinted publish --help
+flea vinted auth web --help
 ```
 
 ## Structured output

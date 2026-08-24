@@ -46,7 +46,12 @@ infer it from presentation text. `--raw` preserves upstream JSON.
 
 ## Publish Vinted listings
 
+Web publication uses visible Chrome cookies and human-verification state.
+`agent-browser` connects, so native authentication is unnecessary:
+
 ```sh
+flea vinted auth web login
+flea vinted auth web status
 flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted draft list --page 1 --limit 20
 flea vinted draft show DRAFT_ID
@@ -54,14 +59,15 @@ flea vinted draft validate DRAFT_ID
 flea vinted draft create --input listing.json --image front.heic
 flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
-flea vinted publish --input listing.json --image front.jpg
+flea vinted publish --transport web --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
 flea vinted listing list
 ```
 
-`--image` replaces all photos. `draft show` returns photo IDs and `draft
-validate` classifies blockers. Follow publication `next_actions`; `listing show`
-inspects visibility.
+Completion reuses verified photos; `--image` replaces all photos. Add
+`--transport web` to draft mutations when browser security state is required.
+Complete sign-in or verification manually and inspect remote state before
+retrying. Clear browser cookies with `flea vinted auth web logout`.
 
 ## Find Tori listings
 

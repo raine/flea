@@ -3,7 +3,9 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use crate::{
     cli::{
         Command, ToriCommand, VintedCommand,
-        auth::{ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand},
+        auth::{
+            ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand, VintedWebAuthCommand,
+        },
         category, draft, favorite, listing, saved_search, vinted_category, vinted_publish,
     },
     domain::envelope::NextAction,
@@ -43,7 +45,8 @@ use crate::{
                 HttpVintedSearchApi, SearchResult as VintedSearchResult, VintedSearch,
                 VintedSearchApi, VintedSearchSession,
             },
-            session as vinted_session,
+            session as vinted_session, web as vinted_web,
+            web_publication::AgentBrowserVintedPublicationApi,
         },
     },
     storage::StatePaths,
@@ -72,6 +75,7 @@ pub struct ApplicationDependencies {
     vinted_draft: Arc<dyn VintedDraftApi>,
     vinted_listing: Arc<dyn VintedListingApi>,
     vinted_publication: Arc<dyn VintedPublicationApi>,
+    vinted_web_publication: Arc<dyn VintedPublicationApi>,
     vinted_publication_discovery: Arc<dyn VintedPublicationDiscoveryApi>,
     vinted_readiness: Arc<dyn VintedReadinessApi>,
 }
@@ -96,6 +100,7 @@ impl ApplicationDependencies {
             vinted_draft: Arc::new(HttpVintedDraftApi::new()),
             vinted_listing: Arc::new(HttpVintedListingApi::new()),
             vinted_publication: Arc::new(HttpVintedPublicationApi::new()),
+            vinted_web_publication: Arc::new(AgentBrowserVintedPublicationApi::new()),
             vinted_publication_discovery: Arc::new(HttpVintedPublicationDiscoveryApi::new()),
             vinted_readiness: Arc::new(HttpVintedReadinessApi::new()),
         }
@@ -161,6 +166,11 @@ impl ApplicationDependencies {
 
     pub fn with_vinted_publication_api(mut self, api: Arc<dyn VintedPublicationApi>) -> Self {
         self.vinted_publication = api;
+        self
+    }
+
+    pub fn with_vinted_web_publication_api(mut self, api: Arc<dyn VintedPublicationApi>) -> Self {
+        self.vinted_web_publication = api;
         self
     }
 
@@ -276,6 +286,26 @@ async fn execute_vinted_auth(
     args: VintedAuthArgs,
 ) -> Result<CommandOutcome, AppError> {
     let operation = match args.command {
+        VintedAuthCommand::Web(args) => {
+            return match args.command {
+                VintedWebAuthCommand::Login => vinted_web::login(portal)
+                    .map(CommandData::VintedWebAuthStatus)
+                    .map(CommandOutcome::new),
+                VintedWebAuthCommand::Status => {
+                    let status = vinted_web::status(portal)?;
+                    let authenticated = status.authenticated;
+                    let outcome = CommandOutcome::new(CommandData::VintedWebAuthStatus(status));
+                    if authenticated {
+                        Ok(outcome)
+                    } else {
+                        Ok(outcome.with_next_actions(vec![vinted_web::login_action(portal)]))
+                    }
+                }
+                VintedWebAuthCommand::Logout => vinted_web::logout(portal)
+                    .map(CommandData::VintedWebAuthLogout)
+                    .map(CommandOutcome::new),
+            };
+        }
         VintedAuthCommand::Login => vinted_session::AuthOperation::Login,
         VintedAuthCommand::Status => vinted_session::AuthOperation::Status,
         VintedAuthCommand::Logout => vinted_session::AuthOperation::Logout,
@@ -329,6 +359,7 @@ async fn execute_vinted(
                 args.command,
                 dependencies.vinted_search_session.as_ref(),
                 dependencies.vinted_publication.as_ref(),
+                dependencies.vinted_web_publication.as_ref(),
                 dependencies.vinted_draft.as_ref(),
                 dependencies.vinted_readiness.as_ref(),
             )
@@ -340,6 +371,7 @@ async fn execute_vinted(
                 args,
                 dependencies.vinted_search_session.as_ref(),
                 dependencies.vinted_publication.as_ref(),
+                dependencies.vinted_web_publication.as_ref(),
                 dependencies.vinted_readiness.as_ref(),
             )
             .await

@@ -35,6 +35,7 @@ use crate::{
             publication::PublicationResult as VintedPublicationResult,
             readiness::PublicationReadiness as VintedPublicationReadiness,
             session::{VintedAuthStatus, VintedLogoutOutput},
+            web::{VintedWebAuthStatus, VintedWebLogoutOutput},
         },
     },
 };
@@ -87,6 +88,8 @@ pub enum CommandData {
     VintedAuthLogin(VintedLoginResult),
     VintedAuthLogout(VintedLogoutOutput),
     VintedAuthStatus(VintedAuthStatus),
+    VintedWebAuthStatus(VintedWebAuthStatus),
+    VintedWebAuthLogout(VintedWebLogoutOutput),
     VintedDraftCollection(VintedDraftCollection),
     VintedDraft(VintedDraftState),
     VintedDraftValidation(VintedDraftValidation),

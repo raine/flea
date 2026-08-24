@@ -465,11 +465,7 @@ pub fn classify_prerequisite(value: &Value) -> Option<PrerequisiteBlocker> {
         {
             Some(SellingPrerequisiteType::EmailVerification)
         }
-        _ if contains_any(
-            &text,
-            &["global_two_factor", "second_factor", "two_factor", "2fa"],
-        ) =>
-        {
+        _ if contains_any(&text, &["global_two_factor", "second_factor", "two_factor"]) => {
             Some(SellingPrerequisiteType::TwoFactorAuthentication)
         }
         _ if contains_any(
@@ -756,6 +752,11 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn arbitrary_identifiers_do_not_trigger_two_factor_classification() {
+        assert!(classify_prerequisite(&json!({"request_id": "07ac2fa9-private"})).is_none());
     }
 
     #[test]

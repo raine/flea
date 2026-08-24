@@ -424,6 +424,15 @@ mod tests {
             (&["vinted", "auth", "login"], "vinted auth login"),
             (&["vinted", "auth", "status"], "vinted auth status"),
             (&["vinted", "auth", "logout"], "vinted auth logout"),
+            (&["vinted", "auth", "web", "login"], "vinted auth web login"),
+            (
+                &["vinted", "auth", "web", "status"],
+                "vinted auth web status",
+            ),
+            (
+                &["vinted", "auth", "web", "logout"],
+                "vinted auth web logout",
+            ),
             (
                 &["vinted", "--portal", "fi", "capabilities"],
                 "vinted capabilities",
@@ -557,6 +566,34 @@ mod tests {
         ]);
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn vinted_publication_accepts_web_transport() {
+        for args in [
+            vec![
+                "flea",
+                "vinted",
+                "publish",
+                "--input",
+                "listing.json",
+                "--image",
+                "photo.jpg",
+                "--transport",
+                "web",
+            ],
+            vec![
+                "flea",
+                "vinted",
+                "draft",
+                "delete",
+                "123",
+                "--transport",
+                "web",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
     }
 
     #[test]

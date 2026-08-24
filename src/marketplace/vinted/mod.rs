@@ -10,6 +10,8 @@ pub(crate) mod publication_discovery;
 pub(crate) mod readiness;
 pub(crate) mod search;
 pub(crate) mod session;
+pub(crate) mod web;
+pub(crate) mod web_publication;
 
 use super::{
     AuthRequirement, CapabilityDescriptor, CapabilityId, MarketplaceDescriptor, MarketplaceId,

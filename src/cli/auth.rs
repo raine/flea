@@ -89,6 +89,36 @@ pub enum VintedAuthCommand {
         long_about = "Remove stored Vinted credentials for the selected portal."
     )]
     Logout,
+    #[command(
+        about = "Manage the interactive Vinted web session",
+        long_about = "Open, inspect, or clear the persistent browser session used by web publication transport. Human verification remains interactive in the visible browser."
+    )]
+    Web(VintedWebAuthArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct VintedWebAuthArgs {
+    #[command(subcommand)]
+    pub command: VintedWebAuthCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VintedWebAuthCommand {
+    #[command(
+        about = "Open the persistent Vinted publication browser",
+        long_about = "Open Vinted in a visible persistent browser. Sign in and complete any human verification shown before retrying web publication."
+    )]
+    Login,
+    #[command(
+        about = "Check the persistent Vinted web session",
+        long_about = "Open the persistent publication browser and validate its Vinted web session with an online current-user request."
+    )]
+    Status,
+    #[command(
+        about = "Clear the persistent Vinted web session",
+        long_about = "Clear cookies and browser storage, close the publication browser, and remove its persistent profile."
+    )]
+    Logout,
 }
 
 impl VintedAuthCommand {
@@ -96,9 +126,18 @@ impl VintedAuthCommand {
         use crate::marketplace::CapabilityId;
 
         match self {
-            Self::Login => CapabilityId::AuthLogin,
-            Self::Status => CapabilityId::AuthStatus,
-            Self::Logout => CapabilityId::AuthLogout,
+            Self::Login
+            | Self::Web(VintedWebAuthArgs {
+                command: VintedWebAuthCommand::Login,
+            }) => CapabilityId::AuthLogin,
+            Self::Status
+            | Self::Web(VintedWebAuthArgs {
+                command: VintedWebAuthCommand::Status,
+            }) => CapabilityId::AuthStatus,
+            Self::Logout
+            | Self::Web(VintedWebAuthArgs {
+                command: VintedWebAuthCommand::Logout,
+            }) => CapabilityId::AuthLogout,
         }
     }
 
@@ -107,6 +146,15 @@ impl VintedAuthCommand {
             Self::Login => "auth login",
             Self::Status => "auth status",
             Self::Logout => "auth logout",
+            Self::Web(VintedWebAuthArgs {
+                command: VintedWebAuthCommand::Login,
+            }) => "auth web login",
+            Self::Web(VintedWebAuthArgs {
+                command: VintedWebAuthCommand::Status,
+            }) => "auth web status",
+            Self::Web(VintedWebAuthArgs {
+                command: VintedWebAuthCommand::Logout,
+            }) => "auth web logout",
         }
     }
 }
