@@ -36,9 +36,10 @@ pub const FILTER_OPTION_LIMIT_DEFAULT: usize = 500;
 pub const FILTER_OPTION_LIMIT_MAX: usize = 5_000;
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const ITEMS_PATH: &str = "/svc-catalogue/items";
-const FILTERS_PATH: &str = "/svc-filters/filters";
-const FACETS_PATH: &str = "/svc-filters/filters/facets";
-const OPTION_SEARCH_PATH: &str = "/svc-filters/filters/search";
+const FILTERS_PATH: &str = "/api/v2/catalog/filters";
+const FACETS_PATH: &str = "/api/v2/catalog/filters/facets";
+const FACETED_CATEGORIES_PATH: &str = "/api/v2/catalog/faceted_categories";
+const OPTION_SEARCH_PATH: &str = "/api/v2/catalog/filters/search";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SearchSort {
@@ -446,14 +447,16 @@ impl<'a> VintedSearch<'a> {
 
 pub struct HttpVintedSearchApi {
     auth: VintedAuthentication,
-    native_api_base_url: String,
+    items_base_url: String,
+    filters_base_url: String,
 }
 
 impl HttpVintedSearchApi {
     pub fn new() -> Self {
         Self {
             auth: VintedAuthentication::new(),
-            native_api_base_url: VINTED_FI_BINDING.native_api_host.to_owned(),
+            items_base_url: VINTED_FI_BINDING.native_api_host.to_owned(),
+            filters_base_url: VINTED_FI_BINDING.portal_api_host.to_owned(),
         }
     }
 
@@ -462,7 +465,12 @@ impl HttpVintedSearchApi {
         credentials: &VintedCredentialRecord,
         request: &CatalogueRequest,
     ) -> Result<Value, AppError> {
-        let url = request_url(&self.native_api_base_url, request)?;
+        let base_url = if request.operation == CatalogueOperation::Items {
+            &self.items_base_url
+        } else {
+            &self.filters_base_url
+        };
+        let url = request_url(base_url, request)?;
         let transport_request = self.auth.authenticated_request(
             Method::GET,
             url.to_string(),
@@ -483,8 +491,9 @@ impl HttpVintedSearchApi {
     }
 
     #[cfg(test)]
-    fn with_native_api_base_url(mut self, native_api_base_url: String) -> Self {
-        self.native_api_base_url = native_api_base_url;
+    fn with_api_base_url(mut self, api_base_url: String) -> Self {
+        self.items_base_url.clone_from(&api_base_url);
+        self.filters_base_url = api_base_url;
         self
     }
 }
@@ -676,9 +685,12 @@ fn request_url(base_url: &str, request: &CatalogueRequest) -> Result<Url, AppErr
     let mut url = Url::parse(base_url).map_err(|error| {
         AppError::unexpected("Vinted API binding is invalid").with_source(error)
     })?;
-    let path = match request.operation {
+    let path = match &request.operation {
         CatalogueOperation::Items => ITEMS_PATH,
         CatalogueOperation::Filters => FILTERS_PATH,
+        CatalogueOperation::Facets { filter_code } if filter_code == "catalog" => {
+            FACETED_CATEGORIES_PATH
+        }
         CatalogueOperation::Facets { .. } => FACETS_PATH,
         CatalogueOperation::OptionSearch { .. } => OPTION_SEARCH_PATH,
     };
@@ -686,7 +698,7 @@ fn request_url(base_url: &str, request: &CatalogueRequest) -> Result<Url, AppErr
     {
         let mut query = url.query_pairs_mut();
         match &request.operation {
-            CatalogueOperation::Facets { filter_code } => {
+            CatalogueOperation::Facets { filter_code } if filter_code != "catalog" => {
                 query.append_pair("filter_code", filter_code);
             }
             CatalogueOperation::OptionSearch {
@@ -696,11 +708,15 @@ fn request_url(base_url: &str, request: &CatalogueRequest) -> Result<Url, AppErr
                 query.append_pair("filter_search_code", filter_code);
                 query.append_pair("filter_search_text", search_text);
             }
-            CatalogueOperation::Items | CatalogueOperation::Filters => {}
+            CatalogueOperation::Items
+            | CatalogueOperation::Filters
+            | CatalogueOperation::Facets { .. } => {}
         }
-        query.append_pair("page", &request.context.page.to_string());
-        query.append_pair("per_page", &request.context.limit.to_string());
-        query.append_pair("order", request.context.sort.upstream());
+        if matches!(request.operation, CatalogueOperation::Items) {
+            query.append_pair("page", &request.context.page.to_string());
+            query.append_pair("per_page", &request.context.limit.to_string());
+            query.append_pair("order", request.context.sort.upstream());
+        }
         if !request.context.query.is_empty() {
             query.append_pair("search_text", &request.context.query);
         }
@@ -710,9 +726,16 @@ fn request_url(base_url: &str, request: &CatalogueRequest) -> Result<Url, AppErr
         if let Some(price) = &request.context.price_to {
             query.append_pair("price_to", price.as_str());
         }
-        query.append_pair("currency", &request.context.currency);
+        if matches!(request.operation, CatalogueOperation::Items) {
+            query.append_pair("currency", &request.context.currency);
+        }
         for (code, ids) in &request.context.attributes {
-            query.append_pair(&format!("attribute_ids[{code}]"), &ids.join(","));
+            let name = if matches!(request.operation, CatalogueOperation::Items) {
+                format!("attribute_ids[{code}]")
+            } else {
+                format!("{code}_ids")
+            };
+            query.append_pair(&name, &ids.join(","));
         }
     }
     Ok(url)
@@ -964,11 +987,17 @@ fn normalize_option_collection(
     option_query: Option<&str>,
     option_limit: usize,
 ) -> Result<FilterCollection, AppError> {
-    let body = payload(raw, "options");
+    let expected_key = if filter_code == "catalog" {
+        "categories"
+    } else {
+        "options"
+    };
+    let body = payload(raw, expected_key);
     let options = body
-        .get("options")
+        .get(expected_key)
         .and_then(Value::as_array)
-        .ok_or_else(|| unexpected_response("filter options are unavailable"))?;
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
     let selected = selected_index(body.get("selected_filters"), &context.attributes)?;
     let mut flattened = Vec::new();
     flatten_options(options, filter_code, &selected, None, 0, &mut flattened)?;
@@ -1032,7 +1061,9 @@ fn flatten_options(
             name: title,
             parent_value: parent.map(str::to_owned),
             depth,
-            hits: object.get("items_count").and_then(Value::as_i64),
+            hits: ["items_count", "item_count"]
+                .into_iter()
+                .find_map(|key| object.get(key).and_then(Value::as_i64)),
             selected: selected.get(code).is_some_and(|ids| ids.contains(&id)),
         });
         if let Some(children) = object.get("options") {
@@ -1539,9 +1570,46 @@ mod tests {
             assert_eq!(url.path(), path);
             let parameters = url.query_pairs().collect::<BTreeMap<_, _>>();
             assert_eq!(parameters["search_text"], "takki");
-            assert_eq!(parameters["attribute_ids[brand]"], "53,88");
-            assert_eq!(parameters["currency"], "EUR");
+            assert_eq!(parameters["brand_ids"], "53,88");
+            assert_eq!(parameters["price_from"], "10.50");
+            assert!(!parameters.contains_key("currency"));
+            assert!(!parameters.contains_key("page"));
         }
+    }
+
+    #[test]
+    fn catalog_facets_use_the_faceted_categories_route() {
+        let url = request_url(
+            "https://www.vinted.fi",
+            &CatalogueRequest {
+                operation: CatalogueOperation::Facets {
+                    filter_code: "catalog".to_owned(),
+                },
+                context: context(),
+            },
+        )
+        .unwrap();
+        assert_eq!(url.path(), FACETED_CATEGORIES_PATH);
+        let parameters = url.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(parameters["catalog_ids"], "123");
+        assert!(!parameters.contains_key("filter_code"));
+    }
+
+    #[test]
+    fn faceted_categories_normalize_as_catalog_options() {
+        let raw = serde_json::json!({
+            "code": 0,
+            "categories": [{
+                "id": "1904",
+                "title": "Women",
+                "item_count": 42
+            }]
+        });
+        let collection =
+            normalize_option_collection(&raw, &context(), "catalog", None, 100).unwrap();
+        let option = &collection.filters[0].options[0];
+        assert_eq!(option.value, "1904");
+        assert_eq!(option.hits, Some(42));
     }
 
     #[test]
@@ -1744,9 +1812,9 @@ mod tests {
     }
 
     #[test]
-    fn test_client_can_override_the_central_api_host() {
-        let api =
-            HttpVintedSearchApi::new().with_native_api_base_url("http://127.0.0.1:1".to_owned());
-        assert_eq!(api.native_api_base_url, "http://127.0.0.1:1");
+    fn test_client_can_override_vinted_hosts() {
+        let api = HttpVintedSearchApi::new().with_api_base_url("http://127.0.0.1:1".to_owned());
+        assert_eq!(api.items_base_url, "http://127.0.0.1:1");
+        assert_eq!(api.filters_base_url, "http://127.0.0.1:1");
     }
 }
