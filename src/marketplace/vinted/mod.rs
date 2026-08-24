@@ -4,6 +4,7 @@ pub(crate) mod brand;
 pub(crate) mod category_evidence;
 pub(crate) mod composer;
 pub(crate) mod draft;
+pub(crate) mod guided_sell;
 pub(crate) mod interactive;
 pub(crate) mod item;
 pub(crate) mod listing;

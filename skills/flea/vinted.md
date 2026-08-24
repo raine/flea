@@ -59,6 +59,7 @@ account reads, so set up both layers:
 ```sh
 flea vinted auth login
 flea vinted auth status
+flea vinted sell --input facts.json --image front.jpg
 flea --format json vinted category search SEARCH_TEXT \
   --title LISTING_TITLE --description LISTING_DESCRIPTION
 flea vinted category compose CATEGORY_ID --input listing.json
@@ -72,6 +73,16 @@ flea vinted publish --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
 flea vinted listing list
 ```
+
+Prefer `vinted sell` when starting from seller facts rather than opaque IDs. Its
+semantic JSON accepts title, description, price, category phrase, size,
+condition, brand, colors, package size, additional `attributes`, and `images`.
+It performs scoped runtime discovery without mutating remote state. Exact label
+matches produce a validated `proposed_mutation`; save its `listing_input` and
+run the returned existing publish command. Ambiguities contain runtime choices
+and resumable `--select FIELD=ID` commands. Follow those actions instead of
+fuzzy matching, selecting the first category, or inventing IDs. Marketplace
+facet category evidence always requires explicit selection.
 
 `listing list` enumerates active and draft-associated items for the authenticated
 account without relying on search indexing. Use it to verify that a

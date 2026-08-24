@@ -217,6 +217,7 @@ flea vinted category brands CATEGORY_ID BRAND_TEXT
 flea vinted category package-sizes CATEGORY_ID
 flea vinted category colors
 flea vinted category configuration
+flea vinted sell --input facts.json --image front.jpg
 flea vinted readiness
 flea vinted draft list --page 1 --limit 20
 flea vinted draft show DRAFT_ID
@@ -265,8 +266,42 @@ and returns `status: "pending"` with the listing ID, canonical URL, and
 `safe_to_retry` to `false`: inspect the existing listing instead of publishing
 the item again.
 
-`category compose` is the guided publication entry point. Category search emits
-one compose action per leaf result. Its default response contains readiness,
+`vinted sell` is the agent-oriented guided workflow. It accepts semantic seller
+facts and image paths, performs scoped runtime discovery, and makes no remote
+mutation. Exact semantic matches produce a validated `proposed_mutation` whose
+`listing_input` can be saved and passed to the existing `publish` command.
+Missing or ambiguous values produce structured choices with opaque runtime IDs
+and resumable `--select FIELD=ID` actions. Category evidence from marketplace
+facets always requires an explicit selection. Flea does not fuzzy-match or infer
+marketplace values.
+
+A semantic input can use runtime-localized labels without knowing their IDs:
+
+```json
+{
+  "title": "Truthful title",
+  "description": "Truthful description",
+  "price": "25.00",
+  "category": "portal-localized category phrase",
+  "size": "runtime size label",
+  "condition": "runtime condition label",
+  "brand": "seller-provided brand",
+  "colors": ["runtime color label"],
+  "package_size": "runtime package label",
+  "images": ["front.jpg", "back.jpg"]
+}
+```
+
+Use `attributes` for additional runtime fields by their returned code or label.
+An empty `brand` explicitly selects Vinted's no-brand encoding. Image paths can
+live in the JSON, be passed with repeatable `--image`, or use both. When the
+result is ready, write `proposed_mutation.listing_input` to the path in the
+returned publish command. Publication then runs through the existing image
+sanitization, payload validation, brand verification, authoritative inspection,
+moderation reconciliation, and retry-safety behavior.
+
+`category compose` is the lower-level guided publication entry point. Category
+search emits one compose action per leaf result. Its default response contains readiness,
 selected values, validation issues, brand validation, and correction actions.
 This bounded response keeps the information for the next agent action ahead of
 large runtime catalogs. Add `--full` to include the complete form. The full form

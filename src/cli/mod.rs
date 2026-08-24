@@ -15,6 +15,7 @@ pub(crate) mod vinted_item;
 pub(crate) mod vinted_listing;
 pub(crate) mod vinted_publish;
 pub(crate) mod vinted_search;
+pub(crate) mod vinted_sell;
 
 use std::ffi::OsString;
 
@@ -252,6 +253,12 @@ pub enum VintedCommand {
     )]
     Category(vinted_category::VintedCategoryArgs),
     #[command(
+        about = "Prepare a Vinted listing from semantic seller facts",
+        long_about = "Resolve semantic seller facts through scoped runtime category, brand, color, package, configuration, and attribute discovery. Return a compact proposed publication mutation when every value is exact, or structured resumable choices without uploading images or changing remote state.",
+        after_long_help = "Example:\n  flea vinted sell --input facts.json --image front.jpg\n  flea vinted sell --input facts.json --select category=123"
+    )]
+    Sell(vinted_sell::VintedSellArgs),
+    #[command(
         about = "Check Vinted publication readiness",
         long_about = "Validate the authenticated session and report selling prerequisites that Vinted exposes without uploading images or mutating a listing. Verification remains a manual user action in Vinted."
     )]
@@ -280,7 +287,9 @@ impl VintedCommand {
             Self::Item(_) => CapabilityId::ItemShow,
             Self::Listing(_) => CapabilityId::Listing,
             Self::Category(_) => CapabilityId::Category,
-            Self::Readiness | Self::Draft(_) | Self::Publish(_) => CapabilityId::Draft,
+            Self::Sell(_) | Self::Readiness | Self::Draft(_) | Self::Publish(_) => {
+                CapabilityId::Draft
+            }
         })
     }
 
@@ -293,6 +302,7 @@ impl VintedCommand {
             Self::Item(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Listing(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Category(args) => format!("vinted {}", args.command.telemetry_name()),
+            Self::Sell(_) => "vinted sell".to_owned(),
             Self::Readiness => "vinted readiness".to_owned(),
             Self::Draft(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Publish(_) => "vinted publish".to_owned(),
@@ -447,6 +457,7 @@ mod tests {
                 "vinted filter search",
             ),
             (&["vinted", "item", "show", "123"], "vinted item show"),
+            (&["vinted", "sell", "--input", "facts.json"], "vinted sell"),
             (&["vinted", "readiness"], "vinted readiness"),
             (&["vinted", "draft", "list"], "vinted draft list"),
             (&["vinted", "draft", "show", "123"], "vinted draft show"),

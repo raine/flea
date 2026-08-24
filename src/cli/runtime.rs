@@ -5,6 +5,7 @@ use crate::{
         Command, ToriCommand, VintedCommand,
         auth::{ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand, VintedAuthScope},
         category, draft, favorite, listing, saved_search, vinted_category, vinted_publish,
+        vinted_sell,
     },
     domain::{
         envelope::{NextAction, Warning},
@@ -458,6 +459,16 @@ async fn execute_vinted(
             vinted_category::execute(
                 portal,
                 args.command,
+                dependencies.vinted_search_session.as_ref(),
+                dependencies.vinted_publication_discovery.as_ref(),
+                dependencies.vinted_search.as_ref(),
+            )
+            .await
+        }
+        VintedCommand::Sell(args) => {
+            vinted_sell::execute(
+                portal,
+                args,
                 dependencies.vinted_search_session.as_ref(),
                 dependencies.vinted_publication_discovery.as_ref(),
                 dependencies.vinted_search.as_ref(),

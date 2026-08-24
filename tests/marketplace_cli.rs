@@ -28,11 +28,15 @@ impl VintedPublicationDiscoveryApi for DiscoveryFixture {
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
         Box::pin(async move {
             Ok(match request {
+                DiscoveryRequest::SearchCatalog { keyword } if keyword == "cycling item" => {
+                    json!({"catalog_ids":[4380,4381]})
+                }
                 DiscoveryRequest::SearchCatalog { .. } => json!({"catalog_ids":[4380]}),
                 DiscoveryRequest::Catalogs => json!({"catalogs":[{
-                    "id":10,"title":"Cycling","catalogs":[{
-                        "id":4380,"title":"Locks","catalogs":[]
-                    }]
+                    "id":10,"title":"Cycling","catalogs":[
+                        {"id":4380,"title":"Locks","catalogs":[]},
+                        {"id":4381,"title":"Lights","catalogs":[]}
+                    ]
                 }]}),
                 DiscoveryRequest::Attributes { .. } => {
                     let size_options = (0..1_500)
@@ -188,6 +192,118 @@ fn vinted_publication_discovery_guides_the_category_and_attribute_chain() {
             .unwrap()
             .contains(r#"{"code":"condition","value":[6]}"#)
     );
+}
+
+#[test]
+fn guided_sell_resolves_exact_runtime_values_into_a_non_mutating_proposal() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        serde_json::to_vec(&json!({
+            "title":"Steel lock", "description":"Used steel bicycle lock",
+            "price":"10.00", "category":"lock", "brand":"Abus",
+            "colors":["Black"], "package_size":"Small",
+            "condition":"Good", "size":"Size 0", "images":["front.jpg"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = run_discovery_json(&["vinted", "sell", "--input", file.path().to_str().unwrap()]);
+
+    assert_eq!(output["data"]["status"], "ready");
+    assert_eq!(output["data"]["mutated"], false);
+    assert_eq!(output["data"]["safe_to_retry"], true);
+    assert_eq!(
+        output["data"]["proposed_mutation"]["listing_input"]["catalog_id"],
+        4380
+    );
+    assert_eq!(
+        output["data"]["proposed_mutation"]["listing_input"]["item_attributes"],
+        json!([
+            {"code":"condition","ids":[6]},
+            {"code":"size","ids":[42]}
+        ])
+    );
+    assert_eq!(
+        output["next_actions"][0]["command"],
+        "flea vinted --portal fi publish --input listing.json --image 'front.jpg'"
+    );
+}
+
+#[test]
+fn guided_sell_requires_explicit_category_selection_for_multiple_runtime_leaves() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        serde_json::to_vec(&json!({
+            "title":"Cycling item", "description":"Seller description",
+            "price":"10.00", "category":"cycling item", "images":["front.jpg"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = run_discovery_json(&["vinted", "sell", "--input", file.path().to_str().unwrap()]);
+
+    assert_eq!(output["data"]["status"], "needs_input");
+    assert_eq!(output["data"]["ambiguities"][0]["field"], "category");
+    assert_eq!(
+        output["data"]["ambiguities"][0]["choices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        output["next_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|action| {
+                action["command"]
+                    .as_str()
+                    .unwrap()
+                    .contains("--select 'category=")
+            })
+    );
+}
+
+#[test]
+fn guided_sell_returns_scoped_resumable_choices_instead_of_guessing() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        serde_json::to_vec(&json!({
+            "title":"Steel lock", "description":"Used steel bicycle lock",
+            "price":10, "category":"lock", "brand":"Abus",
+            "colors":["Black"], "package_size":"Small",
+            "condition":"Used", "size":"Size 0", "images":["front.jpg"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = run_discovery_json(&["vinted", "sell", "--input", file.path().to_str().unwrap()]);
+
+    assert_eq!(output["data"]["status"], "needs_input");
+    assert!(output["data"].get("proposed_mutation").is_none());
+    let ambiguity = output["data"]["ambiguities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|ambiguity| ambiguity["field"] == "attribute.condition")
+        .unwrap();
+    assert_eq!(ambiguity["semantic_value"], "Used");
+    assert_eq!(ambiguity["choices"][0]["id"], 6);
+    assert!(
+        ambiguity["choices"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("--select 'attribute.condition=6'")
+    );
+    assert_eq!(output["data"]["mutated"], false);
+    assert_eq!(output["data"]["safe_to_retry"], true);
 }
 
 #[test]

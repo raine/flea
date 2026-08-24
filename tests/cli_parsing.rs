@@ -47,6 +47,17 @@ fn every_command_leaf_parses() {
         vec![
             "flea",
             "vinted",
+            "sell",
+            "--input",
+            "facts.json",
+            "--image",
+            "front.jpg",
+            "--select",
+            "category=123",
+        ],
+        vec![
+            "flea",
+            "vinted",
             "search",
             "takki",
             "--price-from",

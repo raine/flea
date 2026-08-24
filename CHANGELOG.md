@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a non-interactive Vinted sell workflow that resolves semantic seller facts
+  through scoped runtime discovery and returns either a validated publication
+  proposal or structured resumable ambiguity choices
 - Resolve unique exact or normalized Vinted brand names to category-scoped IDs,
   while preserving bounded ambiguity and runtime custom-brand policy
 - Rank ambiguous Vinted publication categories with supplied listing text and
