@@ -18,7 +18,7 @@ use crate::{
 
 const MAX_FACET_REQUESTS: usize = 16;
 const MAX_CANDIDATES: usize = 8;
-const MIN_BRANCH_HITS: i64 = 5;
+const MIN_BROAD_BRANCH_HITS: i64 = 5;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RecommendationContext<'a> {
@@ -65,7 +65,22 @@ pub async fn discover(
     session: &dyn VintedSearchSession,
     api: &dyn VintedSearchApi,
 ) -> Result<MarketplaceCategoryEvidenceResult, AppError> {
-    let (query, context_fields) = recommendation_query(context);
+    let (mut query, mut context_fields) = recommendation_query(context);
+    let mut fallback_queries = VecDeque::new();
+    for (field, value) in [("title", context.title), ("keyword", Some(context.keyword))] {
+        let Some(value) = value else {
+            continue;
+        };
+        let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !normalized.is_empty()
+            && !normalized.eq_ignore_ascii_case(&query)
+            && !fallback_queries
+                .iter()
+                .any(|(existing, _): &(String, &str)| existing.eq_ignore_ascii_case(&normalized))
+        {
+            fallback_queries.push_back((normalized, field));
+        }
+    }
     let by_id = categories
         .iter()
         .cloned()
@@ -122,6 +137,37 @@ pub async fn discover(
                 .then_with(|| left.value.cmp(&right.value))
         });
 
+        let has_runtime_hits = options.iter().any(|option| {
+            option.hits.unwrap_or_default() > 0
+                && option
+                    .value
+                    .parse::<u64>()
+                    .is_ok_and(|id| by_id.contains_key(&id))
+        });
+        if parent_id.is_none()
+            && !has_runtime_hits
+            && let Some((fallback, field)) = fallback_queries.pop_front()
+        {
+            query = fallback;
+            context_fields = vec![field];
+            frontier.push_front(None);
+            continue;
+        }
+
+        let strongest_branch = options
+            .iter()
+            .filter_map(|option| {
+                let id = option.value.parse::<u64>().ok()?;
+                (!by_id.get(&id)?.leaf).then_some(option.hits.unwrap_or_default())
+            })
+            .max()
+            .unwrap_or_default();
+        let branch_threshold = if strongest_branch < MIN_BROAD_BRANCH_HITS {
+            1
+        } else {
+            MIN_BROAD_BRANCH_HITS
+        };
+
         for option in options {
             let hits = option.hits.unwrap_or_default();
             if hits <= 0 {
@@ -138,7 +184,7 @@ pub async fn discover(
                     .entry(id)
                     .and_modify(|current| *current = (*current).max(hits))
                     .or_insert(hits);
-            } else if hits >= MIN_BRANCH_HITS && queued.insert(id) {
+            } else if hits >= branch_threshold && queued.insert(id) {
                 frontier.push_back(Some(id));
             }
         }

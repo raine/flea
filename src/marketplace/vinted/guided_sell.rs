@@ -461,13 +461,20 @@ fn category_ambiguity(
 ) -> (GuidedSellOutput, Vec<NextAction>) {
     let choices = categories
         .iter()
-        .map(|category| GuidedChoice {
-            id: category.id,
-            label: category.path.join(" > "),
-            command: resume_command(
-                request,
-                &request.selections.with_choice("category", category.id),
-            ),
+        .map(|category| {
+            let mut label = category.path.join(" > ");
+            if !label.is_empty() {
+                label.push_str(" > ");
+            }
+            label.push_str(&category.title);
+            GuidedChoice {
+                id: category.id,
+                label,
+                command: resume_command(
+                    request,
+                    &request.selections.with_choice("category", category.id),
+                ),
+            }
         })
         .collect::<Vec<_>>();
     let ambiguity = GuidedAmbiguity {
