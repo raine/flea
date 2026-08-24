@@ -270,7 +270,7 @@ pub enum VintedCommand {
     Draft(vinted_publish::VintedDraftArgs),
     #[command(
         about = "Publish a Vinted listing",
-        long_about = "Upload locally sanitized images and publish a complete runtime-discovered Vinted listing payload."
+        long_about = "Upload locally sanitized images and publish a complete runtime-discovered Vinted listing payload. Confirmed review-pending publications receive bounded read-only account verification."
     )]
     Publish(vinted_publish::PublicationInputArgs),
     #[command(external_subcommand)]

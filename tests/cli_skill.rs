@@ -93,6 +93,10 @@ fn vinted_skill_preserves_complete_operating_guidance() {
         "active and draft-associated items",
         "without relying on search indexing",
         "review-pending publication",
+        "bounded account",
+        "`verification.status`",
+        "`safe_to_retry: false`",
+        "exact `listing show` action",
         "`uploaded_photo_ids`",
         "`assigned_photo_ids` for compatibility",
     ] {

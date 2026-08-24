@@ -133,6 +133,10 @@ Completion reuses photos; `--image` replaces them. Publication results keep
 `display_order`. Both reflect authoritative post-mutation draft or listing
 state. `uploaded_photo_ids` are temporary upload-session mutation inputs, even
 when their values equal assigned IDs. Use assigned IDs to correlate remote
-photos. Complete verification manually and inspect before retrying. `auth
-logout` clears both authentication layers; `auth logout --browser` clears only
-browser cookies and profile state.
+photos. A confirmed publication that enters review triggers bounded account
+inspection without another publication mutation. Read `verification.status` as
+`public`, `moderated`, or `timed_out`; inspection failures return
+`vinted.publication_verification_uncertain`. All of these confirmed mutation
+outcomes set `safe_to_retry: false`. Follow the exact `listing show` action for
+a timed-out or uncertain verification. `auth logout` clears both authentication
+layers; `auth logout --browser` clears only browser cookies and profile state.

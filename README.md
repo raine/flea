@@ -260,11 +260,16 @@ authoritative IDs in display order. ID equality between the two sets carries no
 meaning.
 
 A confirmed publication can remain hidden while Vinted reviews it. When direct
-item inspection returns HTTP 404, Flea checks the authenticated account listing
-and returns `status: "pending"` with the listing ID, canonical URL, and
-`authoritative_state` when that listing is hidden or moderated. The result sets
-`safe_to_retry` to `false`: inspect the existing listing instead of publishing
-the item again.
+item inspection returns HTTP 404, Flea polls authenticated account state within
+a fixed time and request bound without repeating the publication mutation. A
+listing that becomes public returns `status: "succeeded"`, public
+`authoritative_state`, and `verification.status: "public"`. A listing that
+remains hidden or moderated returns `status: "pending"` with
+`verification.status: "moderated"`. If every bounded inspection still reports
+the item missing, `verification.status` is `"timed_out"`; an inspection failure
+returns `vinted.publication_verification_uncertain`. Every confirmed mutation
+result and verification error sets `safe_to_retry` to `false` and returns the
+exact `vinted listing show ITEM_ID` action for authoritative follow-up.
 
 `vinted sell` is the agent-oriented guided workflow. It accepts semantic seller
 facts and image paths, performs scoped runtime discovery, and makes no remote

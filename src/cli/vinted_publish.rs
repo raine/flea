@@ -1,22 +1,29 @@
-use std::{fs, io::Read, path::PathBuf};
+use std::{fs, io::Read, path::PathBuf, time::Duration};
 
 use clap::{Args, Subcommand};
+use serde_json::json;
+use tokio::time::Instant;
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
-    domain::envelope::{NextAction, Warning},
+    domain::{
+        envelope::{NextAction, Warning},
+        vinted_listing::VintedListingState,
+    },
     error::AppError,
     marketplace::{
         PortalId,
         vinted::{
+            auth::VintedCredentialRecord,
             brand::validate_listing_brand,
             draft::{DEFAULT_PAGE_SIZE, DraftListRequest, VintedDraftApi, VintedDrafts},
             listing::{
                 VintedListingApi, VintedListingRequest, VintedListingResult, VintedListings,
             },
             publication::{
-                ListingInput, PublicationOperation, VintedPublication, VintedPublicationApi,
-                review_pending_item_id, review_pending_result,
+                ListingInput, PublicationOperation, PublicationResult,
+                PublicationVerificationStatus, VintedPublication, VintedPublicationApi,
+                confirmed_publication_result, review_pending_item_id,
             },
             publication_discovery::VintedPublicationDiscoveryApi,
             readiness::VintedReadinessApi,
@@ -24,6 +31,34 @@ use crate::{
         },
     },
 };
+
+const PUBLICATION_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(5);
+const PUBLICATION_VERIFICATION_INTERVAL: Duration = Duration::from_secs(1);
+const PUBLICATION_VERIFICATION_ATTEMPTS: usize = 5;
+
+#[derive(Clone, Copy)]
+struct PublicationVerificationConfig {
+    timeout: Duration,
+    interval: Duration,
+    attempts: usize,
+}
+
+impl Default for PublicationVerificationConfig {
+    fn default() -> Self {
+        Self {
+            timeout: PUBLICATION_VERIFICATION_TIMEOUT,
+            interval: PUBLICATION_VERIFICATION_INTERVAL,
+            attempts: PUBLICATION_VERIFICATION_ATTEMPTS,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PublicationVerificationOutcome {
+    Public,
+    Moderated,
+    TimedOut,
+}
 
 #[derive(Debug, Args)]
 pub struct VintedDraftArgs {
@@ -78,7 +113,7 @@ pub enum VintedDraftCommand {
     },
     #[command(
         about = "Publish a Vinted draft from a complete listing input",
-        long_about = "Reuse the draft's verified remote photos by default, or replace the complete photo set when --image is passed, then complete the draft using a complete runtime-discovered JSON payload."
+        long_about = "Reuse the draft's verified remote photos by default, or replace the complete photo set when --image is passed, then complete the draft using a complete runtime-discovered JSON payload. Confirmed review-pending publications receive bounded read-only account verification."
     )]
     Publish {
         /// Numeric Vinted draft identifier.
@@ -264,48 +299,214 @@ async fn execute_operation(
             let Some(item_id) = review_pending_item_id(&error) else {
                 return Err(error);
             };
+            let inspection_action = publication_inspection_action(portal, item_id);
             let credentials = match session.credentials(portal).await {
                 Ok(credentials) => credentials,
-                Err(_) => return Err(error),
+                Err(inspection_error) => {
+                    return Err(publication_verification_uncertain(
+                        error,
+                        &inspection_action,
+                        &inspection_error,
+                    ));
+                }
             };
-            let inspection_session = move |_| Ok(credentials.clone());
-            let inspection = VintedListings::new(&inspection_session, listing_api)
-                .with_discovery(discovery_api)
-                .execute(
-                    portal,
-                    VintedListingRequest::Show {
-                        item_id: item_id.to_owned(),
-                    },
-                )
-                .await;
-            let Ok(VintedListingResult::Detail(detail)) = inspection else {
-                return Err(error);
-            };
-            let Some(result) = review_pending_result(&operation, &error, &detail) else {
-                return Err(error);
-            };
-            (result, true)
+            let (result, verification) = verify_confirmed_publication(
+                portal,
+                &operation,
+                error,
+                credentials,
+                listing_api,
+                discovery_api,
+                PublicationVerificationConfig::default(),
+            )
+            .await?;
+            (
+                result,
+                verification != PublicationVerificationOutcome::Public,
+            )
         }
     };
     let next_actions = publication_next_actions(portal, result.item_id.as_deref());
     let mut outcome =
         CommandOutcome::new(CommandData::VintedPublication(result)).with_next_actions(next_actions);
     if pending {
-        outcome = outcome.with_warnings(vec![Warning {
-            code: "vinted.publication_review_pending".to_owned(),
-            message: "Vinted confirmed publication and the account listing is pending review or hidden. Do not publish the item again; inspect the existing listing until review completes.".to_owned(),
+        let timed_out = result_verification_status(&outcome.data)
+            == Some(PublicationVerificationStatus::TimedOut);
+        outcome = outcome.with_warnings(vec![if timed_out {
+            Warning {
+                code: "vinted.publication_verification_timed_out".to_owned(),
+                message: "Vinted confirmed publication, but bounded account inspection did not expose the listing. Do not publish it again; run the inspection action to read its authoritative state.".to_owned(),
+            }
+        } else {
+            Warning {
+                code: "vinted.publication_review_pending".to_owned(),
+                message: "Vinted confirmed publication and bounded inspection found the account listing pending review or hidden. Do not publish the item again; inspect the existing listing until review completes.".to_owned(),
+            }
         }]);
     }
     Ok(outcome)
 }
 
+fn result_verification_status(data: &CommandData) -> Option<PublicationVerificationStatus> {
+    let CommandData::VintedPublication(result) = data else {
+        return None;
+    };
+    result.verification.as_ref().map(|value| value.status)
+}
+
+async fn verify_confirmed_publication(
+    portal: PortalId,
+    operation: &PublicationOperation,
+    original_error: AppError,
+    credentials: VintedCredentialRecord,
+    listing_api: &dyn VintedListingApi,
+    discovery_api: &dyn VintedPublicationDiscoveryApi,
+    config: PublicationVerificationConfig,
+) -> Result<(PublicationResult, PublicationVerificationOutcome), AppError> {
+    let item_id = review_pending_item_id(&original_error)
+        .expect("confirmed publication verification requires an item ID")
+        .to_owned();
+    let inspection_action = publication_inspection_action(portal, &item_id);
+    let inspection_session = move |_| Ok(credentials.clone());
+    let listings =
+        VintedListings::new(&inspection_session, listing_api).with_discovery(discovery_api);
+    let started = Instant::now();
+    let mut attempts = 0;
+    let mut moderated = None;
+    let mut missing = None;
+    let mut last_error = None;
+
+    while attempts < config.attempts.max(1) {
+        let remaining = config.timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        attempts += 1;
+        let inspection = tokio::time::timeout(
+            remaining,
+            listings.execute(
+                portal,
+                VintedListingRequest::Show {
+                    item_id: item_id.clone(),
+                },
+            ),
+        )
+        .await;
+        match inspection {
+            Ok(Ok(VintedListingResult::Detail(detail))) => match detail.state {
+                VintedListingState::Public => {
+                    let result = confirmed_publication_result(
+                        operation,
+                        &original_error,
+                        &detail,
+                        PublicationVerificationStatus::Public,
+                        attempts,
+                    )
+                    .expect("matching public listing produces a publication result");
+                    return Ok((result, PublicationVerificationOutcome::Public));
+                }
+                VintedListingState::Moderated | VintedListingState::Hidden => {
+                    moderated = Some(detail);
+                }
+                VintedListingState::Missing => missing = Some(detail),
+                _ => {
+                    let state = detail.state;
+                    let inspection_error = AppError::upstream(
+                        "vinted.publication_verification_unexpected_state",
+                        format!("Vinted returned unexpected post-publication state {state:?}"),
+                    );
+                    return Err(publication_verification_uncertain(
+                        original_error,
+                        &inspection_action,
+                        &inspection_error,
+                    ));
+                }
+            },
+            Ok(Ok(VintedListingResult::Collection(_))) => unreachable!("show returns detail"),
+            Ok(Err(error)) => last_error = Some(error),
+            Err(_) => {
+                last_error = Some(AppError::upstream(
+                    "vinted.publication_verification_request_timed_out",
+                    "Vinted account inspection exceeded the verification deadline",
+                ));
+                break;
+            }
+        }
+        if attempts < config.attempts.max(1) {
+            let remaining = config.timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                break;
+            }
+            tokio::time::sleep(config.interval.min(remaining)).await;
+        }
+    }
+
+    if let Some(detail) = moderated {
+        let result = confirmed_publication_result(
+            operation,
+            &original_error,
+            &detail,
+            PublicationVerificationStatus::Moderated,
+            attempts,
+        )
+        .expect("matching moderated listing produces a publication result");
+        return Ok((result, PublicationVerificationOutcome::Moderated));
+    }
+    if let Some(detail) = missing {
+        let result = confirmed_publication_result(
+            operation,
+            &original_error,
+            &detail,
+            PublicationVerificationStatus::TimedOut,
+            attempts,
+        )
+        .expect("matching missing listing produces a timed-out publication result");
+        return Ok((result, PublicationVerificationOutcome::TimedOut));
+    }
+    let inspection_error = last_error.unwrap_or_else(|| {
+        AppError::upstream(
+            "vinted.publication_verification_unavailable",
+            "Vinted account inspection returned no authoritative result",
+        )
+    });
+    Err(publication_verification_uncertain(
+        original_error,
+        &inspection_action,
+        &inspection_error,
+    ))
+}
+
+fn publication_verification_uncertain(
+    mut publication_error: AppError,
+    inspection_action: &NextAction,
+    inspection_error: &AppError,
+) -> AppError {
+    publication_error.code = "vinted.publication_verification_uncertain".to_owned();
+    publication_error.message = "Vinted confirmed publication, but post-publication inspection failed before authoritative state became available".to_owned();
+    publication_error.upstream_transient = inspection_error.upstream_transient;
+    publication_error.safe_to_retry = false;
+    publication_error.details = Some(Box::new(json!({
+        "verification_status": "uncertain",
+        "inspection_error": {
+            "code": inspection_error.code,
+            "upstream_transient": inspection_error.upstream_transient
+        }
+    })));
+    publication_error.next_actions = Box::new(vec![NextAction {
+        command: inspection_action.command.clone(),
+    }]);
+    publication_error
+}
+
+fn publication_inspection_action(portal: PortalId, item_id: &str) -> NextAction {
+    NextAction {
+        command: format!("flea vinted --portal {portal} listing show {item_id}"),
+    }
+}
+
 fn publication_next_actions(portal: PortalId, item_id: Option<&str>) -> Vec<NextAction> {
     item_id
-        .map(|item_id| {
-            vec![NextAction {
-                command: format!("flea vinted --portal {portal} listing show {item_id}"),
-            }]
-        })
+        .map(|item_id| vec![publication_inspection_action(portal, item_id)])
         .unwrap_or_default()
 }
 
@@ -341,7 +542,251 @@ fn read_input(path: &PathBuf) -> Result<ListingInput, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::marketplace::vinted::listing::ListingLookup;
+    use serde_json::Value;
+    use std::{
+        collections::VecDeque,
+        future::Future,
+        pin::Pin,
+        sync::Mutex,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    struct VerificationDiscoveryApi;
+
+    impl VintedPublicationDiscoveryApi for VerificationDiscoveryApi {
+        fn execute<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            _request: &'a crate::marketplace::vinted::publication_discovery::DiscoveryRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            panic!("condition discovery should not be requested")
+        }
+    }
+
+    struct VerificationApi {
+        lookups: Mutex<VecDeque<Result<ListingLookup, AppError>>>,
+    }
+
+    impl VerificationApi {
+        fn new(lookups: impl IntoIterator<Item = Result<ListingLookup, AppError>>) -> Self {
+            Self {
+                lookups: Mutex::new(lookups.into_iter().collect()),
+            }
+        }
+    }
+
+    impl VintedListingApi for VerificationApi {
+        fn wardrobe_item<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            _item_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<ListingLookup, AppError>> + Send + 'a>> {
+            let result = self.lookups.lock().unwrap().pop_front().unwrap();
+            Box::pin(async move { result })
+        }
+
+        fn item_for_edit<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            item_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            let result = Ok(json!({"data": {"item": {
+                "id": item_id,
+                "title": "Published item",
+                "photos": []
+            }}}));
+            Box::pin(async move { result })
+        }
+
+        fn wardrobe_items<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            _condition: &'a str,
+            _page: usize,
+            _per_page: usize,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async {
+                Ok(json!({"data": {
+                    "items": [],
+                    "pagination": {"total_pages": 1}
+                }}))
+            })
+        }
+    }
+
+    fn verification_credentials() -> VintedCredentialRecord {
+        VintedCredentialRecord::new_for_adapter(
+            PortalId::Fi,
+            "user".to_owned(),
+            None,
+            "access".to_owned(),
+            "refresh".to_owned(),
+            u64::MAX,
+            "device".to_owned(),
+            "anonymous".to_owned(),
+            None,
+        )
+    }
+
+    fn confirmed_inspection_error() -> AppError {
+        let mut error = AppError::upstream("vinted.inspection_failed", "inspection failed");
+        error.safe_to_retry = false;
+        error.details = Some(Box::new(json!({"http_status": 404})));
+        error.partial = Some(Box::new(json!({
+            "mutation_status": "confirmed_applied",
+            "item_id": "71",
+            "uploaded_photos": [{"id": 9}],
+            "uploaded_images": 1,
+            "photo_action": "uploaded"
+        })));
+        error
+    }
+
+    fn verification_config(attempts: usize) -> PublicationVerificationConfig {
+        PublicationVerificationConfig {
+            timeout: Duration::from_secs(1),
+            interval: Duration::ZERO,
+            attempts,
+        }
+    }
+
+    #[tokio::test]
+    async fn verification_polls_moderated_state_until_listing_is_public() {
+        let api = VerificationApi::new([
+            Ok(ListingLookup::Found(json!({"data": {"item": {
+                "id": 71,
+                "status": "processing",
+                "photos": []
+            }}}))),
+            Ok(ListingLookup::Found(json!({"data": {"item": {
+                "id": 71,
+                "status": "active",
+                "url": "https://www.vinted.fi/items/71-published-item",
+                "photos": []
+            }}}))),
+        ]);
+
+        let (result, outcome) = verify_confirmed_publication(
+            PortalId::Fi,
+            &PublicationOperation::Publish,
+            confirmed_inspection_error(),
+            verification_credentials(),
+            &api,
+            &VerificationDiscoveryApi,
+            verification_config(3),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, PublicationVerificationOutcome::Public);
+        assert_eq!(
+            result.status,
+            crate::marketplace::vinted::publication::PublicationStatus::Succeeded
+        );
+        assert_eq!(result.authoritative_state, Some(VintedListingState::Public));
+        assert_eq!(
+            result.verification.unwrap().status,
+            PublicationVerificationStatus::Public
+        );
+        assert!(!result.safe_to_retry);
+        assert!(api.lookups.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn bounded_moderation_inspection_preserves_authoritative_state() {
+        let api = VerificationApi::new([Ok(ListingLookup::Found(json!({"data": {"item": {
+            "id": 71,
+            "status": "processing",
+            "photos": []
+        }}})))]);
+
+        let (result, outcome) = verify_confirmed_publication(
+            PortalId::Fi,
+            &PublicationOperation::Publish,
+            confirmed_inspection_error(),
+            verification_credentials(),
+            &api,
+            &VerificationDiscoveryApi,
+            verification_config(1),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, PublicationVerificationOutcome::Moderated);
+        assert_eq!(
+            result.authoritative_state,
+            Some(VintedListingState::Moderated)
+        );
+        assert_eq!(
+            result.verification.unwrap().status,
+            PublicationVerificationStatus::Moderated
+        );
+        assert!(!result.safe_to_retry);
+    }
+
+    #[tokio::test]
+    async fn bounded_missing_inspection_returns_timed_out_result() {
+        let api = VerificationApi::new([Ok(ListingLookup::Missing), Ok(ListingLookup::Missing)]);
+
+        let (result, outcome) = verify_confirmed_publication(
+            PortalId::Fi,
+            &PublicationOperation::Publish,
+            confirmed_inspection_error(),
+            verification_credentials(),
+            &api,
+            &VerificationDiscoveryApi,
+            verification_config(2),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome, PublicationVerificationOutcome::TimedOut);
+        assert_eq!(
+            result.status,
+            crate::marketplace::vinted::publication::PublicationStatus::Pending
+        );
+        assert_eq!(
+            result.authoritative_state,
+            Some(VintedListingState::Missing)
+        );
+        let verification = result.verification.unwrap();
+        assert_eq!(verification.status, PublicationVerificationStatus::TimedOut);
+        assert_eq!(verification.attempts, 2);
+        assert!(!result.safe_to_retry);
+        assert_eq!(
+            publication_next_actions(PortalId::Fi, result.item_id.as_deref())[0].command,
+            "flea vinted --portal fi listing show 71"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_inspection_is_uncertain_and_never_retryable() {
+        let api = VerificationApi::new([Err(AppError::upstream(
+            "fixture.inspection_failed",
+            "inspection failed",
+        ))]);
+
+        let error = verify_confirmed_publication(
+            PortalId::Fi,
+            &PublicationOperation::Publish,
+            confirmed_inspection_error(),
+            verification_credentials(),
+            &api,
+            &VerificationDiscoveryApi,
+            verification_config(1),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, "vinted.publication_verification_uncertain");
+        assert!(!error.safe_to_retry);
+        assert_eq!(error.details.unwrap()["verification_status"], "uncertain");
+        assert_eq!(
+            error.next_actions[0].command,
+            "flea vinted --portal fi listing show 71"
+        );
+    }
 
     #[test]
     fn publication_item_id_points_to_authoritative_inspection() {

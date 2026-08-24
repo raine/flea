@@ -109,12 +109,28 @@ pub enum PublicationStatus {
     Pending,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicationVerificationStatus {
+    Public,
+    Moderated,
+    TimedOut,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PublicationVerification {
+    pub status: PublicationVerificationStatus,
+    pub attempts: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PublicationResult {
     pub operation: &'static str,
     pub status: PublicationStatus,
     /// Repeating a confirmed publication mutation can create a duplicate listing.
     pub safe_to_retry: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification: Option<PublicationVerification>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub draft_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -193,6 +209,7 @@ impl<'a> VintedPublication<'a> {
                 operation: "delete_draft",
                 status: PublicationStatus::Succeeded,
                 safe_to_retry: false,
+                verification: None,
                 draft_id: draft_id(&operation).map(ToOwned::to_owned),
                 item_id: None,
                 canonical_url: None,
@@ -885,6 +902,7 @@ fn normalize_result(
         operation: operation_name,
         status: PublicationStatus::Succeeded,
         safe_to_retry: false,
+        verification: None,
         draft_id,
         item_id,
         canonical_url: None,
@@ -951,10 +969,12 @@ pub(crate) fn review_pending_item_id(error: &AppError) -> Option<&str> {
         .flatten()
 }
 
-pub(crate) fn review_pending_result(
+pub(crate) fn confirmed_publication_result(
     operation: &PublicationOperation,
     error: &AppError,
     detail: &VintedListingDetail,
+    verification_status: PublicationVerificationStatus,
+    verification_attempts: usize,
 ) -> Option<PublicationResult> {
     if !matches!(
         operation,
@@ -963,12 +983,18 @@ pub(crate) fn review_pending_result(
         return None;
     }
     let item_id = review_pending_item_id(error)?;
-    if detail.listing_id != item_id
-        || !matches!(
+    if detail.listing_id != item_id {
+        return None;
+    }
+    let valid_state = match verification_status {
+        PublicationVerificationStatus::Public => detail.state == VintedListingState::Public,
+        PublicationVerificationStatus::Moderated => matches!(
             detail.state,
             VintedListingState::Moderated | VintedListingState::Hidden
-        )
-    {
+        ),
+        PublicationVerificationStatus::TimedOut => detail.state == VintedListingState::Missing,
+    };
+    if !valid_state {
         return None;
     }
     let partial = error.partial.as_deref()?;
@@ -998,8 +1024,16 @@ pub(crate) fn review_pending_result(
     let assigned_photo_ids = assigned_photos.iter().map(|photo| photo.photo_id).collect();
     Some(PublicationResult {
         operation: operation_name(operation),
-        status: PublicationStatus::Pending,
+        status: if verification_status == PublicationVerificationStatus::Public {
+            PublicationStatus::Succeeded
+        } else {
+            PublicationStatus::Pending
+        },
         safe_to_retry: false,
+        verification: Some(PublicationVerification {
+            status: verification_status,
+            attempts: verification_attempts,
+        }),
         draft_id: draft_id(operation).map(ToOwned::to_owned),
         item_id: Some(item_id.to_owned()),
         canonical_url: detail.canonical_url.clone(),
@@ -1826,9 +1860,23 @@ mod tests {
             }],
             canonical_url: Some("https://www.vinted.fi/items/71-known-item".to_owned()),
         };
-        let result = review_pending_result(&operation, &error, &detail).unwrap();
+        let result = confirmed_publication_result(
+            &operation,
+            &error,
+            &detail,
+            PublicationVerificationStatus::Moderated,
+            3,
+        )
+        .unwrap();
 
         assert_eq!(result.status, PublicationStatus::Pending);
+        assert_eq!(
+            result.verification,
+            Some(PublicationVerification {
+                status: PublicationVerificationStatus::Moderated,
+                attempts: 3,
+            })
+        );
         assert!(!result.safe_to_retry);
         assert_eq!(result.item_id.as_deref(), Some("71"));
         assert_eq!(

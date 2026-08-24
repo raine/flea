@@ -17,8 +17,9 @@
   layer, and existing state remains in place
 - Show required Vinted category attributes and executable option-selection
   actions in the primary publication composer
-- Treat confirmed Vinted publications under review as pending successes with
-  authoritative account state and duplicate-safe retry guidance
+- Verify confirmed Vinted publications with bounded account polling, reporting
+  public, moderated, timed-out, and uncertain outcomes without risking a
+  duplicate publication
 - Link supplied Vinted brands outside initial composer suggestions directly to
   focused category-scoped discovery
 - Keep default Vinted composer output concise with readiness, selected values,
