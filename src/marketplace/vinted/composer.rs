@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+const BRAND_OPTION_LIMIT: usize = 100;
+
 use crate::{
     domain::{
         field::{Field, FieldOption, FieldType, Requirement, ValidationIssue},
@@ -425,6 +427,7 @@ fn compose_from_documents(
         Some(_) => return Err(AppError::usage("Composer input must be a JSON object")),
         None => None,
     };
+    let supplied_brand = supplied_object.and_then(|object| selected_brand(Some(object)));
     if let Some(value) = supplied_object
         .and_then(|object| object.get("catalog_id"))
         .and_then(Value::as_u64)
@@ -550,14 +553,18 @@ fn compose_from_documents(
         "shipping",
     );
 
-    add_named_options_limited(&mut form.options, "brand", brands, 100, |id, label, raw| {
-        FieldOption {
+    add_named_options_limited(
+        &mut form.options,
+        "brand",
+        brands,
+        BRAND_OPTION_LIMIT,
+        |id, label, raw| FieldOption {
             field: "brand".into(),
             value: json!({"brand_id": id, "brand": label}),
             label: label.into(),
             raw: Some(raw.clone()),
-        }
-    });
+        },
+    );
     form.options.retain(|option| {
         !(option.field == "brand" && option.value.pointer("/brand_id") == Some(&json!(1)))
     });
@@ -616,7 +623,7 @@ fn compose_from_documents(
 
     let brand_candidates = named_object_count(brands);
     if let Some(field) = form.fields.iter_mut().find(|field| field.key == "brand") {
-        field.options_truncated = brand_candidates > 100;
+        field.options_truncated = brand_candidates > BRAND_OPTION_LIMIT;
     }
     add_dynamic_attributes(&mut form, attributes);
     add_currency_options(&mut form, configuration);
@@ -674,7 +681,13 @@ fn compose_from_documents(
     };
 
     let suggestions = currency_suggestion(&form);
-    let issue_actions = composer_issue_actions(category.id, &form, &attribute_selection_payload);
+    let issue_actions = composer_issue_actions(
+        category.id,
+        &form,
+        &attribute_selection_payload,
+        supplied_brand,
+        brands,
+    );
     Ok(VintedComposer {
         scope: DiscoveryScope::Category,
         category,
@@ -1081,15 +1094,15 @@ fn composer_issue_actions(
     category_id: u64,
     form: &PublicationForm,
     attribute_selection_payload: &Value,
+    supplied_brand: Option<(Option<u64>, Option<String>)>,
+    initial_brands: &Value,
 ) -> Vec<ComposerIssueAction> {
-    form.issues
+    let mut actions = form
+        .issues
         .iter()
         .map(|issue| {
             let (instruction, command) = match issue.field.as_str() {
-                "brand" => (
-                    "Choose a brand from the category-scoped result.",
-                    format!("flea vinted category brands {category_id}"),
-                ),
+                "brand" => brand_discovery_action(category_id, supplied_brand.as_ref()),
                 "color" => (
                     "Choose colors from the portal-scoped result.",
                     "flea vinted category colors".into(),
@@ -1118,7 +1131,73 @@ fn composer_issue_actions(
                 command,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    if let Some((None, Some(name))) = supplied_brand.as_ref()
+        && !name.is_empty()
+        && !initial_options_contain_brand_name(initial_brands, name)
+        && !actions.iter().any(|action| action.field == "brand")
+    {
+        actions.insert(
+            0,
+            ComposerIssueAction {
+                field: "brand".into(),
+                code: "brand_discovery".into(),
+                instruction: "Search this category for the supplied brand and use the returned opaque ID and canonical name.".into(),
+                command: brand_discovery_command(category_id, supplied_brand.as_ref()),
+            },
+        );
+    }
+
+    actions
+}
+
+fn brand_discovery_action(
+    category_id: u64,
+    supplied_brand: Option<&(Option<u64>, Option<String>)>,
+) -> (&'static str, String) {
+    let instruction = if supplied_brand
+        .and_then(|(_, name)| name.as_deref())
+        .is_some_and(|name| !name.is_empty())
+    {
+        "Search this category for the supplied brand and use the returned opaque ID and canonical name."
+    } else {
+        "Choose a brand from the category-scoped result."
+    };
+    (
+        instruction,
+        brand_discovery_command(category_id, supplied_brand),
+    )
+}
+
+fn brand_discovery_command(
+    category_id: u64,
+    supplied_brand: Option<&(Option<u64>, Option<String>)>,
+) -> String {
+    let keyword = supplied_brand
+        .and_then(|(_, name)| name.as_deref())
+        .filter(|name| !name.is_empty());
+    match keyword {
+        Some(keyword) => format!(
+            "flea vinted category brands {category_id} {}",
+            shell_word(keyword)
+        ),
+        None => format!("flea vinted category brands {category_id}"),
+    }
+}
+
+fn initial_options_contain_brand_name(response: &Value, name: &str) -> bool {
+    let mut candidates = Vec::new();
+    collect_named_objects(response, &mut candidates);
+    candidates
+        .into_iter()
+        .take(BRAND_OPTION_LIMIT)
+        .any(|value| {
+            value
+                .as_object()
+                .and_then(object_label)
+                .is_some_and(|candidate| candidate == name)
+        })
 }
 
 pub(crate) fn selection_command(selections: &Value) -> String {
@@ -1304,6 +1383,31 @@ mod tests {
                 .any(|option| option.value == json!({"brand_id":128186,"brand":"Marimekko"}))
         );
         assert_eq!(composer.listing_input.unwrap().brand_id, Some(128186));
+    }
+
+    #[test]
+    fn supplied_brand_outside_initial_options_has_a_focused_action() {
+        let composer = documents(Some(json!({"brand":"Vibram Fivefingers"})));
+        assert_eq!(
+            composer.issue_actions[0],
+            ComposerIssueAction {
+                field: "brand".into(),
+                code: "brand_discovery".into(),
+                instruction: "Search this category for the supplied brand and use the returned opaque ID and canonical name.".into(),
+                command: "flea vinted category brands 4380 'Vibram Fivefingers'".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn supplied_brand_inside_initial_options_needs_no_focused_action() {
+        let composer = documents(Some(json!({"brand":"Abus"})));
+        assert!(
+            composer
+                .issue_actions
+                .iter()
+                .all(|action| action.code != "brand_discovery")
+        );
     }
 
     #[test]

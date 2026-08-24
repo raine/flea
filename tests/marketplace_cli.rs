@@ -38,6 +38,9 @@ impl VintedPublicationDiscoveryApi for DiscoveryFixture {
                     "code":"condition","title":"Condition",
                     "required":true,"values":[{"id":6,"title":"Good"}]
                 }]}),
+                DiscoveryRequest::Brands { keyword, .. } if keyword == "Vibram Fivefingers" => {
+                    json!({"brands":[{"id":123456,"title":"Vibram Fivefingers"}]})
+                }
                 DiscoveryRequest::Brands { .. } => json!({"brands":[{"id":22,"title":"Abus"}]}),
                 DiscoveryRequest::Colors => json!({"colors":[{"id":3,"title":"Black"}]}),
                 DiscoveryRequest::Configuration => json!({
@@ -175,6 +178,63 @@ fn composer_readiness_omits_discovery_catalogs_and_reports_validation() {
         incomplete["next_actions"]
             .as_array()
             .is_some_and(|actions| !actions.is_empty())
+    );
+}
+
+#[test]
+fn composer_links_supplied_brand_to_focused_category_discovery() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), r#"{"brand":"Vibram Fivefingers"}"#).unwrap();
+    let compose = run_discovery_json(&[
+        "vinted",
+        "category",
+        "compose",
+        "4380",
+        "--input",
+        file.path().to_str().unwrap(),
+    ]);
+    assert_eq!(
+        compose["next_actions"][0]["command"],
+        "flea vinted category brands 4380 'Vibram Fivefingers'"
+    );
+
+    let brands =
+        run_discovery_json(&["vinted", "category", "brands", "4380", "Vibram Fivefingers"]);
+    assert_eq!(brands["data"]["response"]["brands"][0]["id"], 123456);
+    assert_eq!(
+        brands["data"]["response"]["brands"][0]["title"],
+        "Vibram Fivefingers"
+    );
+
+    std::fs::write(
+        file.path(),
+        r#"{
+            "title":"Shoes","description":"Minimal running shoes",
+            "catalog_id":4380,"price":"25.00","currency":"EUR",
+            "package_size_id":1,"brand_id":123456,
+            "brand":"Vibram Fivefingers","color_ids":[3],
+            "item_attributes":[{"code":"condition","ids":[6]}]
+        }"#,
+    )
+    .unwrap();
+    let resolved = run_discovery_json(&[
+        "vinted",
+        "category",
+        "compose",
+        "4380",
+        "--input",
+        file.path().to_str().unwrap(),
+    ]);
+    assert_eq!(resolved["data"]["brand_validation"]["status"], "searched");
+    assert!(
+        resolved["data"]["brand_validation"]["valid"]
+            .as_bool()
+            .unwrap()
+    );
+    assert_eq!(resolved["data"]["listing_input"]["brand_id"], 123456);
+    assert_eq!(
+        resolved["data"]["listing_input"]["brand"],
+        "Vibram Fivefingers"
     );
 }
 

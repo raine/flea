@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Link supplied Vinted brands outside initial composer suggestions directly to
+  focused category-scoped discovery
 - Add concise Vinted composer readiness output with selected values and
   validation actions while retaining complete option discovery
 - Separate temporary Vinted upload photo IDs from authoritative assigned photo

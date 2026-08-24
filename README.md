@@ -250,14 +250,17 @@ meaning.
 
 `category compose` is the guided publication entry point. Category search emits
 one compose action per leaf result. Composer issues link to focused discovery or
-a correction command. Add `--readiness` with partial or complete input for a
-concise result containing readiness, issues, selected values, brand validation,
-and correction actions without unrelated option catalogs. Omit the flag for the
-complete discovery form. Discovery output declares its scope: brands and package
-sizes are category scoped, colors are portal scoped, configuration is account
-scoped, and dynamic attributes are selection scoped. Attribute output preserves
-the submitted `selection_payload` and emits exact commands that append each
-opaque option for the next layer.
+a correction command. When partial input supplies a brand name outside the
+initial suggestions, the composer emits a focused `category brands` action.
+Use that action's opaque ID and canonical name together in the next composer
+input. Add `--readiness` with partial or complete input for a concise result
+containing readiness, issues, selected values, brand validation, and correction
+actions without unrelated option catalogs. Omit the flag for the complete
+discovery form. Discovery output declares its scope: brands and package sizes
+are category scoped, colors are portal scoped, configuration is account scoped,
+and dynamic attributes are selection scoped. Attribute output preserves the
+submitted `selection_payload` and emits exact commands that append each opaque
+option for the next layer.
 
 Create the initial attribute payload entirely from composer output:
 

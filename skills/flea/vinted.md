@@ -98,7 +98,10 @@ flea vinted category attributes --input selections.json
 ```
 
 Attribute output preserves `selection_payload`; follow `next_actions` through
-layers. Use focused discovery when composer issue actions request it.
+layers. A supplied brand name outside the initial suggestions produces a
+focused category-brand action. Use its opaque ID and canonical name together in
+the next composer input. Use focused discovery when other composer issue
+actions request it.
 
 Write listing text naturally in the seller's language. Vinted's buyer-facing
 experience translates supported member-authored content and offers the original.
