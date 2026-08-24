@@ -12,6 +12,7 @@ use crate::{
     marketplace::{
         PortalId,
         vinted::{
+            brand::{BrandValidation, decide_brand, selected_brand},
             publication::{ListingInput, validate_input},
             publication_discovery::{DiscoveryRequest, VintedPublicationDiscoveryApi},
             search::VintedSearchSession,
@@ -37,6 +38,8 @@ pub struct PublicationCategoryCollection {
 pub struct VintedComposer {
     pub category: PublicationCategory,
     pub form: PublicationForm,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brand_validation: Option<BrandValidation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<ComposerSuggestion>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -106,11 +109,45 @@ impl<'a> VintedPublicationComposer<'a> {
             self.api.execute(&credentials, &configuration_request),
             self.api.execute(&credentials, &packages_request),
         );
+        let selection = supplied
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|object| selected_brand(Some(object)));
+        let brand_search = if let Some((Some(id), Some(name))) = selection.as_ref()
+            && id != &1
+            && !name.is_empty()
+            && brands
+                .as_ref()
+                .ok()
+                .is_none_or(|response| !response_contains_brand(response, *id))
+        {
+            Some(
+                self.api
+                    .execute(
+                        &credentials,
+                        &DiscoveryRequest::Brands {
+                            category_id,
+                            keyword: name.clone(),
+                        },
+                    )
+                    .await,
+            )
+        } else {
+            None
+        };
+        let brand_validation = selection.as_ref().map(|(id, name)| {
+            decide_brand(
+                *id,
+                name.as_deref(),
+                brands.as_ref().ok(),
+                brand_search.as_ref().map(|result| result.as_ref()),
+            )
+        });
         compose_from_documents(
             category,
             supplied,
             &attributes?,
-            &brands?,
+            (brands.as_ref().unwrap_or(&Value::Null), brand_validation),
             &colors?,
             &configuration?,
             &packages?,
@@ -215,11 +252,12 @@ fn compose_from_documents(
     category: PublicationCategory,
     supplied: Option<Value>,
     attributes: &Value,
-    brands: &Value,
+    brand: (&Value, Option<BrandValidation>),
     colors: &Value,
     configuration: &Value,
     packages: &Value,
 ) -> Result<VintedComposer, AppError> {
+    let (brands, brand_validation) = brand;
     let supplied_object = match supplied.as_ref() {
         Some(Value::Object(object)) => Some(object),
         Some(_) => return Err(AppError::usage("Composer input must be a JSON object")),
@@ -350,7 +388,7 @@ fn compose_from_documents(
         "shipping",
     );
 
-    add_named_options(&mut form.options, "brand", brands, |id, label, raw| {
+    add_named_options_limited(&mut form.options, "brand", brands, 100, |id, label, raw| {
         FieldOption {
             field: "brand".into(),
             value: json!({"brand_id": id, "brand": label}),
@@ -373,6 +411,27 @@ fn compose_from_documents(
             raw: Some(json!({"brand_id": 1, "brand": ""})),
         },
     );
+    if let Some(validation) = brand_validation.as_ref()
+        && let Some(value) = validation.normalized_value()
+    {
+        form.values.insert("brand".into(), value.clone());
+        if !form
+            .options
+            .iter()
+            .any(|option| option.field == "brand" && option.value == value)
+        {
+            form.options.push(FieldOption {
+                field: "brand".into(),
+                label: validation
+                    .canonical_name
+                    .clone()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| "No brand".into()),
+                value,
+                raw: Some(json!({"validation": validation})),
+            });
+        }
+    }
     add_named_options(&mut form.options, "color", colors, |id, label, raw| {
         FieldOption {
             field: "color".into(),
@@ -393,15 +452,49 @@ fn compose_from_documents(
         },
     );
 
+    let brand_candidates = named_object_count(brands);
+    if let Some(field) = form.fields.iter_mut().find(|field| field.key == "brand") {
+        field.options_truncated = brand_candidates > 100;
+    }
     add_dynamic_attributes(&mut form, attributes);
     add_currency_options(&mut form, configuration);
     apply_price_metadata(&mut form, configuration);
     add_optional_listing_fields(&mut form);
     summarize_options(&mut form);
     form.validate();
+    if let Some(validation) = brand_validation.as_ref()
+        && !validation.valid
+    {
+        if let Some(field) = form.fields.iter_mut().find(|field| field.key == "brand") {
+            field.invalidate(&validation.message);
+        }
+        form.issues.retain(|issue| issue.field != "brand");
+        form.issues.push(crate::domain::field::ValidationIssue {
+            field: "brand".into(),
+            code: validation.error_code().into(),
+            message: validation.message.clone(),
+            source: validation.source.clone(),
+            raw: Some(json!({"status": validation.status})),
+        });
+        form.ready = false;
+    }
 
     let listing_input = if form.ready {
-        let input = supplied
+        let mut normalized = supplied;
+        if let Some(Value::Object(object)) = normalized.as_mut()
+            && let Some(validation) = brand_validation.as_ref()
+            && let Some(value) = validation.normalized_value()
+        {
+            object.insert(
+                "brand_id".into(),
+                value.get("brand_id").cloned().unwrap_or(Value::Null),
+            );
+            object.insert(
+                "brand".into(),
+                value.get("brand").cloned().unwrap_or(Value::Null),
+            );
+        }
+        let input = normalized
             .map(serde_json::from_value)
             .transpose()
             .map_err(|error| {
@@ -422,6 +515,7 @@ fn compose_from_documents(
     Ok(VintedComposer {
         category,
         form,
+        brand_validation,
         suggestions,
         listing_input,
     })
@@ -558,13 +652,25 @@ fn collect_attribute_definitions<'a>(value: &'a Value, output: &mut Vec<&'a Valu
     }
 }
 
-fn add_named_options<F>(options: &mut Vec<FieldOption>, field: &str, response: &Value, mut make: F)
+fn add_named_options<F>(options: &mut Vec<FieldOption>, field: &str, response: &Value, make: F)
 where
+    F: FnMut(u64, &str, &Value) -> FieldOption,
+{
+    add_named_options_limited(options, field, response, usize::MAX, make);
+}
+
+fn add_named_options_limited<F>(
+    options: &mut Vec<FieldOption>,
+    field: &str,
+    response: &Value,
+    limit: usize,
+    mut make: F,
+) where
     F: FnMut(u64, &str, &Value) -> FieldOption,
 {
     let mut candidates = Vec::new();
     collect_named_objects(response, &mut candidates);
-    for value in candidates {
+    for value in candidates.into_iter().take(limit) {
         let object = value.as_object().expect("object");
         if let (Some(id), Some(label)) = (numeric_id(object), object_label(object)) {
             let mut option = make(id, &label, value);
@@ -577,6 +683,23 @@ where
             }
         }
     }
+}
+
+fn named_object_count(response: &Value) -> usize {
+    let mut candidates = Vec::new();
+    collect_named_objects(response, &mut candidates);
+    candidates.len()
+}
+
+fn response_contains_brand(response: &Value, id: u64) -> bool {
+    let mut candidates = Vec::new();
+    collect_named_objects(response, &mut candidates);
+    candidates.into_iter().any(|value| {
+        value
+            .as_object()
+            .and_then(numeric_id)
+            .is_some_and(|candidate| candidate == id)
+    })
 }
 
 fn collect_named_objects<'a>(value: &'a Value, output: &mut Vec<&'a Value>) {
@@ -793,11 +916,17 @@ mod tests {
     use super::*;
 
     fn documents(input: Option<Value>) -> VintedComposer {
+        let brands = json!({"brands":[{"id":22,"title":"Abus"}]});
+        let brand_validation = input
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|object| selected_brand(Some(object)))
+            .map(|(id, name)| decide_brand(id, name.as_deref(), Some(&brands), None));
         compose_from_documents(
             PublicationCategory { id: 4380, title: "Locks".into(), path: vec!["Cycling".into(), "Locks".into()], leaf: true },
             input,
             &json!({"attributes": [{"code":"condition","title":"Condition","required":true,"values":[{"id":6,"title":"Good"}]},{"code":"material","title":"Material","required":false,"values":[{"id":9,"title":"Steel"}]}]}),
-            &json!({"brands":[{"id":22,"title":"Abus"}]}),
+            (&brands, brand_validation),
             &json!({"colors":[{"id":3,"title":"Black"}]}),
             &json!({"currencies":["EUR"],"minimum_price":"1.00","maximum_price":"10000.00"}),
             &json!({"package_sizes":[{"id":1,"title":"Small"}]}),
@@ -864,6 +993,85 @@ mod tests {
                 .unwrap()
                 .requirement,
             Requirement::Optional
+        );
+    }
+
+    #[test]
+    fn searched_brand_is_normalized_and_allows_ready_output() {
+        let input = json!({
+            "title":"Dress", "description":"Patterned dress", "catalog_id":4380,
+            "price":"25.00", "currency":"EUR", "package_size_id":1,
+            "brand_id":128186, "brand":"Marimekko", "color_ids":[3],
+            "item_attributes":[{"code":"condition","ids":[6]}]
+        });
+        let brands = json!({"brands":[{"id":22,"title":"Abus"}]});
+        let searched = json!({"brands":[{"id":128186,"title":"Marimekko"}]});
+        let validation = decide_brand(
+            Some(128186),
+            Some("Marimekko"),
+            Some(&brands),
+            Some(Ok(&searched)),
+        );
+        let composer = compose_from_documents(
+            PublicationCategory { id: 4380, title: "Locks".into(), path: vec!["Cycling".into(), "Locks".into()], leaf: true },
+            Some(input),
+            &json!({"attributes":[{"code":"condition","title":"Condition","required":true,"values":[{"id":6,"title":"Good"}]}]}),
+            (&brands, Some(validation)),
+            &json!({"colors":[{"id":3,"title":"Black"}]}),
+            &json!({"currencies":["EUR"]}),
+            &json!({"package_sizes":[{"id":1,"title":"Small"}]}),
+        ).unwrap();
+
+        assert!(composer.form.ready);
+        assert_eq!(
+            composer.brand_validation.unwrap().status,
+            crate::marketplace::vinted::brand::BrandValidationStatus::Searched
+        );
+        assert!(
+            composer
+                .form
+                .options
+                .iter()
+                .any(|option| option.value == json!({"brand_id":128186,"brand":"Marimekko"}))
+        );
+        assert_eq!(composer.listing_input.unwrap().brand_id, Some(128186));
+    }
+
+    #[test]
+    fn default_brand_options_are_bounded() {
+        let brands = json!({"brands": (2..=151).map(|id| json!({"id":id,"title":format!("Brand {id}")})).collect::<Vec<_>>()});
+        let composer = compose_from_documents(
+            PublicationCategory {
+                id: 4380,
+                title: "Locks".into(),
+                path: vec!["Cycling".into(), "Locks".into()],
+                leaf: true,
+            },
+            None,
+            &json!({"attributes":[]}),
+            (&brands, None),
+            &json!({"colors":[]}),
+            &json!({"currencies":["EUR"]}),
+            &json!({"package_sizes":[]}),
+        )
+        .unwrap();
+        assert_eq!(
+            composer
+                .form
+                .options
+                .iter()
+                .filter(|option| option.field == "brand")
+                .count(),
+            101
+        );
+        assert!(
+            composer
+                .form
+                .fields
+                .iter()
+                .find(|field| field.key == "brand")
+                .unwrap()
+                .options_truncated
         );
     }
 

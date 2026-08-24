@@ -1,5 +1,6 @@
 pub(crate) mod auth;
 pub(crate) mod binding;
+pub(crate) mod brand;
 pub(crate) mod composer;
 pub(crate) mod draft;
 pub(crate) mod interactive;

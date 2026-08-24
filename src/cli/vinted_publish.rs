@@ -9,10 +9,12 @@ use crate::{
     marketplace::{
         PortalId,
         vinted::{
+            brand::validate_listing_brand,
             draft::{DEFAULT_PAGE_SIZE, DraftListRequest, VintedDraftApi, VintedDrafts},
             publication::{
                 ListingInput, PublicationOperation, VintedPublication, VintedPublicationApi,
             },
+            publication_discovery::VintedPublicationDiscoveryApi,
             readiness::VintedReadinessApi,
             search::VintedSearchSession,
         },
@@ -139,9 +141,19 @@ pub async fn execute_readiness(
 pub async fn execute_direct(
     portal: PortalId,
     args: PublicationInputArgs,
+    session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationApi,
+    discovery_api: &dyn VintedPublicationDiscoveryApi,
 ) -> Result<CommandOutcome, AppError> {
-    execute_operation(portal, PublicationOperation::Publish, Some(args), api).await
+    execute_operation(
+        portal,
+        PublicationOperation::Publish,
+        Some(args),
+        session,
+        api,
+        discovery_api,
+    )
+    .await
 }
 
 pub async fn execute_draft(
@@ -149,6 +161,7 @@ pub async fn execute_draft(
     command: VintedDraftCommand,
     session: &dyn VintedSearchSession,
     publication_api: &dyn VintedPublicationApi,
+    discovery_api: &dyn VintedPublicationDiscoveryApi,
     draft_api: &dyn VintedDraftApi,
 ) -> Result<CommandOutcome, AppError> {
     match command {
@@ -201,19 +214,32 @@ pub async fn execute_draft(
             (PublicationOperation::DeleteDraft { draft_id }, None)
         }
     };
-    execute_operation(portal, operation, values, publication_api).await
+    execute_operation(
+        portal,
+        operation,
+        values,
+        session,
+        publication_api,
+        discovery_api,
+    )
+    .await
 }
 
 async fn execute_operation(
     portal: PortalId,
     operation: PublicationOperation,
     values: Option<PublicationInputArgs>,
+    session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationApi,
+    discovery_api: &dyn VintedPublicationDiscoveryApi,
 ) -> Result<CommandOutcome, AppError> {
     let (input, images) = match values {
         Some(values) => (Some(read_input(&values.input)?), values.image),
         None => (None, Vec::new()),
     };
+    if let Some(input) = input.as_ref() {
+        validate_listing_brand(portal, input, session, discovery_api).await?;
+    }
     let result = VintedPublication::new(api)
         .execute(operation, input, images)
         .await?;
