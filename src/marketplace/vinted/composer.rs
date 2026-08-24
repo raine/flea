@@ -15,6 +15,7 @@ use crate::{
         PortalId,
         vinted::{
             brand::{BrandValidation, decide_brand, selected_brand},
+            category_evidence::MarketplaceCategoryEvidence,
             publication::{ListingInput, validate_input},
             publication_discovery::{
                 DiscoveryRequest, DiscoveryScope, VintedPublicationDiscoveryApi,
@@ -49,6 +50,8 @@ pub struct PublicationCategoryCollection {
     pub guidance: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<PublicationCategorySuggestion>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marketplace_evidence: Option<MarketplaceCategoryEvidence>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -253,97 +256,10 @@ pub fn categories_for_search(search: &Value, catalogs: &Value) -> Vec<Publicatio
     let ids = category_ids_from_search(search);
     let mut categories = categories_from_response(catalogs);
     if ids.is_empty() {
-        return categories_from_response(search);
+        return Vec::new();
     }
     categories.retain(|category| ids.contains(&category.id));
     categories
-}
-
-pub fn local_category_fallback(
-    query: &str,
-    catalogs: &Value,
-    limit: usize,
-) -> Vec<PublicationCategory> {
-    let normalized_query = normalize_category_text(query);
-    if normalized_query.len() < 3 || limit == 0 {
-        return Vec::new();
-    }
-
-    let mut terms = vec![(normalized_query.clone(), 100_u32)];
-    for (needle, category_term) in [
-        ("paljasjalk", "juoksukengat"),
-        ("varvaskenk", "juoksukengat"),
-        ("fivefinger", "juoksukengat"),
-        ("barefoot", "juoksukengat"),
-    ] {
-        if normalized_query.contains(needle) {
-            terms.push((category_term.to_owned(), 80));
-        }
-    }
-
-    let mut ranked = categories_from_response(catalogs)
-        .into_iter()
-        .filter(|category| category.leaf)
-        .filter_map(|category| {
-            let title = normalize_category_text(&category.title);
-            let path = category
-                .path
-                .iter()
-                .map(|segment| normalize_category_text(segment))
-                .collect::<Vec<_>>();
-            let mut score = 0_u32;
-
-            for (term, weight) in &terms {
-                if title == *term {
-                    score += weight * 10;
-                } else if title.contains(term) || term.contains(&title) {
-                    score += weight * 6;
-                }
-                if path.iter().any(|segment| segment == term) {
-                    score += weight * 3;
-                } else if path
-                    .iter()
-                    .any(|segment| segment.contains(term) || term.contains(segment))
-                {
-                    score += weight;
-                }
-            }
-
-            for segment in &path {
-                if segment.len() >= 4 && normalized_query.contains(segment) {
-                    score += 40;
-                }
-            }
-
-            (score > 0).then_some((score, category))
-        })
-        .collect::<Vec<_>>();
-    ranked.sort_by(|(left_score, left), (right_score, right)| {
-        right_score
-            .cmp(left_score)
-            .then_with(|| left.path.cmp(&right.path))
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    if terms.len() > 1
-        && let Some(best_score) = ranked.first().map(|(score, _)| *score)
-    {
-        ranked.retain(|(score, _)| *score == best_score);
-    }
-    ranked.truncate(limit);
-    ranked.into_iter().map(|(_, category)| category).collect()
-}
-
-fn normalize_category_text(value: &str) -> String {
-    value
-        .chars()
-        .flat_map(char::to_lowercase)
-        .filter_map(|character| match character {
-            'ä' | 'å' => Some('a'),
-            'ö' => Some('o'),
-            character if character.is_alphanumeric() => Some(character),
-            _ => None,
-        })
-        .collect()
 }
 
 pub fn category_suggestions_from_search(search: &Value) -> Vec<PublicationCategorySuggestion> {
@@ -364,6 +280,26 @@ fn category_ids_from_search(value: &Value) -> BTreeSet<u64> {
 
 fn collect_search_ids(value: &Value, ids: &mut BTreeSet<u64>) {
     match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_search_ids(value, ids);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                match key.as_str() {
+                    "catalog_ids" | "catalogIds" => collect_numeric_values(value, ids),
+                    "data" => collect_search_ids(value, ids),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_numeric_values(value: &Value, ids: &mut BTreeSet<u64>) {
+    match value {
         Value::Number(value) => {
             if let Some(value) = value.as_u64() {
                 ids.insert(value);
@@ -376,22 +312,7 @@ fn collect_search_ids(value: &Value, ids: &mut BTreeSet<u64>) {
         }
         Value::Array(values) => {
             for value in values {
-                collect_search_ids(value, ids);
-            }
-        }
-        Value::Object(object) => {
-            if let Some(id) = numeric_id(object) {
-                ids.insert(id);
-            }
-            for (key, value) in object {
-                if key.contains("catalog")
-                    || key == "id"
-                    || key == "results"
-                    || key == "data"
-                    || is_suggestion_key(key)
-                {
-                    collect_search_ids(value, ids);
-                }
+                collect_numeric_values(value, ids);
             }
         }
         _ => {}
@@ -1426,7 +1347,7 @@ mod tests {
     }
 
     #[test]
-    fn category_search_uses_upstream_aliases_and_suggestions() {
+    fn category_search_surfaces_aliases_as_query_suggestions() {
         let catalogs = json!({"catalogs":[
             {"id":10,"title":"Asusteet","catalogs":[
                 {"id":4380,"title":"Reput","catalogs":[]}
@@ -1438,8 +1359,7 @@ mod tests {
         });
 
         let categories = categories_for_search(&response, &catalogs);
-        assert_eq!(categories.len(), 1);
-        assert_eq!(categories[0].title, "Reput");
+        assert!(categories.is_empty());
         assert_eq!(
             category_suggestions_from_search(&response),
             vec![
@@ -1457,25 +1377,18 @@ mod tests {
     }
 
     #[test]
-    fn local_category_fallback_maps_barefoot_terms_to_running_shoes() {
+    fn category_search_ignores_generic_ids_inside_suggestions() {
         let catalogs = json!({"catalogs":[
-            {"id":100,"title":"Miehet","catalogs":[
-                {"id":110,"title":"Kengät","catalogs":[
-                    {"id":111,"title":"Juoksukengät","catalogs":[]},
-                    {"id":112,"title":"Vaelluskengät","catalogs":[]}
-                ]}
-            ]},
-            {"id":200,"title":"Koti","catalogs":[
-                {"id":210,"title":"Matot","catalogs":[]}
+            {"id":10,"title":"Miehet","catalogs":[
+                {"id":1453,"title":"Juoksukengät","catalogs":[]}
             ]}
         ]});
+        let response = json!({
+            "catalog_ids": [],
+            "suggestions": [{"id":1453,"title":"Miehet"}]
+        });
 
-        let result = local_category_fallback("paljasjalkakengät", &catalogs, 8);
-
-        assert_eq!(result[0].id, 111);
-        assert_eq!(result[0].path, ["Miehet", "Kengät", "Juoksukengät"]);
-        assert!(result.iter().all(|category| category.leaf));
-        assert!(!result.iter().any(|category| category.id == 210));
+        assert!(categories_for_search(&response, &catalogs).is_empty());
     }
 
     #[test]

@@ -77,12 +77,15 @@ account without relying on search indexing. Use it to verify that a
 review-pending publication exists while Vinted hides it from public search,
 then inspect the returned item ID with `listing show`.
 
-Publication category search uses portal-localized taxonomy labels. Output
-reports the portal and request locale, resolves opaque IDs through the localized
-catalog, and preserves upstream aliases or suggestions. Use Finnish terms on
-`fi`; after zero results, follow suggestions or browse `category list`. Follow a
-leaf result's `next_actions` into `category compose`, the primary source for
-fields, options, issues, and correction actions.
+Publication category search uses portal-localized taxonomy labels. Include
+known audience context in the query, such as `miesten`, `naisten`, or `lasten`.
+Output reports the portal and request locale, resolves opaque IDs through the
+localized catalog, and preserves upstream aliases or suggestions. When direct
+results are empty or broad, flea ranks publishable leaves with live Vinted
+category facets. Inspect `marketplace_evidence`, honor `selection_required`, and
+choose the category matching the item instead of selecting the first result.
+Follow a leaf result's `next_actions` into `category compose`, the primary source
+for fields, options, issues, and correction actions.
 
 Add `--readiness` with partial or complete input to return only readiness,
 issues, selected values, brand validation, and correction actions. This mode

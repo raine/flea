@@ -5,17 +5,18 @@ use serde_json::{Value, json};
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
-    domain::envelope::NextAction,
+    domain::envelope::{NextAction, Warning},
     error::AppError,
     invocation,
     marketplace::{
         PortalId,
         vinted::{
             binding::VINTED_FI_BINDING,
+            category_evidence,
             composer::{
                 PublicationCategoryCollection, PublicationCategorySuggestion,
                 VintedComposerReadiness, VintedPublicationComposer, categories_for_search,
-                category_suggestions_from_search, local_category_fallback,
+                categories_from_response, category_suggestions_from_search,
                 publication_attribute_definitions, publication_attribute_options,
                 selection_command,
             },
@@ -23,10 +24,12 @@ use crate::{
                 DiscoveryRequest, DiscoveryScope, PublicationDiscoveryOutput,
                 VintedPublicationDiscoveryApi, validate_request,
             },
-            search::VintedSearchSession,
+            search::{VintedSearchApi, VintedSearchSession},
         },
     },
 };
+
+const MAX_DIRECT_CATEGORY_RESULTS: usize = 8;
 
 #[derive(Debug, Args)]
 pub struct VintedCategoryArgs {
@@ -52,7 +55,7 @@ pub enum VintedCategoryCommand {
     #[command(
         about = "Compose a complete Vinted publication form",
         long_about = "Primary guided entry point for Vinted publication. Combine a category-scoped runtime ID with selection-scoped attributes, category-scoped brands and package sizes, portal-scoped colors, and account-scoped configuration. Optional partial or complete ListingInput JSON confirms seller facts and enables payload validation. Add --readiness for selected values and validation results without the discovery option catalog.",
-        after_help = "Examples:\n  CATEGORY_ID=$(flea --format json vinted category search SEARCH_TEXT | jq -er '.data.categories[] | select(.leaf) | .id' | head -n1)\n  flea vinted category compose \"$CATEGORY_ID\" --input listing.json\n  flea vinted category compose \"$CATEGORY_ID\" --input listing.json --readiness"
+        after_help = "Examples:\n  flea --format json vinted category search SEARCH_TEXT\n  flea vinted category compose CATEGORY_ID --input listing.json\n  flea vinted category compose CATEGORY_ID --input listing.json --readiness"
     )]
     Compose {
         /// Runtime leaf category ID.
@@ -129,6 +132,7 @@ pub async fn execute(
     command: VintedCategoryCommand,
     session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationDiscoveryApi,
+    search_api: &dyn VintedSearchApi,
 ) -> Result<CommandOutcome, AppError> {
     if let VintedCategoryCommand::Compose {
         category_id,
@@ -187,15 +191,41 @@ pub async fn execute(
             .execute(&credentials, &DiscoveryRequest::Catalogs)
             .await?;
         let mut categories = categories_for_search(&response, &catalogs);
-        let used_local_fallback = categories.is_empty();
-        if used_local_fallback {
-            categories = local_category_fallback(&query, &catalogs, 8);
+        let direct_count = categories.len();
+        let needs_marketplace_evidence = needs_marketplace_evidence(direct_count);
+        let mut marketplace_evidence = None;
+        let mut warnings = Vec::new();
+        if needs_marketplace_evidence {
+            categories.clear();
+            let runtime_categories = categories_from_response(&catalogs);
+            match category_evidence::discover(
+                portal,
+                &query,
+                &runtime_categories,
+                session,
+                search_api,
+            )
+            .await
+            {
+                Ok(result) if !result.categories.is_empty() => {
+                    categories = result.categories;
+                    marketplace_evidence = Some(result.evidence);
+                }
+                Ok(_) => {}
+                Err(error) => warnings.push(Warning {
+                    code: "vinted.category_marketplace_evidence_failed".to_owned(),
+                    message: format!(
+                        "Marketplace category evidence was unavailable: {}",
+                        error.message
+                    ),
+                }),
+            }
         }
         let suggestions = category_suggestions_from_search(&response);
         let count = categories.len();
-        let guidance = if used_local_fallback && count > 0 {
+        let guidance = if marketplace_evidence.is_some() {
             Some(format!(
-                "Vinted's localized category service returned no direct matches on portal {portal} with locale {}. These leaf categories are locally ranked from the runtime catalog.",
+                "Vinted's localized category service returned no focused direct match on portal {portal} with locale {}. These publishable leaf categories are ranked by category counts from current Vinted listings matching this text; choose the category that matches the item.",
                 VINTED_FI_BINDING.iso_locale
             ))
         } else if count == 0 {
@@ -206,7 +236,9 @@ pub async fn execute(
         } else {
             None
         };
-        let mut next_actions = category_search_next_actions(&query, count, &suggestions);
+        let actionable_direct_count = if needs_marketplace_evidence { 0 } else { count };
+        let mut next_actions =
+            category_search_next_actions(&query, actionable_direct_count, &suggestions);
         next_actions.extend(
             categories
                 .iter()
@@ -225,9 +257,11 @@ pub async fn execute(
                 count,
                 guidance,
                 suggestions,
+                marketplace_evidence,
             },
         ))
-        .with_next_actions(next_actions))
+        .with_next_actions(next_actions)
+        .with_warnings(warnings))
     } else {
         let next_actions = attribute_next_actions(&request, &response);
         let output = PublicationDiscoveryOutput {
@@ -241,6 +275,10 @@ pub async fn execute(
                 .with_next_actions(next_actions),
         )
     }
+}
+
+fn needs_marketplace_evidence(direct_count: usize) -> bool {
+    direct_count == 0 || direct_count > MAX_DIRECT_CATEGORY_RESULTS
 }
 
 fn category_search_next_actions(
@@ -319,12 +357,15 @@ fn read_json(path: &PathBuf) -> Result<Value, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use std::{future::Future, pin::Pin, sync::Mutex};
+    use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Mutex};
 
     use serde_json::json;
 
     use super::*;
-    use crate::marketplace::vinted::auth::VintedCredentialRecord;
+    use crate::marketplace::vinted::{
+        auth::VintedCredentialRecord,
+        search::{CatalogueRequest, VintedSearchApi},
+    };
 
     struct FixtureApi {
         search: Value,
@@ -345,6 +386,39 @@ mod tests {
                 _ => unreachable!("fixture only supports category search"),
             };
             Box::pin(std::future::ready(Ok(response)))
+        }
+    }
+
+    struct FixtureSearchApi {
+        responses: BTreeMap<Option<String>, Value>,
+        requests: Mutex<Vec<CatalogueRequest>>,
+    }
+
+    impl VintedSearchApi for FixtureSearchApi {
+        fn execute<'a>(
+            &'a self,
+            _credentials: &'a VintedCredentialRecord,
+            request: &'a CatalogueRequest,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            self.requests.lock().unwrap().push(request.clone());
+            let parent = request
+                .context
+                .attributes
+                .get("catalog")
+                .and_then(|ids| ids.first())
+                .cloned();
+            Box::pin(std::future::ready(Ok(self
+                .responses
+                .get(&parent)
+                .cloned()
+                .unwrap_or_else(|| json!({"categories":[]})))))
+        }
+    }
+
+    fn empty_search_api() -> FixtureSearchApi {
+        FixtureSearchApi {
+            responses: BTreeMap::new(),
+            requests: Mutex::new(Vec::new()),
         }
     }
 
@@ -378,6 +452,7 @@ mod tests {
     async fn localized_success_reports_portal_locale_and_resolved_catalog() {
         let api = api(json!({"catalog_ids":[4380]}));
         let session = |_| Ok(credentials());
+        let search_api = empty_search_api();
         let outcome = execute(
             PortalId::Fi,
             VintedCategoryCommand::Search {
@@ -385,6 +460,7 @@ mod tests {
             },
             &session,
             &api,
+            &search_api,
         )
         .await
         .unwrap();
@@ -416,6 +492,7 @@ mod tests {
     async fn zero_results_explain_localization_and_offer_upstream_suggestions() {
         let api = api(json!({"catalog_ids":[], "suggestions":["reppu"]}));
         let session = |_| Ok(credentials());
+        let search_api = empty_search_api();
         let outcome = execute(
             PortalId::Fi,
             VintedCategoryCommand::Search {
@@ -423,6 +500,7 @@ mod tests {
             },
             &session,
             &api,
+            &search_api,
         )
         .await
         .unwrap();
@@ -453,7 +531,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zero_upstream_results_offer_ranked_local_leaf_categories() {
+    async fn zero_upstream_results_use_marketplace_category_facets() {
         let api = FixtureApi {
             search: json!({"catalog_ids":[]}),
             catalogs: json!({"catalogs":[
@@ -466,6 +544,26 @@ mod tests {
             ]}),
             requests: Mutex::new(Vec::new()),
         };
+        let search_api = FixtureSearchApi {
+            responses: BTreeMap::from([
+                (
+                    None,
+                    json!({"categories":[{"id":100,"title":"Miehet","item_count":100}]}),
+                ),
+                (
+                    Some("100".into()),
+                    json!({"categories":[{"id":110,"title":"Kengät","item_count":100}]}),
+                ),
+                (
+                    Some("110".into()),
+                    json!({"categories":[
+                        {"id":1453,"title":"Juoksukengät","item_count":40},
+                        {"id":2678,"title":"Vaelluskengät","item_count":60}
+                    ]}),
+                ),
+            ]),
+            requests: Mutex::new(Vec::new()),
+        };
         let session = |_| Ok(credentials());
         let outcome = execute(
             PortalId::Fi,
@@ -474,6 +572,7 @@ mod tests {
             },
             &session,
             &api,
+            &search_api,
         )
         .await
         .unwrap();
@@ -481,24 +580,34 @@ mod tests {
         let CommandData::VintedCategories(result) = outcome.data else {
             panic!("expected normalized category search output");
         };
-        assert_eq!(result.categories[0].id, 1453);
+        assert_eq!(result.categories[0].id, 2678);
+        assert_eq!(result.categories[1].id, 1453);
         assert!(
             result
                 .guidance
                 .as_deref()
                 .unwrap()
-                .contains("locally ranked")
+                .contains("current Vinted listings")
         );
+        let evidence = result.marketplace_evidence.unwrap();
+        assert_eq!(evidence.requests, 3);
+        assert_eq!(evidence.counts[0].listings, 60);
+        assert_eq!(search_api.requests.lock().unwrap().len(), 3);
         assert_eq!(
             outcome.next_actions[0].command,
-            "flea vinted --portal fi category compose 1453"
+            "flea vinted --portal fi category list"
         );
-        assert!(
-            outcome
-                .next_actions
-                .iter()
-                .all(|action| !action.command.ends_with("category list"))
+        assert_eq!(
+            outcome.next_actions[1].command,
+            "flea vinted --portal fi category compose 2678"
         );
+    }
+
+    #[test]
+    fn empty_and_broad_direct_results_use_marketplace_evidence() {
+        assert!(needs_marketplace_evidence(0));
+        assert!(!needs_marketplace_evidence(MAX_DIRECT_CATEGORY_RESULTS));
+        assert!(needs_marketplace_evidence(MAX_DIRECT_CATEGORY_RESULTS + 1));
     }
 
     #[test]

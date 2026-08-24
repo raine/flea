@@ -460,6 +460,7 @@ async fn execute_vinted(
                 args.command,
                 dependencies.vinted_search_session.as_ref(),
                 dependencies.vinted_publication_discovery.as_ref(),
+                dependencies.vinted_search.as_ref(),
             )
             .await
         }
