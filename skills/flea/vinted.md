@@ -55,7 +55,7 @@ Web commands use Chrome cookies and human verification through `agent-browser`:
 ```sh
 flea vinted auth web login
 flea vinted auth web status
-flea vinted category search KEYWORD
+flea --format json vinted category search SEARCH_TEXT
 flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted draft show DRAFT_ID
 flea vinted draft validate DRAFT_ID
@@ -70,8 +70,24 @@ Publication category search sends keywords to Vinted's portal-localized
 taxonomy service. Output reports the portal and request locale, resolves opaque
 IDs through the localized catalog, and preserves upstream aliases or
 suggestions. Use Finnish terms on `fi`; after zero results, follow suggestions
-or browse `category list`. Do not translate queries or create a separate
-taxonomy.
+or browse `category list`. Follow a leaf result's `next_actions` into
+`category compose`, the primary source for fields, options, issues, and
+correction actions.
+
+Brands and package sizes are category scoped. Colors are portal scoped,
+configuration is account scoped, and attributes are selection scoped. Start
+layered attributes from the composer category option and carry selected parents
+forward:
+
+```sh
+flea --format json vinted category compose "$CATEGORY_ID" \
+  | jq '[.data.form.options[] | select(.field == "category") | .raw]' \
+  > selections.json
+flea vinted category attributes --input selections.json
+```
+
+Attribute output preserves `selection_payload`; follow `next_actions` through
+layers. Use focused discovery when composer issue actions request it.
 
 Write listing text naturally in the seller's language. Vinted's buyer-facing
 experience translates supported member-authored content and offers the original.

@@ -4,6 +4,7 @@ use reqwest::{
     Method,
     header::{HeaderName, HeaderValue},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -22,6 +23,25 @@ use crate::{
 const API_V2_PATH: &str = "/api/v2/";
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryScope {
+    Portal,
+    Account,
+    Category,
+    Selection,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PublicationDiscoveryOutput {
+    pub scope: DiscoveryScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_payload: Option<Value>,
+    pub response: Value,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DiscoveryRequest {
     Catalogs,
@@ -31,6 +51,33 @@ pub enum DiscoveryRequest {
     Colors,
     Configuration,
     PackageSizes { category_id: u64 },
+}
+
+impl DiscoveryRequest {
+    pub const fn scope(&self) -> DiscoveryScope {
+        match self {
+            Self::Catalogs | Self::SearchCatalog { .. } | Self::Colors => DiscoveryScope::Portal,
+            Self::Configuration => DiscoveryScope::Account,
+            Self::Brands { .. } | Self::PackageSizes { .. } => DiscoveryScope::Category,
+            Self::Attributes { .. } => DiscoveryScope::Selection,
+        }
+    }
+
+    pub const fn category_id(&self) -> Option<u64> {
+        match self {
+            Self::Brands { category_id, .. } | Self::PackageSizes { category_id } => {
+                Some(*category_id)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn selection_payload(&self) -> Option<Value> {
+        match self {
+            Self::Attributes { selections } => Some(selections.clone()),
+            _ => None,
+        }
+    }
 }
 
 pub trait VintedPublicationDiscoveryApi: Send + Sync {

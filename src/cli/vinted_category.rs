@@ -1,7 +1,7 @@
 use std::{fs, io::Read, path::PathBuf};
 
 use clap::{Args, Subcommand};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
@@ -15,9 +15,11 @@ use crate::{
             composer::{
                 PublicationCategoryCollection, PublicationCategorySuggestion,
                 VintedPublicationComposer, categories_for_search, category_suggestions_from_search,
+                selection_command,
             },
             publication_discovery::{
-                DiscoveryRequest, VintedPublicationDiscoveryApi, validate_request,
+                DiscoveryRequest, DiscoveryScope, PublicationDiscoveryOutput,
+                VintedPublicationDiscoveryApi, validate_request,
             },
             search::VintedSearchSession,
         },
@@ -47,7 +49,8 @@ pub enum VintedCategoryCommand {
     },
     #[command(
         about = "Compose a complete Vinted publication form",
-        long_about = "Combine the selected category with runtime attributes, brands, colors, price configuration, and package sizes. Optional partial or complete ListingInput JSON confirms seller facts and enables payload validation."
+        long_about = "Primary guided entry point for Vinted publication. Combine a category-scoped runtime ID with selection-scoped attributes, category-scoped brands and package sizes, portal-scoped colors, and account-scoped configuration. Optional partial or complete ListingInput JSON confirms seller facts and enables payload validation.",
+        after_help = "Example:\n  CATEGORY_ID=$(flea --format json vinted category search SEARCH_TEXT | jq -er '.data.categories[] | select(.leaf) | .id' | head -n1)\n  flea vinted category compose \"$CATEGORY_ID\" --input listing.json"
     )]
     Compose {
         /// Runtime leaf category ID.
@@ -58,7 +61,8 @@ pub enum VintedCategoryCommand {
     },
     #[command(
         about = "Discover layered Vinted category attributes",
-        long_about = "Post a JSON array of selected category attributes and return the next layered attribute configuration. Include the category selection and repeat after each parent selection."
+        long_about = "Selection-scoped discovery. Post a JSON array of selected attributes and receive the next exact selection commands. Include the category selection emitted by compose, then repeat after choosing each parent value.",
+        after_help = "Example:\n  flea --format json vinted category compose \"$CATEGORY_ID\" | jq '[.data.form.options[] | select(.field == \"category\") | .raw]' > selections.json\n  flea vinted category attributes --input selections.json"
     )]
     Attributes {
         /// JSON selection array, or `-` for stdin.
@@ -67,7 +71,8 @@ pub enum VintedCategoryCommand {
     },
     #[command(
         about = "Search brands valid for a Vinted category",
-        long_about = "Fetch minimized brand choices scoped to a runtime Vinted category ID and optional search text."
+        long_about = "Category-scoped discovery. Fetch minimized brand choices for a runtime Vinted category ID and optional search text.",
+        after_help = "Example:\n  flea vinted category brands \"$CATEGORY_ID\" BRAND_TEXT"
     )]
     Brands {
         /// Runtime category ID.
@@ -78,17 +83,20 @@ pub enum VintedCategoryCommand {
     },
     #[command(
         about = "List Vinted publication colors",
-        long_about = "Fetch the authenticated color choices exposed to the Vinted publication form."
+        long_about = "Portal-scoped discovery. Fetch authenticated color choices exposed to the Vinted publication form. No category ID is accepted.",
+        after_help = "Example:\n  flea vinted category colors"
     )]
     Colors,
     #[command(
         about = "Show Vinted publication configuration",
-        long_about = "Fetch upload session, price limits, image limits, measurements, and other runtime publication configuration."
+        long_about = "Account-scoped discovery. Fetch upload session, price limits, image limits, measurements, and other runtime publication configuration. No category ID is accepted.",
+        after_help = "Example:\n  flea vinted category configuration"
     )]
     Configuration,
     #[command(
         about = "List package sizes for a Vinted category",
-        long_about = "Fetch shipping package sizes and optional parcel measurement configuration for a runtime category ID."
+        long_about = "Category-scoped discovery. Fetch shipping package sizes and optional parcel measurement configuration for a runtime category ID.",
+        after_help = "Example:\n  flea vinted category package-sizes \"$CATEGORY_ID\""
     )]
     PackageSizes {
         /// Runtime category ID.
@@ -122,7 +130,15 @@ pub async fn execute(
         let composer = VintedPublicationComposer::new(session, api)
             .compose(portal, category_id, supplied)
             .await?;
-        return Ok(CommandOutcome::new(CommandData::VintedComposer(composer)));
+        let next_actions = composer
+            .issue_actions
+            .iter()
+            .map(|action| crate::domain::envelope::NextAction {
+                command: action.command.clone(),
+            })
+            .collect();
+        return Ok(CommandOutcome::new(CommandData::VintedComposer(composer))
+            .with_next_actions(next_actions));
     }
 
     let search_query = match &command {
@@ -165,9 +181,18 @@ pub async fn execute(
                 VINTED_FI_BINDING.iso_locale
             )
         });
-        let next_actions = category_search_next_actions(&query, count, &suggestions);
+        let mut next_actions = category_search_next_actions(&query, count, &suggestions);
+        next_actions.extend(
+            categories
+                .iter()
+                .filter(|category| category.leaf)
+                .map(|category| NextAction {
+                    command: invocation::vinted_fi(format!("category compose {}", category.id)),
+                }),
+        );
         Ok(CommandOutcome::new(CommandData::VintedCategories(
             PublicationCategoryCollection {
+                scope: DiscoveryScope::Portal,
                 portal,
                 request_locale: VINTED_FI_BINDING.iso_locale.to_owned(),
                 query,
@@ -179,7 +204,17 @@ pub async fn execute(
         ))
         .with_next_actions(next_actions))
     } else {
-        Ok(CommandOutcome::new(CommandData::Raw(response)))
+        let next_actions = attribute_next_actions(&request, &response);
+        let output = PublicationDiscoveryOutput {
+            scope: request.scope(),
+            category_id: request.category_id(),
+            selection_payload: request.selection_payload(),
+            response,
+        };
+        Ok(
+            CommandOutcome::new(CommandData::VintedPublicationDiscovery(output))
+                .with_next_actions(next_actions),
+        )
     }
 }
 
@@ -210,6 +245,47 @@ fn category_search_next_actions(
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn attribute_next_actions(request: &DiscoveryRequest, response: &Value) -> Vec<NextAction> {
+    let DiscoveryRequest::Attributes { selections } = request else {
+        return Vec::new();
+    };
+    let Some(attributes) = response
+        .get("attributes")
+        .and_then(Value::as_array)
+        .or_else(|| {
+            response
+                .pointer("/data/attributes")
+                .and_then(Value::as_array)
+        })
+    else {
+        return Vec::new();
+    };
+    let mut actions = Vec::new();
+    for attribute in attributes {
+        let Some(code) = attribute.get("code").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(values) = ["values", "options", "items"]
+            .iter()
+            .find_map(|key| attribute.get(*key).and_then(Value::as_array))
+        else {
+            continue;
+        };
+        for value in values
+            .iter()
+            .filter_map(|option| option.get("id").or_else(|| option.get("value")))
+        {
+            let mut payload = selections.as_array().cloned().unwrap_or_default();
+            payload.retain(|selection| selection.get("code") != Some(&json!(code)));
+            payload.push(json!({"code": code, "value": [value]}));
+            actions.push(NextAction {
+                command: selection_command(&Value::Array(payload)),
+            });
+        }
+    }
+    actions
 }
 
 fn read_json(path: &PathBuf) -> Result<Value, AppError> {
@@ -316,7 +392,10 @@ mod tests {
         assert_eq!(result.query, "reppu");
         assert_eq!(result.categories[0].path, ["Asusteet", "Reput"]);
         assert!(result.guidance.is_none());
-        assert!(outcome.next_actions.is_empty());
+        assert_eq!(
+            outcome.next_actions[0].command,
+            "flea vinted --portal fi category compose 4380"
+        );
         assert_eq!(
             api.requests.lock().unwrap().as_slice(),
             [
@@ -365,6 +444,32 @@ mod tests {
                 "flea vinted --portal fi category list",
                 "flea vinted --portal fi category search 'reppu'"
             ]
+        );
+    }
+
+    #[test]
+    fn attribute_actions_carry_the_exact_selection_payload_forward() {
+        let request = DiscoveryRequest::Attributes {
+            selections: json!([{"code":"category","value":[4380]}]),
+        };
+        let actions = attribute_next_actions(
+            &request,
+            &json!({"attributes":[{
+                "code":"condition",
+                "values":[{"id":6,"title":"Good"},{"id":7,"title":"New"}]
+            }]}),
+        );
+
+        assert_eq!(actions.len(), 2);
+        assert!(
+            actions[0].command.contains(
+                r#"[{"code":"category","value":[4380]},{"code":"condition","value":[6]}]"#
+            )
+        );
+        assert!(
+            actions[0]
+                .command
+                .ends_with("flea vinted category attributes --input -")
         );
     }
 }

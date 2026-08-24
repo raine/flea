@@ -200,11 +200,14 @@ status command. Flea stores the dedicated Chrome profile under its private state
 directory. `flea vinted auth web logout` clears its cookies and browser storage.
 
 ```sh
-flea vinted category search lukko
+flea --format json vinted category search SEARCH_TEXT
 flea vinted category compose CATEGORY_ID
 flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted category attributes --input selections.json
+flea vinted category brands CATEGORY_ID BRAND_TEXT
 flea vinted category package-sizes CATEGORY_ID
+flea vinted category colors
+flea vinted category configuration
 flea vinted readiness
 flea vinted draft list --page 1 --limit 20
 flea vinted draft show DRAFT_ID
@@ -243,6 +246,23 @@ photo IDs with zero-based `display_order`; `assigned_photo_ids` preserves the
 existing flat field for structured-output compatibility and contains the same
 authoritative IDs in display order. ID equality between the two sets carries no
 meaning.
+
+`category compose` is the guided publication entry point. Category search emits
+one compose action per leaf result. Composer issues link to focused discovery or
+a correction command. Discovery output declares its scope: brands and package
+sizes are category scoped, colors are portal scoped, configuration is account
+scoped, and dynamic attributes are selection scoped. Attribute output preserves
+the submitted `selection_payload` and emits exact commands that append each
+opaque option for the next layer.
+
+Create the initial attribute payload entirely from composer output:
+
+```sh
+flea --format json vinted category compose "$CATEGORY_ID" \
+  | jq '[.data.form.options[] | select(.field == "category") | .raw]' \
+  > selections.json
+flea vinted category attributes --input selections.json
+```
 
 A minimal complete input has this shape:
 

@@ -14,7 +14,9 @@ use crate::{
         vinted::{
             brand::{BrandValidation, decide_brand, selected_brand},
             publication::{ListingInput, validate_input},
-            publication_discovery::{DiscoveryRequest, VintedPublicationDiscoveryApi},
+            publication_discovery::{
+                DiscoveryRequest, DiscoveryScope, VintedPublicationDiscoveryApi,
+            },
             search::VintedSearchSession,
         },
     },
@@ -35,6 +37,7 @@ pub struct PublicationCategorySuggestion {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PublicationCategoryCollection {
+    pub scope: DiscoveryScope,
     pub portal: PortalId,
     pub request_locale: String,
     pub query: String,
@@ -48,14 +51,26 @@ pub struct PublicationCategoryCollection {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct VintedComposer {
+    pub scope: DiscoveryScope,
     pub category: PublicationCategory,
+    pub attribute_selection_payload: Value,
     pub form: PublicationForm,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub brand_validation: Option<BrandValidation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub suggestions: Vec<ComposerSuggestion>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issue_actions: Vec<ComposerIssueAction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_input: Option<ListingInput>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct ComposerIssueAction {
+    pub field: String,
+    pub code: String,
+    pub instruction: String,
+    pub command: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -93,19 +108,34 @@ impl<'a> VintedPublicationComposer<'a> {
             .into_iter()
             .find(|category| category.id == category_id)
             .ok_or_else(|| {
-                AppError::validation(
+                let mut error = AppError::validation(
                     "vinted.category_not_found",
                     "The selected category is absent from the runtime publication catalog",
-                )
+                );
+                error
+                    .next_actions
+                    .push(crate::domain::envelope::NextAction {
+                        command: "flea vinted category search SEARCH_TEXT".into(),
+                    });
+                error
             })?;
         if !category.leaf {
-            return Err(AppError::validation(
+            let mut error = AppError::validation(
                 "vinted.category_not_leaf",
                 "Vinted publication requires a leaf category",
-            ));
+            );
+            error
+                .next_actions
+                .push(crate::domain::envelope::NextAction {
+                    command: format!(
+                        "flea vinted category search {}",
+                        shell_word(&category.title)
+                    ),
+                });
+            return Err(error);
         }
 
-        let selections = json!([{"code": "category", "value": [category_id]}]);
+        let selections = attribute_selections(category_id, supplied.as_ref());
         let attributes_request = DiscoveryRequest::Attributes { selections };
         let brands_request = DiscoveryRequest::Brands {
             category_id,
@@ -165,6 +195,21 @@ impl<'a> VintedPublicationComposer<'a> {
             &packages?,
         )
     }
+}
+
+fn attribute_selections(category_id: u64, supplied: Option<&Value>) -> Value {
+    let mut selections = vec![json!({"code": "category", "value": [category_id]})];
+    if let Some(attributes) = supplied
+        .and_then(|value| value.get("item_attributes"))
+        .and_then(Value::as_array)
+    {
+        selections.extend(attributes.iter().filter_map(|attribute| {
+            let code = attribute.get("code")?.as_str()?;
+            let ids = attribute.get("ids")?.as_array()?;
+            (!code.is_empty() && !ids.is_empty()).then(|| json!({"code": code, "value": ids}))
+        }));
+    }
+    Value::Array(selections)
 }
 
 pub fn categories_from_response(response: &Value) -> Vec<PublicationCategory> {
@@ -347,6 +392,7 @@ fn compose_from_documents(
     packages: &Value,
 ) -> Result<VintedComposer, AppError> {
     let (brands, brand_validation) = brand;
+    let attribute_selection_payload = attribute_selections(category.id, supplied.as_ref());
     let supplied_object = match supplied.as_ref() {
         Some(Value::Object(object)) => Some(object),
         Some(_) => return Err(AppError::usage("Composer input must be a JSON object")),
@@ -601,11 +647,15 @@ fn compose_from_documents(
     };
 
     let suggestions = currency_suggestion(&form);
+    let issue_actions = composer_issue_actions(category.id, &form, &attribute_selection_payload);
     Ok(VintedComposer {
+        scope: DiscoveryScope::Category,
         category,
+        attribute_selection_payload,
         form,
         brand_validation,
         suggestions,
+        issue_actions,
         listing_input,
     })
 }
@@ -1000,6 +1050,62 @@ fn collect_strings_for_keys(value: &Value, keys: &[&str], output: &mut Vec<Strin
     }
 }
 
+fn composer_issue_actions(
+    category_id: u64,
+    form: &PublicationForm,
+    attribute_selection_payload: &Value,
+) -> Vec<ComposerIssueAction> {
+    form.issues
+        .iter()
+        .map(|issue| {
+            let (instruction, command) = match issue.field.as_str() {
+                "brand" => (
+                    "Choose a brand from the category-scoped result.",
+                    format!("flea vinted category brands {category_id}"),
+                ),
+                "color" => (
+                    "Choose colors from the portal-scoped result.",
+                    "flea vinted category colors".into(),
+                ),
+                "package_size" => (
+                    "Choose a package size from the category-scoped result.",
+                    format!("flea vinted category package-sizes {category_id}"),
+                ),
+                "price" | "currency" => (
+                    "Correct the value using the account publication configuration.",
+                    "flea vinted category configuration".into(),
+                ),
+                field if field.starts_with("attribute.") => (
+                    "Choose the next attribute value using the exact selections already made.",
+                    selection_command(attribute_selection_payload),
+                ),
+                _ => (
+                    "Set this seller-provided field in ListingInput and run the composer again.",
+                    format!("flea vinted category compose {category_id} --input listing.json"),
+                ),
+            };
+            ComposerIssueAction {
+                field: issue.field.clone(),
+                code: issue.code.clone(),
+                instruction: instruction.into(),
+                command,
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn selection_command(selections: &Value) -> String {
+    let payload = serde_json::to_string(selections).expect("JSON values always serialize");
+    format!(
+        "printf '%s\\n' {} | flea vinted category attributes --input -",
+        shell_word(&payload)
+    )
+}
+
+fn shell_word(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1020,6 +1126,22 @@ mod tests {
             &json!({"currencies":["EUR"],"minimum_price":"1.00","maximum_price":"10000.00"}),
             &json!({"package_sizes":[{"id":1,"title":"Small"}]}),
         ).unwrap()
+    }
+
+    #[test]
+    fn composer_attribute_selections_preserve_supplied_parent_order() {
+        let supplied = json!({"item_attributes":[
+            {"code":"condition","ids":[6]},
+            {"code":"material","ids":[9]}
+        ]});
+        assert_eq!(
+            attribute_selections(4380, Some(&supplied)),
+            json!([
+                {"code":"category","value":[4380]},
+                {"code":"condition","value":[6]},
+                {"code":"material","value":[9]}
+            ])
+        );
     }
 
     #[test]

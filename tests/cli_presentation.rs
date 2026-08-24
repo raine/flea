@@ -197,6 +197,33 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(vinted_filter.contains("facets  Retrieve options for a lazy or truncated filter"));
     assert!(vinted_filter.contains("search  Search options within a contextual Vinted filter"));
 
+    let discovery_help = [
+        ("attributes", "Selection-scoped", "--input selections.json"),
+        ("brands", "Category-scoped", "$CATEGORY_ID"),
+        ("package-sizes", "Category-scoped", "$CATEGORY_ID"),
+        ("colors", "Portal-scoped", "flea vinted category colors"),
+        (
+            "configuration",
+            "Account-scoped",
+            "flea vinted category configuration",
+        ),
+    ];
+    for (command, scope, example) in discovery_help {
+        let help = stdout(&invoke(&["vinted", "category", command, "--help"]));
+        assert!(help.contains(scope), "missing scope in {command} help");
+        assert!(
+            help.contains("Example:"),
+            "missing example in {command} help"
+        );
+        assert!(
+            help.contains(example),
+            "missing runnable example in {command} help"
+        );
+    }
+    let compose = stdout(&invoke(&["vinted", "category", "compose", "--help"]));
+    assert!(compose.contains("Primary guided entry point"));
+    assert!(compose.contains("category search SEARCH_TEXT"));
+
     let auth = stdout(&invoke(&["tori", "auth", "--help"]));
     assert!(auth.contains("login   Sign in through the browser"));
     assert!(auth.contains("status  Show authentication status"));

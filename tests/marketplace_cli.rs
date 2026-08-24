@@ -1,4 +1,13 @@
-use serde_json::Value;
+use std::{future::Future, pin::Pin, sync::Arc};
+
+use flea::{
+    AppError, PortalId,
+    dependencies::{
+        ApplicationDependencies, DiscoveryRequest, VintedCredentialRecord,
+        VintedPublicationDiscoveryApi,
+    },
+};
+use serde_json::{Value, json};
 
 fn run_json(args: &[&str]) -> (u8, Value) {
     let arguments = std::iter::once("flea")
@@ -7,6 +16,133 @@ fn run_json(args: &[&str]) -> (u8, Value) {
     let result = flea::run(arguments);
     let document = serde_json::from_str(&result.document).expect("JSON envelope");
     (result.exit_code, document)
+}
+
+struct DiscoveryFixture;
+
+impl VintedPublicationDiscoveryApi for DiscoveryFixture {
+    fn execute<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        request: &'a DiscoveryRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(match request {
+                DiscoveryRequest::SearchCatalog { .. } => json!({"catalog_ids":[4380]}),
+                DiscoveryRequest::Catalogs => json!({"catalogs":[{
+                    "id":10,"title":"Cycling","catalogs":[{
+                        "id":4380,"title":"Locks","catalogs":[]
+                    }]
+                }]}),
+                DiscoveryRequest::Attributes { .. } => json!({"attributes":[{
+                    "code":"condition","title":"Condition",
+                    "required":true,"values":[{"id":6,"title":"Good"}]
+                }]}),
+                DiscoveryRequest::Brands { .. } => json!({"brands":[{"id":22,"title":"Abus"}]}),
+                DiscoveryRequest::Colors => json!({"colors":[{"id":3,"title":"Black"}]}),
+                DiscoveryRequest::Configuration => json!({
+                    "currencies":["EUR"],"minimum_price":"1.00","maximum_price":"10000.00"
+                }),
+                DiscoveryRequest::PackageSizes { .. } => {
+                    json!({"package_sizes":[{"id":1,"title":"Small"}]})
+                }
+            })
+        })
+    }
+}
+
+fn discovery_dependencies() -> ApplicationDependencies {
+    ApplicationDependencies::production()
+        .with_vinted_credentials_provider(|_| {
+            Ok(VintedCredentialRecord::new_for_adapter(
+                PortalId::Fi,
+                "fixture-user".into(),
+                None,
+                "fixture-access".into(),
+                "fixture-refresh".into(),
+                u64::MAX,
+                "fixture-device".into(),
+                "fixture-anonymous".into(),
+                None,
+            ))
+        })
+        .with_vinted_publication_discovery_api(Arc::new(DiscoveryFixture))
+}
+
+fn run_discovery_json(args: &[&str]) -> Value {
+    let arguments = std::iter::once("flea")
+        .chain(["--format", "json"])
+        .chain(args.iter().copied());
+    let result = flea::run_with_dependencies(arguments, &discovery_dependencies());
+    assert_eq!(result.exit_code, 0, "{}", result.document);
+    serde_json::from_str(&result.document).expect("JSON envelope")
+}
+
+#[test]
+fn vinted_publication_discovery_guides_the_category_and_attribute_chain() {
+    let search = run_discovery_json(&["vinted", "category", "search", "lukot"]);
+    assert_eq!(search["data"]["scope"], "portal");
+    assert_eq!(search["data"]["categories"][0]["id"], 4380);
+    assert_eq!(
+        search["next_actions"][0]["command"],
+        "flea vinted category compose 4380"
+    );
+
+    let compose = run_discovery_json(&["vinted", "category", "compose", "4380"]);
+    assert_eq!(compose["data"]["scope"], "category");
+    assert_eq!(
+        compose["data"]["attribute_selection_payload"],
+        json!([{"code":"category","value":[4380]}])
+    );
+    assert!(
+        compose["data"]["issue_actions"]
+            .as_array()
+            .is_some_and(|actions| {
+                actions.iter().any(|action| {
+                    action["field"] == "attribute.condition"
+                        && action["command"].as_str().is_some_and(|command| {
+                            command.contains(r#"[{"code":"category","value":[4380]}]"#)
+                        })
+                })
+            })
+    );
+
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), r#"[{"code":"category","value":[4380]}]"#).unwrap();
+    let attributes = run_discovery_json(&[
+        "vinted",
+        "category",
+        "attributes",
+        "--input",
+        file.path().to_str().unwrap(),
+    ]);
+    assert_eq!(attributes["data"]["scope"], "selection");
+    assert_eq!(
+        attributes["data"]["selection_payload"],
+        json!([{"code":"category","value":[4380]}])
+    );
+    assert!(
+        attributes["next_actions"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains(r#"{"code":"condition","value":[6]}"#)
+    );
+}
+
+#[test]
+fn discovery_surfaces_report_their_authoritative_scopes() {
+    for (args, scope) in [
+        (vec!["vinted", "category", "brands", "4380"], "category"),
+        (
+            vec!["vinted", "category", "package-sizes", "4380"],
+            "category",
+        ),
+        (vec!["vinted", "category", "colors"], "portal"),
+        (vec!["vinted", "category", "configuration"], "account"),
+    ] {
+        let output = run_discovery_json(&args);
+        assert_eq!(output["data"]["scope"], scope);
+    }
 }
 
 #[test]
