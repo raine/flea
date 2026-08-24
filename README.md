@@ -233,8 +233,16 @@ with Vinted's taxonomy labels for the viewer's locale. Buyer-facing text
 translation and seller-side category discovery are separate services.
 
 Pass one or more `--image` values to `draft publish` only when replacing the
-complete remote photo set. Output reports the photo action, assigned photo IDs,
-and upload count.
+complete remote photo set. Publication output separates `uploaded_photo_ids`
+from `assigned_photos` and `assigned_photo_ids`. Upload IDs come from the upload
+response in command input order. They are temporary mutation inputs scoped to
+the upload session, not listing photo identities. Flea fetches the resulting
+item after every successful create, update, completion, replacement, or direct
+publication. `assigned_photos` contains those authoritative draft or listing
+photo IDs with zero-based `display_order`; `assigned_photo_ids` preserves the
+existing flat field for structured-output compatibility and contains the same
+authoritative IDs in display order. ID equality between the two sets carries no
+meaning.
 
 A minimal complete input has this shape:
 
@@ -252,10 +260,13 @@ A minimal complete input has this shape:
 
 Optional fields include brand, ISBN, color, measurements, manufacturer fields,
 custom shipment prices, and parcel dimensions. Draft inspection reads remote
-editable state and reports photo IDs in display order. Validation separates
-field schema blockers, upstream validation errors, and account prerequisites.
-Draft updates replace the complete image assignment. Draft completion reuses
-remote photos unless `--image` supplies a complete replacement set.
+editable state and reports authoritative assigned IDs in display order. These
+IDs identify the current remote photo assignment and can change when that set is
+replaced. Completion reuses the inspected draft assignment, then reports the
+authoritative listing IDs fetched after completion. Validation separates field
+schema blockers, upstream validation errors, and account prerequisites. Draft
+updates replace the complete image assignment. Draft completion reuses remote
+photos unless `--image` supplies a complete replacement set.
 
 Run `flea vinted readiness` before publication. It validates the authenticated
 session and classifies every selling prerequisite Vinted exposes as

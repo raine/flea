@@ -77,5 +77,10 @@ Write listing text naturally in the seller's language. Vinted's buyer-facing
 experience translates supported member-authored content and offers the original.
 Structured taxonomy localization and seller-text translation are separate.
 
-Completion reuses photos; `--image` replaces them. Complete verification
-manually, inspect before retrying, and clear cookies with `auth web logout`.
+Completion reuses photos; `--image` replaces them. Publication results keep
+`assigned_photo_ids` for compatibility and add `assigned_photos` with
+`display_order`. Both reflect authoritative post-mutation draft or listing
+state. `uploaded_photo_ids` are temporary upload-session mutation inputs, even
+when their values equal assigned IDs. Use assigned IDs to correlate remote
+photos. Complete verification manually, inspect before retrying, and clear
+cookies with `auth web logout`.

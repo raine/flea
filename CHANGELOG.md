@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Separate temporary Vinted upload photo IDs from authoritative assigned photo
+  IDs and report assigned display order after every publication mutation
 - Report Vinted publication category locale, expose upstream suggestions, and
   guide zero-result searches through the localized catalog
 - Add bounded Vinted draft listing, complete remote draft inspection, and

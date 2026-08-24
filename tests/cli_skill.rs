@@ -84,6 +84,8 @@ fn vinted_skill_preserves_complete_operating_guidance() {
         "flea vinted category compose CATEGORY_ID",
         "flea vinted draft publish DRAFT_ID",
         "flea vinted listing show ITEM_ID",
+        "`uploaded_photo_ids`",
+        "`assigned_photo_ids` for compatibility",
     ] {
         assert!(VINTED_SKILL.contains(guidance), "missing {guidance}");
     }

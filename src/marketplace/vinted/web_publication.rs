@@ -73,13 +73,13 @@ impl AgentBrowserVintedPublicationApi {
         Ok(json!({ "upload_session_id": uuid::Uuid::new_v4().to_string() }))
     }
 
-    async fn fetch_draft_request(&self, draft_id: &str) -> Result<Value, AppError> {
+    async fn fetch_item_request(&self, item_id: &str) -> Result<Value, AppError> {
         let session = self.session()?;
         self.ensure_open(&session)?;
         let response = self.json_request(
             &session,
             "GET",
-            &format!("/api/v2/item_upload/items/{draft_id}"),
+            &format!("/api/v2/item_upload/items/{item_id}"),
             None,
             false,
         )?;
@@ -155,11 +155,11 @@ impl VintedPublicationApi for AgentBrowserVintedPublicationApi {
         Box::pin(self.configuration_request())
     }
 
-    fn fetch_draft<'a>(
+    fn fetch_item<'a>(
         &'a self,
-        draft_id: &'a str,
+        item_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
-        Box::pin(self.fetch_draft_request(draft_id))
+        Box::pin(self.fetch_item_request(item_id))
     }
 
     fn upload_photo<'a>(

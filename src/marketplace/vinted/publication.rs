@@ -91,6 +91,14 @@ pub enum PublicationOperation {
     DeleteDraft { draft_id: String },
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AssignedPhotoResult {
+    /// Durable photo ID from the authoritative draft or listing state.
+    pub photo_id: u64,
+    /// Zero-based position in the remote item's displayed photo sequence.
+    pub display_order: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PublicationResult {
     pub operation: &'static str,
@@ -103,6 +111,17 @@ pub struct PublicationResult {
     pub uploaded_images: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub photo_action: Option<&'static str>,
+    /// Upload-session photo IDs in command input order.
+    ///
+    /// These IDs are mutation inputs and are not durable item photo identities.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uploaded_photo_ids: Vec<u64>,
+    /// Durable item photo IDs and their authoritative display positions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assigned_photos: Vec<AssignedPhotoResult>,
+    /// Durable item photo IDs in display order.
+    ///
+    /// This compatibility field contains the same IDs as `assigned_photos`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assigned_photo_ids: Vec<u64>,
 }
@@ -112,9 +131,9 @@ pub trait VintedPublicationApi: Send + Sync {
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>>;
 
-    fn fetch_draft<'a>(
+    fn fetch_item<'a>(
         &'a self,
-        draft_id: &'a str,
+        item_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>>;
 
     fn upload_photo<'a>(
@@ -160,6 +179,8 @@ impl<'a> VintedPublication<'a> {
                 after_upload_actions: Vec::new(),
                 uploaded_images: 0,
                 photo_action: None,
+                uploaded_photo_ids: Vec::new(),
+                assigned_photos: Vec::new(),
                 assigned_photo_ids: Vec::new(),
             });
         }
@@ -173,7 +194,9 @@ impl<'a> VintedPublication<'a> {
         let input = input.expect("validated publication input");
         let temp_uuid = Uuid::new_v4().to_string();
         let remote_before = if let PublicationOperation::CompleteDraft { draft_id } = &operation {
-            let photos = self.fetch_assigned_photos(draft_id, &operation).await?;
+            let photos = self
+                .fetch_assigned_photos(draft_id, &operation, &[], MutationStatus::NotAttempted)
+                .await?;
             if photos.is_empty() && prepared_images.is_empty() {
                 return Err(publication_error(
                     empty_draft_photos(draft_id),
@@ -224,11 +247,12 @@ impl<'a> VintedPublication<'a> {
                 continue;
             }
 
-            let (assigned_photos, uploaded_images, photo_action) =
+            let (mutation_photos, uploaded_photos, uploaded_images, photo_action) =
                 if let PublicationOperation::CompleteDraft { draft_id } = &operation {
                     if prepared_images.is_empty() {
                         (
                             remote_before.clone().expect("completion photos fetched"),
+                            Vec::new(),
                             0,
                             "reused",
                         )
@@ -260,27 +284,52 @@ impl<'a> VintedPublication<'a> {
                                 ));
                             }
                         }
-                        let verified = self.fetch_assigned_photos(draft_id, &operation).await?;
+                        let verified = self
+                            .fetch_assigned_photos(
+                                draft_id,
+                                &replacement,
+                                &photos,
+                                MutationStatus::ConfirmedApplied,
+                            )
+                            .await?;
                         verify_replacement(draft_id, &photos, &verified)?;
-                        (verified, photos.len(), "replaced")
+                        (verified, photos.clone(), photos.len(), "replaced")
                     }
                 } else {
-                    (photos, prepared_images.len(), "uploaded")
+                    (photos.clone(), photos, prepared_images.len(), "uploaded")
                 };
 
             let body = publication_body(
                 &operation,
                 input.clone(),
-                &assigned_photos,
+                &mutation_photos,
                 upload_session_id,
                 &temp_uuid,
             );
             match self.api.mutate(&operation, Some(body)).await {
                 Ok(response) => {
+                    let item_id =
+                        authoritative_item_id(&operation, &response).map_err(|error| {
+                            publication_error(
+                                error,
+                                &operation,
+                                &uploaded_photos,
+                                MutationStatus::ConfirmedApplied,
+                            )
+                        })?;
+                    let assigned_photos = self
+                        .fetch_assigned_photos(
+                            &item_id,
+                            &operation,
+                            &uploaded_photos,
+                            MutationStatus::ConfirmedApplied,
+                        )
+                        .await?;
                     return normalize_result(
                         &operation,
                         uploaded_images,
                         Some(photo_action),
+                        &uploaded_photos,
                         &assigned_photos,
                         &response,
                     );
@@ -295,7 +344,7 @@ impl<'a> VintedPublication<'a> {
                     let error = publication_error(
                         error,
                         &operation,
-                        &assigned_photos,
+                        &uploaded_photos,
                         MutationStatus::ConfirmedRejected,
                     );
                     return Err(enrich_completion_error(
@@ -306,7 +355,7 @@ impl<'a> VintedPublication<'a> {
                     ));
                 }
                 Err(error) => {
-                    let error = classify_mutation_error(error, &operation, &assigned_photos);
+                    let error = classify_mutation_error(error, &operation, &uploaded_photos);
                     return Err(enrich_completion_error(
                         error,
                         &operation,
@@ -326,14 +375,21 @@ impl<'a> VintedPublication<'a> {
 
     async fn fetch_assigned_photos(
         &self,
-        draft_id: &str,
+        item_id: &str,
         operation: &PublicationOperation,
+        uploaded_photos: &[UploadedPhoto],
+        mutation_status: MutationStatus,
     ) -> Result<Vec<UploadedPhoto>, AppError> {
-        let response = self.api.fetch_draft(draft_id).await.map_err(|error| {
-            publication_error(error, operation, &[], MutationStatus::NotAttempted)
+        let response = self.api.fetch_item(item_id).await.map_err(|error| {
+            publication_error(error, operation, uploaded_photos, mutation_status)
         })?;
-        decode_draft_photos(draft_id, &response)
-            .map_err(|error| publication_error(error, operation, &[], MutationStatus::NotAttempted))
+        let expected_draft = matches!(
+            operation,
+            PublicationOperation::CreateDraft | PublicationOperation::UpdateDraft { .. }
+        ) || (matches!(operation, PublicationOperation::CompleteDraft { .. })
+            && mutation_status == MutationStatus::NotAttempted);
+        decode_assigned_photos(item_id, expected_draft, &response)
+            .map_err(|error| publication_error(error, operation, uploaded_photos, mutation_status))
     }
 }
 
@@ -590,28 +646,36 @@ pub(crate) fn decode_draft_response(response: TransportResponse) -> Result<Value
     }
 }
 
-fn decode_draft_photos(draft_id: &str, response: &Value) -> Result<Vec<UploadedPhoto>, AppError> {
+fn decode_assigned_photos(
+    item_id: &str,
+    expected_draft: bool,
+    response: &Value,
+) -> Result<Vec<UploadedPhoto>, AppError> {
     let item = response
         .get("item")
         .and_then(Value::as_object)
-        .ok_or_else(|| invalid_response("draft inspection"))?;
+        .ok_or_else(|| invalid_response("item inspection"))?;
     let returned_id = item.get("id").and_then(value_as_id);
-    if returned_id.as_deref() != Some(draft_id) {
+    if returned_id.as_deref() != Some(item_id) {
         return Err(AppError::conflict(
-            "vinted.draft_identity_mismatch",
-            format!("Vinted returned a different item while inspecting draft {draft_id}"),
+            "vinted.item_identity_mismatch",
+            format!("Vinted returned a different item while inspecting item {item_id}"),
         ));
     }
-    if item.get("is_draft").and_then(Value::as_bool) == Some(false) {
+    if item
+        .get("is_draft")
+        .and_then(Value::as_bool)
+        .is_some_and(|is_draft| is_draft != expected_draft)
+    {
         return Err(AppError::conflict(
-            "vinted.not_a_draft",
-            format!("Vinted item {draft_id} is not an editable draft"),
+            "vinted.item_state_mismatch",
+            format!("Vinted item {item_id} has an unexpected publication state"),
         ));
     }
     let values = item
         .get("photos")
         .and_then(Value::as_array)
-        .ok_or_else(|| invalid_response("draft photo assignment"))?;
+        .ok_or_else(|| invalid_response("item photo assignment"))?;
     let mut photos = Vec::with_capacity(values.len());
     let mut main_index = None;
     for (index, value) in values.iter().enumerate() {
@@ -620,14 +684,14 @@ fn decode_draft_photos(draft_id: &str, response: &Value) -> Result<Vec<UploadedP
             .and_then(value_as_id)
             .and_then(|id| id.parse::<u64>().ok())
             .filter(|id| *id != 0)
-            .ok_or_else(|| invalid_response("draft photo assignment"))?;
+            .ok_or_else(|| invalid_response("item photo assignment"))?;
         if photos.iter().any(|photo: &UploadedPhoto| photo.id == id) {
-            return Err(invalid_response("draft photo assignment"));
+            return Err(invalid_response("item photo assignment"));
         }
         if value.get("is_main").and_then(Value::as_bool) == Some(true)
             && main_index.replace(index).is_some()
         {
-            return Err(invalid_response("draft photo order"));
+            return Err(invalid_response("item photo order"));
         }
         let width = value
             .get("width")
@@ -647,19 +711,23 @@ fn decode_draft_photos(draft_id: &str, response: &Value) -> Result<Vec<UploadedP
         });
     }
     if main_index.is_some_and(|index| index != 0) {
-        return Err(invalid_response("draft photo order"));
+        return Err(invalid_response("item photo order"));
     }
     Ok(photos)
 }
 
 fn verify_replacement(
     draft_id: &str,
-    intended: &[UploadedPhoto],
+    uploaded: &[UploadedPhoto],
     remote: &[UploadedPhoto],
 ) -> Result<(), AppError> {
-    let intended_ids = intended.iter().map(|photo| photo.id).collect::<Vec<_>>();
-    let remote_ids = remote.iter().map(|photo| photo.id).collect::<Vec<_>>();
-    if intended_ids == remote_ids {
+    let assignments_match = uploaded.len() == remote.len()
+        && uploaded.iter().zip(remote).all(|(uploaded, assigned)| {
+            assigned.width == 0
+                || assigned.height == 0
+                || (uploaded.width == assigned.width && uploaded.height == assigned.height)
+        });
+    if assignments_match {
         return Ok(());
     }
     Err(AppError::partial(
@@ -669,8 +737,8 @@ fn verify_replacement(
         ),
         json!({
             "draft_id": draft_id,
-            "intended_photo_ids": intended_ids,
-            "remote_photo_ids": remote_ids,
+            "uploaded_photo_ids": uploaded.iter().map(|photo| photo.id).collect::<Vec<_>>(),
+            "remote_photo_ids": remote.iter().map(|photo| photo.id).collect::<Vec<_>>(),
             "final_mutation": "unattempted"
         }),
     ))
@@ -746,7 +814,8 @@ fn normalize_result(
     operation: &PublicationOperation,
     uploaded_images: usize,
     photo_action: Option<&'static str>,
-    photos: &[UploadedPhoto],
+    uploaded_photos: &[UploadedPhoto],
+    assigned_photos: &[UploadedPhoto],
     response: &Value,
 ) -> Result<PublicationResult, AppError> {
     let draft_id = response
@@ -786,7 +855,37 @@ fn normalize_result(
         after_upload_actions,
         uploaded_images,
         photo_action,
-        assigned_photo_ids: photos.iter().map(|photo| photo.id).collect(),
+        uploaded_photo_ids: uploaded_photos.iter().map(|photo| photo.id).collect(),
+        assigned_photos: assigned_photos
+            .iter()
+            .enumerate()
+            .map(|(display_order, photo)| AssignedPhotoResult {
+                photo_id: photo.id,
+                display_order,
+            })
+            .collect(),
+        assigned_photo_ids: assigned_photos.iter().map(|photo| photo.id).collect(),
+    })
+}
+
+fn authoritative_item_id(
+    operation: &PublicationOperation,
+    response: &Value,
+) -> Result<String, AppError> {
+    let id = match operation {
+        PublicationOperation::CreateDraft => response.pointer("/draft/id").and_then(value_as_id),
+        PublicationOperation::UpdateDraft { draft_id } => Some(draft_id.clone()),
+        PublicationOperation::CompleteDraft { .. } | PublicationOperation::Publish => {
+            response.pointer("/item/id").and_then(value_as_id)
+        }
+        PublicationOperation::DeleteDraft { .. } => None,
+    };
+    id.ok_or_else(|| {
+        invalid_response(if matches!(operation, PublicationOperation::CreateDraft) {
+            "draft creation"
+        } else {
+            "publication"
+        })
     })
 }
 
@@ -894,6 +993,7 @@ pub(crate) fn upstream_error(status: StatusCode, value: &Value, stage: &str) -> 
 enum MutationStatus {
     NotAttempted,
     ConfirmedRejected,
+    ConfirmedApplied,
     Unknown,
 }
 
@@ -1038,6 +1138,9 @@ fn mutation_state(
         MutationStatus::ConfirmedRejected => {
             "Vinted confirmed that it rejected the publication mutation, so the draft or listing did not change through this operation."
         }
+        MutationStatus::ConfirmedApplied => {
+            "Vinted confirmed the publication mutation, but authoritative item inspection failed. Inspect remote state before retrying."
+        }
         MutationStatus::Unknown => {
             "The publication mutation outcome is unknown, so the draft or listing state may have changed. Inspect remote state before retrying."
         }
@@ -1153,16 +1256,16 @@ mod tests {
             })
         }
 
-        fn fetch_draft<'a>(
+        fn fetch_item<'a>(
             &'a self,
-            draft_id: &'a str,
+            item_id: &'a str,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
             Box::pin(async move {
                 Ok(json!({
                     "item": {
-                        "id": draft_id,
-                        "is_draft": true,
-                        "photos": [{ "id": "9", "is_main": true }]
+                        "id": item_id,
+                        "is_draft": item_id != "71",
+                        "photos": [{ "id": "109", "is_main": true }]
                     }
                 }))
             })
@@ -1189,7 +1292,7 @@ mod tests {
 
         fn mutate<'a>(
             &'a self,
-            _operation: &'a PublicationOperation,
+            operation: &'a PublicationOperation,
             body: Option<Value>,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
             Box::pin(async move {
@@ -1211,7 +1314,13 @@ mod tests {
                 {
                     Err(upload_session_rejected())
                 } else {
-                    Ok(json!({"item": {"id": 71}}))
+                    Ok(match operation {
+                        PublicationOperation::CreateDraft => json!({"draft": {"id": 72}}),
+                        PublicationOperation::UpdateDraft { draft_id } => {
+                            json!({"draft": {"id": draft_id}})
+                        }
+                        _ => json!({"item": {"id": 71}}),
+                    })
                 }
             })
         }
@@ -1251,16 +1360,16 @@ mod tests {
             Box::pin(async { Ok(json!({"upload_session_id": "server-session"})) })
         }
 
-        fn fetch_draft<'a>(
+        fn fetch_item<'a>(
             &'a self,
-            draft_id: &'a str,
+            item_id: &'a str,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
             Box::pin(async move {
                 let photos = self.photos.lock().unwrap();
                 Ok(json!({
                     "item": {
-                        "id": draft_id,
-                        "is_draft": true,
+                        "id": item_id,
+                        "is_draft": item_id != "900",
                         "photos": photos.iter().enumerate().map(|(index, photo)| json!({
                             "id": photo.id.to_string(),
                             "width": photo.width,
@@ -1306,7 +1415,8 @@ mod tests {
                             .as_array()
                             .unwrap()
                             .iter()
-                            .map(|value| photo(value["id"].as_u64().unwrap()))
+                            .enumerate()
+                            .map(|(index, _)| photo(500 + index as u64))
                             .collect();
                         *self.photos.lock().unwrap() = photos;
                         Ok(json!({ "draft": { "id": draft_id } }))
@@ -1493,13 +1603,44 @@ mod tests {
         let (_directory, path) = image_path();
         let api = FixturePublicationApi::new([json!({"upload_session_id": "server-session"})], 0);
 
-        VintedPublication::new(&api)
+        let result = VintedPublication::new(&api)
             .execute(PublicationOperation::Publish, Some(input()), vec![path])
             .await
             .unwrap();
 
         assert_eq!(*api.uploaded_sessions.lock().unwrap(), ["server-session"]);
         assert_eq!(*api.mutation_sessions.lock().unwrap(), ["server-session"]);
+        assert_eq!(result.uploaded_photo_ids, [9]);
+        assert_eq!(result.assigned_photo_ids, [109]);
+    }
+
+    #[tokio::test]
+    async fn draft_mutations_return_authoritative_photo_ids() {
+        for operation in [
+            PublicationOperation::CreateDraft,
+            PublicationOperation::UpdateDraft {
+                draft_id: "42".to_owned(),
+            },
+        ] {
+            let (_directory, path) = image_path();
+            let api =
+                FixturePublicationApi::new([json!({"upload_session_id": "server-session"})], 0);
+
+            let result = VintedPublication::new(&api)
+                .execute(operation, Some(input()), vec![path])
+                .await
+                .unwrap();
+
+            assert_eq!(result.uploaded_photo_ids, [9]);
+            assert_eq!(result.assigned_photo_ids, [109]);
+            assert_eq!(
+                result.assigned_photos,
+                [AssignedPhotoResult {
+                    photo_id: 109,
+                    display_order: 0,
+                }]
+            );
+        }
     }
 
     #[tokio::test]
@@ -1662,8 +1803,9 @@ mod tests {
 
     #[test]
     fn draft_photo_decoder_preserves_verified_remote_order() {
-        let photos = decode_draft_photos(
+        let photos = decode_assigned_photos(
             "42",
+            true,
             &json!({
                 "item": {
                     "id": "42",
@@ -1680,6 +1822,27 @@ mod tests {
             photos.iter().map(|photo| photo.id).collect::<Vec<_>>(),
             [19, 7]
         );
+    }
+
+    #[test]
+    fn replacement_verification_does_not_infer_identity_from_id_equality() {
+        let uploaded = [photo(100)];
+
+        verify_replacement("42", &uploaded, &[photo(500)]).unwrap();
+        verify_replacement("42", &uploaded, &[photo(100)]).unwrap();
+
+        let error = verify_replacement(
+            "42",
+            &uploaded,
+            &[UploadedPhoto {
+                id: 500,
+                orientation: 0,
+                width: 20,
+                height: 10,
+            }],
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "vinted.photo_replacement_unverified");
     }
 
     #[tokio::test]
@@ -1708,7 +1871,15 @@ mod tests {
             .unwrap();
         assert_eq!(result.photo_action, Some("reused"));
         assert_eq!(result.uploaded_images, 0);
-        assert_eq!(result.assigned_photo_ids, [100]);
+        assert_eq!(result.uploaded_photo_ids, Vec::<u64>::new());
+        assert_eq!(result.assigned_photo_ids, [500]);
+        assert_eq!(
+            result.assigned_photos,
+            [AssignedPhotoResult {
+                photo_id: 500,
+                display_order: 0,
+            }]
+        );
         assert_eq!(api.uploads.load(Ordering::SeqCst), 1);
         assert_eq!(api.completions.load(Ordering::SeqCst), 2);
     }
@@ -1724,7 +1895,15 @@ mod tests {
 
         assert_eq!(result.photo_action, Some("replaced"));
         assert_eq!(result.uploaded_images, 1);
-        assert_eq!(result.assigned_photo_ids, [100]);
+        assert_eq!(result.uploaded_photo_ids, [100]);
+        assert_eq!(result.assigned_photo_ids, [500]);
+        assert_eq!(
+            result.assigned_photos,
+            [AssignedPhotoResult {
+                photo_id: 500,
+                display_order: 0,
+            }]
+        );
     }
 
     #[tokio::test]
