@@ -14,8 +14,8 @@ use crate::{
             binding::VINTED_FI_BINDING,
             composer::{
                 PublicationCategoryCollection, PublicationCategorySuggestion,
-                VintedPublicationComposer, categories_for_search, category_suggestions_from_search,
-                selection_command,
+                VintedComposerReadiness, VintedPublicationComposer, categories_for_search,
+                category_suggestions_from_search, selection_command,
             },
             publication_discovery::{
                 DiscoveryRequest, DiscoveryScope, PublicationDiscoveryOutput,
@@ -49,8 +49,8 @@ pub enum VintedCategoryCommand {
     },
     #[command(
         about = "Compose a complete Vinted publication form",
-        long_about = "Primary guided entry point for Vinted publication. Combine a category-scoped runtime ID with selection-scoped attributes, category-scoped brands and package sizes, portal-scoped colors, and account-scoped configuration. Optional partial or complete ListingInput JSON confirms seller facts and enables payload validation.",
-        after_help = "Example:\n  CATEGORY_ID=$(flea --format json vinted category search SEARCH_TEXT | jq -er '.data.categories[] | select(.leaf) | .id' | head -n1)\n  flea vinted category compose \"$CATEGORY_ID\" --input listing.json"
+        long_about = "Primary guided entry point for Vinted publication. Combine a category-scoped runtime ID with selection-scoped attributes, category-scoped brands and package sizes, portal-scoped colors, and account-scoped configuration. Optional partial or complete ListingInput JSON confirms seller facts and enables payload validation. Add --readiness for selected values and validation results without the discovery option catalog.",
+        after_help = "Examples:\n  CATEGORY_ID=$(flea --format json vinted category search SEARCH_TEXT | jq -er '.data.categories[] | select(.leaf) | .id' | head -n1)\n  flea vinted category compose \"$CATEGORY_ID\" --input listing.json\n  flea vinted category compose \"$CATEGORY_ID\" --input listing.json --readiness"
     )]
     Compose {
         /// Runtime leaf category ID.
@@ -58,6 +58,9 @@ pub enum VintedCategoryCommand {
         /// Partial or complete ListingInput JSON, or `-` for stdin.
         #[arg(long, value_name = "PATH")]
         input: Option<PathBuf>,
+        /// Return concise readiness without fields or unselected options.
+        #[arg(long)]
+        readiness: bool,
     },
     #[command(
         about = "Discover layered Vinted category attributes",
@@ -125,7 +128,12 @@ pub async fn execute(
     session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationDiscoveryApi,
 ) -> Result<CommandOutcome, AppError> {
-    if let VintedCategoryCommand::Compose { category_id, input } = command {
+    if let VintedCategoryCommand::Compose {
+        category_id,
+        input,
+        readiness,
+    } = command
+    {
         let supplied = input.as_ref().map(read_json).transpose()?;
         let composer = VintedPublicationComposer::new(session, api)
             .compose(portal, category_id, supplied)
@@ -137,8 +145,12 @@ pub async fn execute(
                 command: action.command.clone(),
             })
             .collect();
-        return Ok(CommandOutcome::new(CommandData::VintedComposer(composer))
-            .with_next_actions(next_actions));
+        let data = if readiness {
+            CommandData::VintedComposerReadiness(VintedComposerReadiness::from(&composer))
+        } else {
+            CommandData::VintedComposer(composer)
+        };
+        return Ok(CommandOutcome::new(data).with_next_actions(next_actions));
     }
 
     let search_query = match &command {

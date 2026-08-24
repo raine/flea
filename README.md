@@ -203,6 +203,7 @@ directory. `flea vinted auth web logout` clears its cookies and browser storage.
 flea --format json vinted category search SEARCH_TEXT
 flea vinted category compose CATEGORY_ID
 flea vinted category compose CATEGORY_ID --input listing.json
+flea vinted category compose CATEGORY_ID --input listing.json --readiness
 flea vinted category attributes --input selections.json
 flea vinted category brands CATEGORY_ID BRAND_TEXT
 flea vinted category package-sizes CATEGORY_ID
@@ -249,7 +250,10 @@ meaning.
 
 `category compose` is the guided publication entry point. Category search emits
 one compose action per leaf result. Composer issues link to focused discovery or
-a correction command. Discovery output declares its scope: brands and package
+a correction command. Add `--readiness` with partial or complete input for a
+concise result containing readiness, issues, selected values, brand validation,
+and correction actions without unrelated option catalogs. Omit the flag for the
+complete discovery form. Discovery output declares its scope: brands and package
 sizes are category scoped, colors are portal scoped, configuration is account
 scoped, and dynamic attributes are selection scoped. Attribute output preserves
 the submitted `selection_payload` and emits exact commands that append each

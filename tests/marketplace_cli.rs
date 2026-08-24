@@ -94,6 +94,7 @@ fn vinted_publication_discovery_guides_the_category_and_attribute_chain() {
         compose["data"]["attribute_selection_payload"],
         json!([{"code":"category","value":[4380]}])
     );
+    assert!(compose["data"]["form"]["options"].is_array());
     assert!(
         compose["data"]["issue_actions"]
             .as_array()
@@ -126,6 +127,54 @@ fn vinted_publication_discovery_guides_the_category_and_attribute_chain() {
             .as_str()
             .unwrap()
             .contains(r#"{"code":"condition","value":[6]}"#)
+    );
+}
+
+#[test]
+fn composer_readiness_omits_discovery_catalogs_and_reports_validation() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        serde_json::to_vec(&json!({
+            "title":"Lock", "description":"Steel lock", "catalog_id":4380,
+            "price":"10.00", "currency":"EUR", "package_size_id":1,
+            "brand_id":22, "brand":"Abus", "color_ids":[3],
+            "item_attributes":[{"code":"condition","ids":[6]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = run_discovery_json(&[
+        "vinted",
+        "category",
+        "compose",
+        "4380",
+        "--input",
+        file.path().to_str().unwrap(),
+        "--readiness",
+    ]);
+
+    assert_eq!(output["data"]["ready"], true);
+    assert_eq!(output["data"]["selected_values"]["brand"]["brand_id"], 22);
+    assert_eq!(output["data"]["brand_validation"]["valid"], true);
+    assert_eq!(output["data"]["issues"], json!([]));
+    assert!(output["data"].get("form").is_none());
+    assert!(output["data"].get("attribute_selection_payload").is_none());
+    assert!(output["data"].get("listing_input").is_none());
+
+    let incomplete = run_discovery_json(&["vinted", "category", "compose", "4380", "--readiness"]);
+    assert_eq!(incomplete["data"]["ready"], false);
+    assert!(incomplete["data"]["issues"].as_array().unwrap().len() > 1);
+    assert!(
+        incomplete["data"]["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty())
+    );
+    assert!(
+        incomplete["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty())
     );
 }
 

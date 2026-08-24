@@ -30,7 +30,7 @@ use crate::{
         },
         vinted::{
             auth::VintedLoginResult,
-            composer::{PublicationCategoryCollection, VintedComposer},
+            composer::{PublicationCategoryCollection, VintedComposer, VintedComposerReadiness},
             draft::{VintedDraftCollection, VintedDraftState, VintedDraftValidation},
             publication::PublicationResult as VintedPublicationResult,
             publication_discovery::PublicationDiscoveryOutput,
@@ -98,6 +98,7 @@ pub enum CommandData {
     VintedPublication(VintedPublicationResult),
     VintedCategories(PublicationCategoryCollection),
     VintedComposer(VintedComposer),
+    VintedComposerReadiness(VintedComposerReadiness),
     VintedPublicationDiscovery(PublicationDiscoveryOutput),
     CategorySearch(CategorySearchResult),
     CategoryList(CategoryList),

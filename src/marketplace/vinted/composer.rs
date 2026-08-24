@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     domain::{
-        field::{Field, FieldOption, FieldType, Requirement},
+        field::{Field, FieldOption, FieldType, Requirement, ValidationIssue},
         publication_form::PublicationForm,
     },
     error::AppError,
@@ -63,6 +63,33 @@ pub struct VintedComposer {
     pub issue_actions: Vec<ComposerIssueAction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_input: Option<ListingInput>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct VintedComposerReadiness {
+    pub scope: DiscoveryScope,
+    pub category: PublicationCategory,
+    pub ready: bool,
+    pub selected_values: Map<String, Value>,
+    pub issues: Vec<ValidationIssue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brand_validation: Option<BrandValidation>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next_actions: Vec<ComposerIssueAction>,
+}
+
+impl From<&VintedComposer> for VintedComposerReadiness {
+    fn from(composer: &VintedComposer) -> Self {
+        Self {
+            scope: composer.scope,
+            category: composer.category.clone(),
+            ready: composer.form.ready,
+            selected_values: composer.form.values.clone(),
+            issues: composer.form.issues.clone(),
+            brand_validation: composer.brand_validation.clone(),
+            next_actions: composer.issue_actions.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

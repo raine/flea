@@ -57,6 +57,7 @@ flea vinted auth web login
 flea vinted auth web status
 flea --format json vinted category search SEARCH_TEXT
 flea vinted category compose CATEGORY_ID --input listing.json
+flea vinted category compose CATEGORY_ID --input listing.json --readiness
 flea vinted draft show DRAFT_ID
 flea vinted draft validate DRAFT_ID
 flea vinted draft create --input listing.json --image front.heic
@@ -75,9 +76,14 @@ then inspect the returned item ID with `listing show`.
 Publication category search uses portal-localized taxonomy labels. Output
 reports the portal and request locale, resolves opaque IDs through the localized
 catalog, and preserves upstream aliases or suggestions. Use Finnish terms on
-`fi`; after zero results, follow suggestions or browse `category list`. Follow a leaf result's `next_actions` into
-`category compose`, the primary source for fields, options, issues, and
-correction actions.
+`fi`; after zero results, follow suggestions or browse `category list`. Follow a
+leaf result's `next_actions` into `category compose`, the primary source for
+fields, options, issues, and correction actions.
+
+Add `--readiness` with partial or complete input to return only readiness,
+issues, selected values, brand validation, and correction actions. This mode
+omits unrelated fields and option catalogs. Omit `--readiness` when discovering
+valid brands, colors, package sizes, currencies, or category attributes.
 
 Brands and package sizes are category scoped. Colors are portal scoped,
 configuration is account scoped, and attributes are selection scoped. Start
