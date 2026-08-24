@@ -276,9 +276,12 @@ command in `issue_actions` and envelope `next_actions`. Following one of these
 commands carries the category and chosen option into the next attribute layer
 without constructing a selection payload.
 
-When partial input supplies a brand name outside the initial suggestions, the
-composer emits a focused `category brands` action. Use that action's opaque ID
-and canonical name together in the next composer input.
+When input supplies a brand name without an ID, the composer searches the
+selected category automatically. One exact or normalized match populates its
+opaque ID and canonical name. `brand_validation.status` distinguishes
+`resolved`, `custom`, and `ambiguous` results. Ambiguous results include at most
+ten options and a focused correction action instead of selecting one. A name
+remains custom only when the category-scoped response permits custom brands.
 
 Composer issues for other fields link to focused discovery or a correction
 command. Discovery output declares its scope: brands and package sizes are

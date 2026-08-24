@@ -129,7 +129,7 @@ pub enum CommandData {
     VintedPublicationReadiness(VintedPublicationReadiness),
     VintedPublication(VintedPublicationResult),
     VintedCategories(PublicationCategoryCollection),
-    VintedComposer(VintedComposer),
+    VintedComposer(Box<VintedComposer>),
     VintedComposerReadiness(VintedComposerReadiness),
     VintedPublicationDiscovery(PublicationDiscoveryOutput),
     CategorySearch(CategorySearchResult),

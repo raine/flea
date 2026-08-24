@@ -216,14 +216,13 @@ impl<'a> VintedPublicationComposer<'a> {
             .as_ref()
             .and_then(Value::as_object)
             .and_then(|object| selected_brand(Some(object)));
-        let brand_search = if let Some((Some(id), Some(name))) = selection.as_ref()
-            && id != &1
+        let brand_search = if let Some((id, Some(name))) = selection.as_ref()
+            && id != &Some(1)
             && !name.is_empty()
-            && brands
-                .as_ref()
-                .ok()
-                .is_none_or(|response| !response_contains_brand(response, *id))
-        {
+            && (id.is_none()
+                || brands.as_ref().ok().is_none_or(|response| {
+                    id.is_some_and(|id| !response_contains_brand(response, id))
+                })) {
             Some(
                 self.api
                     .execute(
@@ -723,7 +722,6 @@ fn compose_from_documents(
         &form,
         &attribute_selection_payload,
         supplied_brand,
-        brands,
     );
     Ok(VintedComposer {
         scope: DiscoveryScope::Category,
@@ -1151,10 +1149,8 @@ fn composer_issue_actions(
     form: &PublicationForm,
     attribute_selection_payload: &Value,
     supplied_brand: Option<(Option<u64>, Option<String>)>,
-    initial_brands: &Value,
 ) -> Vec<ComposerIssueAction> {
-    let mut actions = form
-        .issues
+    form.issues
         .iter()
         .flat_map(|issue| {
             if let Some(code) = issue.field.strip_prefix("attribute.") {
@@ -1195,6 +1191,10 @@ fn composer_issue_actions(
             }
 
             let (instruction, command) = match issue.field.as_str() {
+                "brand" if issue.code == "brand_ambiguous" => (
+                    "Choose one brand_validation.options entry, set its opaque ID and canonical name, and run the composer again.",
+                    format!("flea vinted category compose {category_id} --input listing.json"),
+                ),
                 "brand" => brand_discovery_action(category_id, supplied_brand.as_ref()),
                 "color" => (
                     "Choose colors from the portal-scoped result.",
@@ -1220,25 +1220,7 @@ fn composer_issue_actions(
                 command,
             }]
         })
-        .collect::<Vec<_>>();
-
-    if let Some((None, Some(name))) = supplied_brand.as_ref()
-        && !name.is_empty()
-        && !initial_options_contain_brand_name(initial_brands, name)
-        && !actions.iter().any(|action| action.field == "brand")
-    {
-        actions.insert(
-            0,
-            ComposerIssueAction {
-                field: "brand".into(),
-                code: "brand_discovery".into(),
-                instruction: "Search this category for the supplied brand and use the returned opaque ID and canonical name.".into(),
-                command: brand_discovery_command(category_id, supplied_brand.as_ref()),
-            },
-        );
-    }
-
-    actions
+        .collect()
 }
 
 fn brand_discovery_action(
@@ -1273,20 +1255,6 @@ fn brand_discovery_command(
         ),
         None => format!("flea vinted category brands {category_id}"),
     }
-}
-
-fn initial_options_contain_brand_name(response: &Value, name: &str) -> bool {
-    let mut candidates = Vec::new();
-    collect_named_objects(response, &mut candidates);
-    candidates
-        .into_iter()
-        .take(BRAND_OPTION_LIMIT)
-        .any(|value| {
-            value
-                .as_object()
-                .and_then(object_label)
-                .is_some_and(|candidate| candidate == name)
-        })
 }
 
 fn with_attribute_selection(selections: &Value, code: &str, value: &Value) -> Value {
@@ -1579,27 +1547,34 @@ mod tests {
     }
 
     #[test]
-    fn supplied_brand_outside_initial_options_has_a_focused_action() {
-        let composer = documents(Some(json!({"brand":"Vibram Fivefingers"})));
+    fn unmatched_brand_remains_custom_without_a_correction_action() {
+        let composer = documents(Some(json!({"brand":"Vibram FiveFingers"})));
         assert_eq!(
-            composer.issue_actions[0],
-            ComposerIssueAction {
-                field: "brand".into(),
-                code: "brand_discovery".into(),
-                instruction: "Search this category for the supplied brand and use the returned opaque ID and canonical name.".into(),
-                command: "flea vinted category brands 4380 'Vibram Fivefingers'".into(),
-            }
+            composer.brand_validation.as_ref().unwrap().status,
+            crate::marketplace::vinted::brand::BrandValidationStatus::Custom
         );
-    }
-
-    #[test]
-    fn supplied_brand_inside_initial_options_needs_no_focused_action() {
-        let composer = documents(Some(json!({"brand":"Abus"})));
         assert!(
             composer
                 .issue_actions
                 .iter()
-                .all(|action| action.code != "brand_discovery")
+                .all(|action| action.field != "brand")
+        );
+    }
+
+    #[test]
+    fn supplied_brand_inside_initial_options_resolves_without_an_action() {
+        let composer = documents(Some(json!({"brand":"abus"})));
+        let validation = composer.brand_validation.as_ref().unwrap();
+        assert_eq!(
+            validation.status,
+            crate::marketplace::vinted::brand::BrandValidationStatus::Resolved
+        );
+        assert_eq!(validation.brand_id, Some(22));
+        assert!(
+            composer
+                .issue_actions
+                .iter()
+                .all(|action| action.field != "brand")
         );
     }
 

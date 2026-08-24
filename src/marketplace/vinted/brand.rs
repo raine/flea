@@ -1,5 +1,8 @@
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::{
     error::AppError,
@@ -14,20 +17,37 @@ use crate::{
 };
 
 const NO_BRAND_ID: u64 = 1;
+const AMBIGUOUS_OPTION_LIMIT: usize = 10;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrandValidationStatus {
     Suggested,
     Searched,
+    Resolved,
     NoBrand,
     Custom,
+    Ambiguous,
     Mismatched,
     Removed,
     Inaccessible,
     Unavailable,
+    CustomDisabled,
     Invalid,
     Unverifiable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrandMatchKind {
+    Exact,
+    Normalized,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct BrandOption {
+    pub brand_id: u64,
+    pub canonical_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,6 +63,12 @@ pub struct BrandValidation {
     pub canonical_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub match_kind: Option<BrandMatchKind>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<BrandOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options_truncated: Option<bool>,
 }
 
 impl BrandValidation {
@@ -62,6 +88,9 @@ impl BrandValidation {
             supplied_name: supplied_name.map(str::to_owned),
             canonical_name,
             source: Some(source.into()),
+            match_kind: None,
+            options: Vec::new(),
+            options_truncated: None,
         }
     }
 
@@ -81,6 +110,9 @@ impl BrandValidation {
             supplied_name: supplied_name.map(str::to_owned),
             canonical_name,
             source: source.map(str::to_owned),
+            match_kind: None,
+            options: Vec::new(),
+            options_truncated: None,
         }
     }
 
@@ -107,6 +139,8 @@ impl BrandValidation {
             BrandValidationStatus::Removed => "brand_removed",
             BrandValidationStatus::Inaccessible => "brand_inaccessible",
             BrandValidationStatus::Unavailable => "brand_unavailable",
+            BrandValidationStatus::Ambiguous => "brand_ambiguous",
+            BrandValidationStatus::CustomDisabled => "custom_brand_disabled",
             BrandValidationStatus::Unverifiable => "brand_unverifiable",
             _ => "invalid_brand",
         }
@@ -135,13 +169,13 @@ pub fn selected_brand(input: Option<&Map<String, Value>>) -> Option<(Option<u64>
 
 pub async fn validate_listing_brand(
     portal: PortalId,
-    input: &ListingInput,
+    input: &mut ListingInput,
     session: &dyn VintedSearchSession,
     api: &dyn VintedPublicationDiscoveryApi,
 ) -> Result<BrandValidation, AppError> {
     let id = input.brand_id;
     let name = input.brand.as_deref();
-    if id.is_none() || id == Some(NO_BRAND_ID) {
+    if id == Some(NO_BRAND_ID) || (id.is_none() && name.is_none_or(|name| name.trim().is_empty())) {
         return decision_result(decide_brand(id, name, None, None));
     }
     let credentials = session.credentials(portal).await?;
@@ -155,7 +189,7 @@ pub async fn validate_listing_brand(
         )
         .await;
     let decision = match defaults {
-        Ok(defaults) if find_brand(&defaults, id.expect("checked above")).is_some() => {
+        Ok(defaults) if id.is_some_and(|id| find_brand(&defaults, id).is_some()) => {
             decide_brand(id, name, Some(&defaults), None)
         }
         defaults => {
@@ -177,7 +211,15 @@ pub async fn validate_listing_brand(
             decide_brand(id, name, defaults.as_ref().ok(), Some(search.as_ref()))
         }
     };
-    decision_result(decision)
+    let decision = decision_result(decision)?;
+    if let Some(value) = decision.normalized_value() {
+        input.brand_id = value.get("brand_id").and_then(Value::as_u64);
+        input.brand = value
+            .get("brand")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+    }
+    Ok(decision)
 }
 
 fn decision_result(decision: BrandValidation) -> Result<BrandValidation, AppError> {
@@ -185,11 +227,18 @@ fn decision_result(decision: BrandValidation) -> Result<BrandValidation, AppErro
         Ok(decision)
     } else {
         let code = format!("vinted.{}", decision.error_code());
-        Err(
-            AppError::validation(code, decision.message.clone()).with_details(json!({
-                "brand_validation": decision
-            })),
-        )
+        let ambiguous = matches!(decision.status, BrandValidationStatus::Ambiguous);
+        let mut error = AppError::validation(code, decision.message.clone()).with_details(json!({
+            "brand_validation": decision
+        }));
+        if ambiguous {
+            error
+                .next_actions
+                .push(crate::domain::envelope::NextAction {
+                    command: "flea vinted category compose CATEGORY_ID --input listing.json".into(),
+                });
+        }
+        Err(error)
     }
 }
 
@@ -223,14 +272,7 @@ pub fn decide_brand(
     }
     if id.is_none() {
         return match name.filter(|name| !name.is_empty()) {
-            Some(name) => BrandValidation::valid(
-                BrandValidationStatus::Custom,
-                None,
-                Some(name),
-                Some(name.to_owned()),
-                "vinted_custom_brand_encoding",
-                "A name without a brand ID is a custom brand",
-            ),
+            Some(name) => resolve_name(name, suggestions, search),
             None => BrandValidation::rejected(
                 BrandValidationStatus::Invalid,
                 None,
@@ -278,6 +320,194 @@ pub fn decide_brand(
             Some("category_brand_search"),
             "The selected brand could not be verified. Retry category-scoped brand discovery before publishing",
         ),
+    }
+}
+
+fn resolve_name(
+    supplied_name: &str,
+    suggestions: Option<&Value>,
+    search: Option<Result<&Value, &AppError>>,
+) -> BrandValidation {
+    let (response, source) = match search {
+        Some(Ok(response)) => (response, "category_brand_search"),
+        Some(Err(_)) => {
+            return BrandValidation::rejected(
+                BrandValidationStatus::Unverifiable,
+                None,
+                Some(supplied_name),
+                None,
+                Some("category_brand_search"),
+                "The supplied brand could not be resolved. Retry category-scoped brand discovery",
+            );
+        }
+        None => match suggestions {
+            Some(response) => (response, "category_brand_suggestions"),
+            None => {
+                return BrandValidation::rejected(
+                    BrandValidationStatus::Unverifiable,
+                    None,
+                    Some(supplied_name),
+                    None,
+                    Some("category_brand_search"),
+                    "The supplied brand could not be resolved without category-scoped discovery",
+                );
+            }
+        },
+    };
+
+    let mut seen_candidates = BTreeSet::new();
+    let mut candidates = brand_candidates(response)
+        .into_iter()
+        .filter(|candidate| candidate_is_available(candidate))
+        .filter(|candidate| {
+            candidate_id(candidate)
+                .zip(label(candidate))
+                .is_some_and(|identity| seen_candidates.insert(identity))
+        })
+        .collect::<Vec<_>>();
+    let exact = candidates
+        .iter()
+        .copied()
+        .filter(|candidate| label(candidate).as_deref() == Some(supplied_name))
+        .collect::<Vec<_>>();
+    let (matches, match_kind) = if exact.is_empty() {
+        let normalized = normalized_brand_name(supplied_name);
+        candidates.retain(|candidate| {
+            !normalized.is_empty()
+                && label(candidate).is_some_and(|name| normalized_brand_name(&name) == normalized)
+        });
+        (candidates, BrandMatchKind::Normalized)
+    } else {
+        (exact, BrandMatchKind::Exact)
+    };
+
+    if matches.len() == 1 {
+        let candidate = matches[0];
+        let id = candidate_id(candidate).expect("brand candidates have IDs");
+        let canonical_name = label(candidate).expect("brand candidates have names");
+        let mut validation = BrandValidation::valid(
+            BrandValidationStatus::Resolved,
+            Some(id),
+            Some(supplied_name),
+            Some(canonical_name),
+            source,
+            "The supplied brand resolved to one category-scoped Vinted brand",
+        );
+        validation.match_kind = Some(match_kind);
+        return validation;
+    }
+    if matches.len() > 1 {
+        let mut seen = BTreeSet::new();
+        let mut options = matches
+            .iter()
+            .filter_map(|candidate| {
+                let brand_id = candidate_id(candidate)?;
+                let canonical_name = label(candidate)?;
+                seen.insert((brand_id, canonical_name.clone()))
+                    .then_some(BrandOption {
+                        brand_id,
+                        canonical_name,
+                    })
+            })
+            .collect::<Vec<_>>();
+        options.sort_by(|left, right| {
+            left.canonical_name
+                .cmp(&right.canonical_name)
+                .then(left.brand_id.cmp(&right.brand_id))
+        });
+        let truncated = options.len() > AMBIGUOUS_OPTION_LIMIT;
+        options.truncate(AMBIGUOUS_OPTION_LIMIT);
+        let mut validation = BrandValidation::rejected(
+            BrandValidationStatus::Ambiguous,
+            None,
+            Some(supplied_name),
+            None,
+            Some(source),
+            "Several category-scoped brands match. Choose one bounded option and retry with its opaque ID and canonical name",
+        );
+        validation.match_kind = Some(match_kind);
+        validation.options = options;
+        validation.options_truncated = Some(truncated);
+        return validation;
+    }
+
+    if custom_brands_disabled(response) {
+        BrandValidation::rejected(
+            BrandValidationStatus::CustomDisabled,
+            None,
+            Some(supplied_name),
+            None,
+            Some(source),
+            "This category disables custom brands. Choose a category-scoped brand or No brand",
+        )
+    } else {
+        BrandValidation::valid(
+            BrandValidationStatus::Custom,
+            None,
+            Some(supplied_name),
+            Some(supplied_name.to_owned()),
+            source,
+            "No canonical match was found and category discovery permits a custom brand",
+        )
+    }
+}
+
+fn normalized_brand_name(value: &str) -> String {
+    value
+        .nfkc()
+        .flat_map(char::to_lowercase)
+        .filter(|character| character.is_alphanumeric())
+        .collect()
+}
+
+fn brand_candidates(value: &Value) -> Vec<&Map<String, Value>> {
+    fn collect<'a>(value: &'a Value, output: &mut Vec<&'a Map<String, Value>>) {
+        match value {
+            Value::Array(values) => values.iter().for_each(|value| collect(value, output)),
+            Value::Object(object) => {
+                if candidate_id(object).is_some() && label(object).is_some() {
+                    output.push(object);
+                } else {
+                    object.values().for_each(|value| collect(value, output));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut output = Vec::new();
+    collect(value, &mut output);
+    output
+}
+
+fn candidate_id(object: &Map<String, Value>) -> Option<u64> {
+    object
+        .get("id")
+        .or_else(|| object.get("brand_id"))
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+}
+
+fn candidate_is_available(candidate: &Map<String, Value>) -> bool {
+    flag(candidate, &["is_deleted", "deleted", "removed"]) != Some(true)
+        && flag(candidate, &["is_active", "active"]) != Some(false)
+        && flag(
+            candidate,
+            &["is_available", "available", "selectable", "is_selectable"],
+        ) != Some(false)
+}
+
+fn custom_brands_disabled(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(custom_brands_disabled),
+        Value::Object(object) => {
+            object
+                .get("disable_custom_brands")
+                .or_else(|| object.get("disableCustomBrands"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                || object.values().any(custom_brands_disabled)
+        }
+        _ => false,
     }
 }
 
@@ -440,5 +670,65 @@ mod tests {
             decide_brand(Some(99), Some("Missing"), Some(&defaults), None).status,
             BrandValidationStatus::Unverifiable
         );
+    }
+
+    #[test]
+    fn resolves_unique_exact_and_normalized_names() {
+        let response = json!({"brands":[
+            {"id":42,"title":"Vibram FiveFingers"},
+            {"id":43,"title":"Other"}
+        ],"disable_custom_brands":false});
+
+        let exact = decide_brand(None, Some("Vibram FiveFingers"), None, Some(Ok(&response)));
+        assert_eq!(exact.status, BrandValidationStatus::Resolved);
+        assert_eq!(exact.match_kind, Some(BrandMatchKind::Exact));
+        assert_eq!(exact.brand_id, Some(42));
+        assert_eq!(exact.canonical_name.as_deref(), Some("Vibram FiveFingers"));
+
+        let normalized = decide_brand(None, Some("vibram-five fingers"), None, Some(Ok(&response)));
+        assert_eq!(normalized.status, BrandValidationStatus::Resolved);
+        assert_eq!(normalized.match_kind, Some(BrandMatchKind::Normalized));
+        assert_eq!(
+            normalized.normalized_value(),
+            Some(json!({
+                "brand_id":42,
+                "brand":"Vibram FiveFingers"
+            }))
+        );
+    }
+
+    #[test]
+    fn preserves_ambiguity_and_runtime_custom_brand_policy() {
+        let ambiguous = json!({"brands":[
+            {"id":42,"title":"AC-ME"},
+            {"id":43,"title":"Acme"}
+        ],"disable_custom_brands":false});
+        let decision = decide_brand(None, Some("ac me"), None, Some(Ok(&ambiguous)));
+        assert_eq!(decision.status, BrandValidationStatus::Ambiguous);
+        assert!(!decision.valid);
+        assert_eq!(decision.options.len(), 2);
+        assert_eq!(decision.options_truncated, Some(false));
+
+        let custom = decide_brand(None, Some("My label"), None, Some(Ok(&ambiguous)));
+        assert_eq!(custom.status, BrandValidationStatus::Custom);
+        assert!(custom.valid);
+
+        let disabled = json!({"brands":[],"disable_custom_brands":true});
+        let rejected = decide_brand(None, Some("My label"), None, Some(Ok(&disabled)));
+        assert_eq!(rejected.status, BrandValidationStatus::CustomDisabled);
+        assert!(!rejected.valid);
+    }
+
+    #[test]
+    fn bounds_ambiguous_options() {
+        let brands = (0..15)
+            .map(|offset| json!({"id":100 + offset,"title":"A-C-M-E"}))
+            .collect::<Vec<_>>();
+        let response = json!({"brands":brands});
+        let decision = decide_brand(None, Some("acme"), None, Some(Ok(&response)));
+
+        assert_eq!(decision.status, BrandValidationStatus::Ambiguous);
+        assert_eq!(decision.options.len(), AMBIGUOUS_OPTION_LIMIT);
+        assert_eq!(decision.options_truncated, Some(true));
     }
 }

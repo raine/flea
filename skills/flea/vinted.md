@@ -105,10 +105,13 @@ These commands carry the category and selected parent values without requiring
 a hand-built selection array. Attribute output preserves `selection_payload`;
 continue following `next_actions` through additional layers.
 
-A supplied brand name outside the initial suggestions produces a focused
-category-brand action. Use its opaque ID and canonical name together in the next
-composer input. Use focused discovery when other composer issue actions request
-it.
+A supplied brand name without an ID triggers category-scoped matching. One exact
+or normalized match fills its opaque ID and canonical name. Check
+`brand_validation.status` for
+`resolved`, `custom`, or `ambiguous`. For ambiguity, choose one bounded option
+and rerun the composer with its ID and canonical name. A brand remains custom
+only when the scoped response permits custom brands. Use focused discovery when
+other composer issue actions request it.
 
 Write listing text naturally in the seller's language. Vinted's buyer-facing
 experience translates supported member-authored content and offers the original.

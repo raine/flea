@@ -242,11 +242,11 @@ async fn execute_operation(
     discovery_api: &dyn VintedPublicationDiscoveryApi,
     listing_api: &dyn VintedListingApi,
 ) -> Result<CommandOutcome, AppError> {
-    let (input, images) = match values {
+    let (mut input, images) = match values {
         Some(values) => (Some(read_input(&values.input)?), values.image),
         None => (None, Vec::new()),
     };
-    if let Some(input) = input.as_ref() {
+    if let Some(input) = input.as_mut() {
         validate_listing_brand(portal, input, session, discovery_api).await?;
     }
     let publication = VintedPublication::new(api)

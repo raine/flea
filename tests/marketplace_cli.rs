@@ -55,10 +55,26 @@ impl VintedPublicationDiscoveryApi for DiscoveryFixture {
                         }
                     ]})
                 }
-                DiscoveryRequest::Brands { keyword, .. } if keyword == "Vibram Fivefingers" => {
-                    json!({"brands":[{"id":123456,"title":"Vibram Fivefingers"}]})
+                DiscoveryRequest::Brands { keyword, .. } if keyword == "Vibram FiveFingers" => {
+                    json!({
+                        "brands":[{"id":123456,"title":"Vibram Fivefingers"}],
+                        "disable_custom_brands":false
+                    })
                 }
-                DiscoveryRequest::Brands { .. } => json!({"brands":[{"id":22,"title":"Abus"}]}),
+                DiscoveryRequest::Brands { keyword, .. } if keyword == "ac me" => json!({
+                    "brands":[
+                        {"id":700,"title":"AC-ME"},
+                        {"id":701,"title":"Acme"}
+                    ],
+                    "disable_custom_brands":false
+                }),
+                DiscoveryRequest::Brands { keyword, .. } if keyword == "Restricted label" => {
+                    json!({"brands":[],"disable_custom_brands":true})
+                }
+                DiscoveryRequest::Brands { .. } => json!({
+                    "brands":[{"id":22,"title":"Abus"}],
+                    "disable_custom_brands":false
+                }),
                 DiscoveryRequest::Colors => json!({"colors":[{"id":3,"title":"Black"}]}),
                 DiscoveryRequest::Configuration => json!({
                     "currencies":["EUR"],"minimum_price":"1.00","maximum_price":"10000.00"
@@ -284,39 +300,14 @@ fn composer_keeps_large_catalogs_explicit_and_default_formats_equivalent() {
 }
 
 #[test]
-fn composer_links_supplied_brand_to_focused_category_discovery() {
+fn composer_resolves_a_unique_normalized_brand_automatically() {
     let file = tempfile::NamedTempFile::new().unwrap();
-    std::fs::write(file.path(), r#"{"brand":"Vibram Fivefingers"}"#).unwrap();
-    let compose = run_discovery_json(&[
-        "vinted",
-        "category",
-        "compose",
-        "4380",
-        "--input",
-        file.path().to_str().unwrap(),
-    ]);
-    assert!(
-        compose["next_actions"]
-            .as_array()
-            .is_some_and(|actions| actions.iter().any(|action| action["command"]
-                == "flea vinted category brands 4380 'Vibram Fivefingers'"))
-    );
-
-    let brands =
-        run_discovery_json(&["vinted", "category", "brands", "4380", "Vibram Fivefingers"]);
-    assert_eq!(brands["data"]["response"]["brands"][0]["id"], 123456);
-    assert_eq!(
-        brands["data"]["response"]["brands"][0]["title"],
-        "Vibram Fivefingers"
-    );
-
     std::fs::write(
         file.path(),
         r#"{
             "title":"Shoes","description":"Minimal running shoes",
             "catalog_id":4380,"price":"25.00","currency":"EUR",
-            "package_size_id":1,"brand_id":123456,
-            "brand":"Vibram Fivefingers","color_ids":[3],
+            "package_size_id":1,"brand":"Vibram FiveFingers","color_ids":[3],
             "item_attributes":[
                 {"code":"condition","ids":[6]},
                 {"code":"size","ids":[42]}
@@ -324,6 +315,7 @@ fn composer_links_supplied_brand_to_focused_category_discovery() {
         }"#,
     )
     .unwrap();
+
     let resolved = run_discovery_json(&[
         "vinted",
         "category",
@@ -333,17 +325,80 @@ fn composer_links_supplied_brand_to_focused_category_discovery() {
         file.path().to_str().unwrap(),
         "--full",
     ]);
-    assert_eq!(resolved["data"]["brand_validation"]["status"], "searched");
-    assert!(
-        resolved["data"]["brand_validation"]["valid"]
-            .as_bool()
-            .unwrap()
+
+    assert_eq!(resolved["data"]["brand_validation"]["status"], "resolved");
+    assert_eq!(
+        resolved["data"]["brand_validation"]["match_kind"],
+        "normalized"
     );
     assert_eq!(resolved["data"]["listing_input"]["brand_id"], 123456);
     assert_eq!(
         resolved["data"]["listing_input"]["brand"],
         "Vibram Fivefingers"
     );
+    assert!(resolved.get("next_actions").is_none());
+}
+
+#[test]
+fn composer_preserves_ambiguous_and_custom_brand_policy_results() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), r#"{"brand":"ac me"}"#).unwrap();
+    let ambiguous = run_discovery_json(&[
+        "vinted",
+        "category",
+        "compose",
+        "4380",
+        "--input",
+        file.path().to_str().unwrap(),
+    ]);
+    assert_eq!(ambiguous["data"]["brand_validation"]["status"], "ambiguous");
+    assert_eq!(
+        ambiguous["data"]["brand_validation"]["options"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let brand_action = ambiguous["data"]["next_actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|action| action["field"] == "brand")
+        .unwrap();
+    assert_eq!(
+        brand_action["command"],
+        "flea vinted category compose 4380 --input listing.json"
+    );
+
+    std::fs::write(file.path(), r#"{"brand":"Independent label"}"#).unwrap();
+    let custom = run_discovery_json(&[
+        "vinted",
+        "category",
+        "compose",
+        "4380",
+        "--input",
+        file.path().to_str().unwrap(),
+    ]);
+    assert_eq!(custom["data"]["brand_validation"]["status"], "custom");
+    assert_eq!(
+        custom["data"]["selected_values"]["brand"],
+        json!({"brand_id":null,"brand":"Independent label"})
+    );
+
+    std::fs::write(file.path(), r#"{"brand":"Restricted label"}"#).unwrap();
+    let restricted = run_discovery_json(&[
+        "vinted",
+        "category",
+        "compose",
+        "4380",
+        "--input",
+        file.path().to_str().unwrap(),
+    ]);
+    assert_eq!(
+        restricted["data"]["brand_validation"]["status"],
+        "custom_disabled"
+    );
+    assert!(!restricted["data"]["ready"].as_bool().unwrap());
 }
 
 #[test]

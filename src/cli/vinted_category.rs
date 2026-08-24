@@ -166,7 +166,7 @@ pub async fn execute(
         })
         .collect();
         let data = if full {
-            CommandData::VintedComposer(composer)
+            CommandData::VintedComposer(Box::new(composer))
         } else {
             CommandData::VintedComposerReadiness(readiness)
         };
