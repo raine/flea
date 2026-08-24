@@ -85,6 +85,35 @@ pub struct VintedComposerReadiness {
 
 impl From<&VintedComposer> for VintedComposerReadiness {
     fn from(composer: &VintedComposer) -> Self {
+        let mut action_fields = BTreeSet::new();
+        let next_actions = composer
+            .issue_actions
+            .iter()
+            .filter_map(|action| {
+                if !action_fields.insert(action.field.clone()) {
+                    return None;
+                }
+                let mut matching = composer
+                    .issue_actions
+                    .iter()
+                    .filter(|candidate| candidate.field == action.field);
+                let first = matching.next()?;
+                if matching.next().is_none() {
+                    return Some(first.clone());
+                }
+                Some(ComposerIssueAction {
+                    field: action.field.clone(),
+                    code: action.code.clone(),
+                    instruction:
+                        "Inspect the complete runtime options and choose a value for this field."
+                            .into(),
+                    command: format!(
+                        "flea vinted category compose {} --full",
+                        composer.category.id
+                    ),
+                })
+            })
+            .collect();
         Self {
             scope: composer.scope,
             category: composer.category.clone(),
@@ -92,7 +121,7 @@ impl From<&VintedComposer> for VintedComposerReadiness {
             selected_values: composer.form.values.clone(),
             issues: composer.form.issues.clone(),
             brand_validation: composer.brand_validation.clone(),
-            next_actions: composer.issue_actions.clone(),
+            next_actions,
         }
     }
 }

@@ -61,7 +61,7 @@ flea vinted auth login
 flea vinted auth status
 flea --format json vinted category search SEARCH_TEXT
 flea vinted category compose CATEGORY_ID --input listing.json
-flea vinted category compose CATEGORY_ID --input listing.json --readiness
+flea vinted category compose CATEGORY_ID --full
 flea vinted draft show DRAFT_ID
 flea vinted draft validate DRAFT_ID
 flea vinted draft create --input listing.json --image front.heic
@@ -88,13 +88,11 @@ localized catalog, and preserves upstream aliases or suggestions. When direct
 results are empty or broad, flea ranks publishable leaves with live Vinted
 category facets. Inspect `marketplace_evidence`, honor `selection_required`, and
 choose the category matching the item instead of selecting the first result.
-Follow a leaf result's `next_actions` into `category compose`, the primary source
-for fields, options, issues, and correction actions.
-
-Add `--readiness` with partial or complete input to return only readiness,
-issues, selected values, brand validation, and correction actions. This mode
-omits unrelated fields and option catalogs. Omit `--readiness` when discovering
-valid brands, colors, package sizes, currencies, or category attributes.
+Follow a leaf result's `next_actions` into `category compose`. The default
+response provides readiness, issues, selected values, brand validation, and
+correction actions in a bounded structure. Use `--full` when the next action
+requires complete fields and runtime option catalogs for brands, colors, package
+sizes, currencies, or category attributes.
 
 Brands and package sizes are category scoped. Colors are portal scoped,
 configuration is account scoped, and attributes are selection scoped. Composer

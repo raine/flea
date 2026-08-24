@@ -210,7 +210,7 @@ limits the clear operation to one layer.
 flea --format json vinted category search SEARCH_TEXT
 flea vinted category compose CATEGORY_ID
 flea vinted category compose CATEGORY_ID --input listing.json
-flea vinted category compose CATEGORY_ID --input listing.json --readiness
+flea vinted category compose CATEGORY_ID --full
 flea vinted category attributes --input selections.json
 flea vinted category brands CATEGORY_ID BRAND_TEXT
 flea vinted category package-sizes CATEGORY_ID
@@ -263,19 +263,19 @@ and returns `status: "pending"` with the listing ID, canonical URL, and
 the item again.
 
 `category compose` is the guided publication entry point. Category search emits
-one compose action per leaf result. The composer fetches the category's first
-attribute layer, so required fields such as size and condition appear in
-`form.fields` and their runtime IDs appear in `form.options`. Each missing
-attribute option also has an exact command in `issue_actions` and
-`next_actions`. Following one of these commands carries the category and chosen
-option into the next attribute layer without constructing a selection payload.
+one compose action per leaf result. Its default response contains readiness,
+selected values, validation issues, brand validation, and correction actions.
+This bounded response keeps the information for the next agent action ahead of
+large runtime catalogs. Add `--full` to include the complete form. The full form
+contains required fields such as size and condition in `form.fields` and their
+runtime IDs in `form.options`. Each missing attribute option also has an exact
+command in `issue_actions` and envelope `next_actions`. Following one of these
+commands carries the category and chosen option into the next attribute layer
+without constructing a selection payload.
 
 When partial input supplies a brand name outside the initial suggestions, the
 composer emits a focused `category brands` action. Use that action's opaque ID
-and canonical name together in the next composer input. Add `--readiness` with
-partial or complete input for a concise result containing readiness, issues,
-selected values, brand validation, and correction actions without unrelated
-option catalogs. Omit the flag for the complete discovery form.
+and canonical name together in the next composer input.
 
 Composer issues for other fields link to focused discovery or a correction
 command. Discovery output declares its scope: brands and package sizes are

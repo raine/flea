@@ -34,22 +34,27 @@ impl VintedPublicationDiscoveryApi for DiscoveryFixture {
                         "id":4380,"title":"Locks","catalogs":[]
                     }]
                 }]}),
-                DiscoveryRequest::Attributes { .. } => json!({"attributes":[
-                    {
-                        "code":"condition",
-                        "configuration":{
-                            "title":"Condition","required":true,
-                            "options":[{"id":6,"title":"Good"}]
+                DiscoveryRequest::Attributes { .. } => {
+                    let size_options = (0..1_500)
+                        .map(|index| json!({"id": index + 42, "title": format!("Size {index}")}))
+                        .collect::<Vec<_>>();
+                    json!({"attributes":[
+                        {
+                            "code":"condition",
+                            "configuration":{
+                                "title":"Condition","required":true,
+                                "options":[{"id":6,"title":"Good"}]
+                            }
+                        },
+                        {
+                            "code":"size",
+                            "configuration":{
+                                "title":"Size","required":true,
+                                "options":size_options
+                            }
                         }
-                    },
-                    {
-                        "code":"size",
-                        "configuration":{
-                            "title":"Size","required":true,
-                            "options":[{"id":42,"title":"42"}]
-                        }
-                    }
-                ]}),
+                    ]})
+                }
                 DiscoveryRequest::Brands { keyword, .. } if keyword == "Vibram Fivefingers" => {
                     json!({"brands":[{"id":123456,"title":"Vibram Fivefingers"}]})
                 }
@@ -84,13 +89,20 @@ fn discovery_dependencies() -> ApplicationDependencies {
         .with_vinted_publication_discovery_api(Arc::new(DiscoveryFixture))
 }
 
-fn run_discovery_json(args: &[&str]) -> Value {
+fn run_discovery_document(format: &str, args: &[&str]) -> String {
     let arguments = std::iter::once("flea")
-        .chain(["--format", "json"])
+        .chain(["--format", format])
         .chain(args.iter().copied());
     let result = flea::run_with_dependencies(arguments, &discovery_dependencies());
+    if result.exit_code != 0 {
+        eprintln!("{}", result.document);
+    }
     assert_eq!(result.exit_code, 0, "{}", result.document);
-    serde_json::from_str(&result.document).expect("JSON envelope")
+    result.document
+}
+
+fn run_discovery_json(args: &[&str]) -> Value {
+    serde_json::from_str(&run_discovery_document("json", args)).expect("JSON envelope")
 }
 
 #[test]
@@ -103,7 +115,7 @@ fn vinted_publication_discovery_guides_the_category_and_attribute_chain() {
         "flea vinted --portal fi category compose 4380"
     );
 
-    let compose = run_discovery_json(&["vinted", "category", "compose", "4380"]);
+    let compose = run_discovery_json(&["vinted", "category", "compose", "4380", "--full"]);
     assert_eq!(compose["data"]["scope"], "category");
     assert_eq!(
         compose["data"]["attribute_selection_payload"],
@@ -163,7 +175,7 @@ fn vinted_publication_discovery_guides_the_category_and_attribute_chain() {
 }
 
 #[test]
-fn composer_readiness_omits_discovery_catalogs_and_reports_validation() {
+fn composer_defaults_to_concise_readiness_and_reports_validation() {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(
         file.path(),
@@ -187,7 +199,6 @@ fn composer_readiness_omits_discovery_catalogs_and_reports_validation() {
         "4380",
         "--input",
         file.path().to_str().unwrap(),
-        "--readiness",
     ]);
 
     assert_eq!(output["data"]["ready"], true);
@@ -198,7 +209,7 @@ fn composer_readiness_omits_discovery_catalogs_and_reports_validation() {
     assert!(output["data"].get("attribute_selection_payload").is_none());
     assert!(output["data"].get("listing_input").is_none());
 
-    let incomplete = run_discovery_json(&["vinted", "category", "compose", "4380", "--readiness"]);
+    let incomplete = run_discovery_json(&["vinted", "category", "compose", "4380"]);
     assert_eq!(incomplete["data"]["ready"], false);
     assert!(incomplete["data"]["issues"].as_array().unwrap().len() > 1);
     assert!(
@@ -214,6 +225,65 @@ fn composer_readiness_omits_discovery_catalogs_and_reports_validation() {
 }
 
 #[test]
+fn composer_keeps_large_catalogs_explicit_and_default_formats_equivalent() {
+    let args = ["vinted", "category", "compose", "4380"];
+    let json_document = run_discovery_document("json", &args);
+    let json_output: Value = serde_json::from_str(&json_document).unwrap();
+
+    assert!(
+        json_document.len() < 20_000,
+        "{len}",
+        len = json_document.len()
+    );
+    assert_eq!(json_output["data"]["ready"], false);
+    assert!(json_output["data"].get("form").is_none());
+    assert!(
+        json_output["data"]["issues"]
+            .as_array()
+            .is_some_and(|issues| issues
+                .iter()
+                .any(|issue| issue["field"] == "attribute.size"))
+    );
+    assert!(
+        json_output["data"]["next_actions"]
+            .as_array()
+            .is_some_and(|actions| actions
+                .iter()
+                .any(|action| action["field"] == "attribute.size"))
+    );
+    assert!(
+        json_output["next_actions"]
+            .as_array()
+            .is_some_and(|actions| !actions.is_empty())
+    );
+
+    let toon_document = run_discovery_document("toon", &args);
+    let toon_output: Value = toon_format::decode_default(&toon_document).unwrap();
+    assert_eq!(toon_output, json_output);
+
+    let full_document =
+        run_discovery_document("json", &["vinted", "category", "compose", "4380", "--full"]);
+    let full_output: Value = serde_json::from_str(&full_document).unwrap();
+    assert!(full_document.len() > 50_000);
+    assert!(
+        full_output["data"]["form"]["options"]
+            .as_array()
+            .is_some_and(|options| options
+                .iter()
+                .filter(|option| option["field"] == "attribute.size")
+                .count()
+                == 1_500)
+    );
+    assert!(
+        full_output["data"]["issue_actions"]
+            .as_array()
+            .is_some_and(|actions| actions
+                .iter()
+                .any(|action| action["field"] == "attribute.size"))
+    );
+}
+
+#[test]
 fn composer_links_supplied_brand_to_focused_category_discovery() {
     let file = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(file.path(), r#"{"brand":"Vibram Fivefingers"}"#).unwrap();
@@ -225,9 +295,11 @@ fn composer_links_supplied_brand_to_focused_category_discovery() {
         "--input",
         file.path().to_str().unwrap(),
     ]);
-    assert_eq!(
-        compose["next_actions"][0]["command"],
-        "flea vinted category brands 4380 'Vibram Fivefingers'"
+    assert!(
+        compose["next_actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| action["command"]
+                == "flea vinted category brands 4380 'Vibram Fivefingers'"))
     );
 
     let brands =
@@ -259,6 +331,7 @@ fn composer_links_supplied_brand_to_focused_category_discovery() {
         "4380",
         "--input",
         file.path().to_str().unwrap(),
+        "--full",
     ]);
     assert_eq!(resolved["data"]["brand_validation"]["status"], "searched");
     assert!(

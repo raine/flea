@@ -14,8 +14,9 @@
   authoritative account state and duplicate-safe retry guidance
 - Link supplied Vinted brands outside initial composer suggestions directly to
   focused category-scoped discovery
-- Add concise Vinted composer readiness output with selected values and
-  validation actions while retaining complete option discovery
+- Keep default Vinted composer output concise with readiness, selected values,
+  issues, and next actions; complete runtime option catalogs are available with
+  `--full`
 - Separate temporary Vinted upload photo IDs from authoritative assigned photo
   IDs and report assigned display order after every publication mutation
 - Report Vinted publication category locale, expose upstream suggestions, and
