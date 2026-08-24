@@ -165,14 +165,13 @@ bounds, and package IDs are runtime portal values. The publication composer
 combines those sources into normalized fields, options, requirements, validation
 issues, and a direct `ListingInput` value when all seller facts are confirmed.
 
-Publication supports `native` and `web` transports. The web transport executes
-Vinted API requests inside a visible, persistent Google Chrome session so Vinted
-receives the browser cookies, CSRF state, and human-verification state associated
-with that session. Flea launches ordinary Chrome with a dedicated profile and a
+Publication executes Vinted API requests inside a visible, persistent Google
+Chrome session so Vinted receives the browser cookies, CSRF state, and
+human-verification state associated with that session. Flea launches ordinary Chrome with a dedicated profile and a
 localhost debugging port. `agent-browser` connects to that Chrome instance as a
-client and does not launch its automation-oriented Chromium build. The web
-transport relies on the browser login and requires no native Vinted token.
-Install the client:
+client and does not launch its automation-oriented Chromium build. Publication
+relies on the browser login and requires no native Vinted token. Install the
+client:
 
 ```sh
 brew install agent-browser
@@ -205,7 +204,7 @@ flea vinted draft create --input listing.json --image front.heic
 flea vinted draft update DRAFT_ID --input listing.json --image front.jpg
 flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
-flea vinted publish --transport web --input listing.json --image front.jpg
+flea vinted publish --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
 flea vinted listing list
 ```

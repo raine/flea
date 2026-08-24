@@ -1,35 +1,18 @@
 use std::{future::Future, path::PathBuf, pin::Pin};
 
-use reqwest::{
-    Method, StatusCode,
-    header::{HeaderName, HeaderValue},
-};
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use url::Url;
 use uuid::Uuid;
 
 use crate::{
     domain::envelope::NextAction,
     error::{AppError, ExitClass},
     image_processing,
-    marketplace::{
-        PortalId,
-        vinted::{
-            auth::{VintedAuthentication, VintedCredentialRecord},
-            binding::VINTED_FI_BINDING,
-            readiness::{PublicationReadiness, VintedReadinessApi, classify_prerequisite},
-            search::VintedSearchSession,
-        },
-    },
-    transport::{
-        MultipartPart, RequestBody, Transport, TransportError, TransportErrorKind,
-        TransportResponse,
-    },
+    marketplace::vinted::readiness::classify_prerequisite,
+    transport::TransportResponse,
 };
 
-const API_V2_PATH: &str = "/api/v2/";
-const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_IMAGES: usize = 20;
 const MAX_UPLOAD_SESSION_BYTES: usize = 1024;
 const MAX_SESSION_DISCOVERIES: usize = 2;
@@ -125,58 +108,39 @@ pub struct PublicationResult {
 }
 
 pub trait VintedPublicationApi: Send + Sync {
-    fn requires_native_credentials(&self) -> bool {
-        true
-    }
-
     fn configuration<'a>(
         &'a self,
-        credentials: Option<&'a VintedCredentialRecord>,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>>;
 
     fn fetch_draft<'a>(
         &'a self,
-        credentials: Option<&'a VintedCredentialRecord>,
         draft_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>>;
 
     fn upload_photo<'a>(
         &'a self,
-        credentials: Option<&'a VintedCredentialRecord>,
         upload_session_id: &'a str,
         image: PreparedImage,
     ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>>;
 
     fn mutate<'a>(
         &'a self,
-        credentials: Option<&'a VintedCredentialRecord>,
         operation: &'a PublicationOperation,
         body: Option<Value>,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>>;
 }
 
 pub struct VintedPublication<'a> {
-    session: &'a dyn VintedSearchSession,
     api: &'a dyn VintedPublicationApi,
-    readiness_api: &'a dyn VintedReadinessApi,
 }
 
 impl<'a> VintedPublication<'a> {
-    pub fn new(
-        session: &'a dyn VintedSearchSession,
-        api: &'a dyn VintedPublicationApi,
-        readiness_api: &'a dyn VintedReadinessApi,
-    ) -> Self {
-        Self {
-            session,
-            api,
-            readiness_api,
-        }
+    pub const fn new(api: &'a dyn VintedPublicationApi) -> Self {
+        Self { api }
     }
 
     pub async fn execute(
         &self,
-        portal: PortalId,
         operation: PublicationOperation,
         input: Option<ListingInput>,
         image_paths: Vec<PathBuf>,
@@ -184,17 +148,9 @@ impl<'a> VintedPublication<'a> {
         validate_operation(&operation, input.as_ref(), &image_paths).map_err(|error| {
             publication_error(error, &operation, &[], MutationStatus::NotAttempted)
         })?;
-        let credentials = if self.api.requires_native_credentials() {
-            Some(self.session.credentials(portal).await.map_err(|error| {
-                publication_error(error, &operation, &[], MutationStatus::NotAttempted)
-            })?)
-        } else {
-            None
-        };
-
         if matches!(operation, PublicationOperation::DeleteDraft { .. }) {
             self.api
-                .mutate(credentials.as_ref(), &operation, None)
+                .mutate(&operation, None)
                 .await
                 .map_err(|error| classify_mutation_error(error, &operation, &[]))?;
             return Ok(PublicationResult {
@@ -208,13 +164,6 @@ impl<'a> VintedPublication<'a> {
             });
         }
 
-        if let Some(credentials) = credentials.as_ref() {
-            let readiness = self.readiness_api.readiness(credentials).await?;
-            if readiness.blocked() {
-                return Err(readiness_blocked_error(readiness));
-            }
-        }
-
         let mut prepared_images = Vec::with_capacity(image_paths.len());
         for path in image_paths {
             prepared_images.push(prepare_image(path).await.map_err(|error| {
@@ -224,9 +173,7 @@ impl<'a> VintedPublication<'a> {
         let input = input.expect("validated publication input");
         let temp_uuid = Uuid::new_v4().to_string();
         let remote_before = if let PublicationOperation::CompleteDraft { draft_id } = &operation {
-            let photos = self
-                .fetch_assigned_photos(credentials.as_ref(), draft_id, &operation)
-                .await?;
+            let photos = self.fetch_assigned_photos(draft_id, &operation).await?;
             if photos.is_empty() && prepared_images.is_empty() {
                 return Err(publication_error(
                     empty_draft_photos(draft_id),
@@ -241,13 +188,9 @@ impl<'a> VintedPublication<'a> {
         };
 
         for discovery in 0..MAX_SESSION_DISCOVERIES {
-            let configuration =
-                self.api
-                    .configuration(credentials.as_ref())
-                    .await
-                    .map_err(|error| {
-                        publication_error(error, &operation, &[], MutationStatus::NotAttempted)
-                    })?;
+            let configuration = self.api.configuration().await.map_err(|error| {
+                publication_error(error, &operation, &[], MutationStatus::NotAttempted)
+            })?;
             let upload_session_id = upload_session_id(&configuration).map_err(|error| {
                 publication_error(error, &operation, &[], MutationStatus::NotAttempted)
             })?;
@@ -256,7 +199,7 @@ impl<'a> VintedPublication<'a> {
             for prepared in &prepared_images {
                 match self
                     .api
-                    .upload_photo(credentials.as_ref(), upload_session_id, prepared.clone())
+                    .upload_photo(upload_session_id, prepared.clone())
                     .await
                 {
                     Ok(photo) => photos.push(photo),
@@ -300,11 +243,7 @@ impl<'a> VintedPublication<'a> {
                             upload_session_id,
                             &temp_uuid,
                         );
-                        match self
-                            .api
-                            .mutate(credentials.as_ref(), &replacement, Some(body))
-                            .await
-                        {
+                        match self.api.mutate(&replacement, Some(body)).await {
                             Ok(_) => {}
                             Err(error)
                                 if discovery + 1 < MAX_SESSION_DISCOVERIES
@@ -321,9 +260,7 @@ impl<'a> VintedPublication<'a> {
                                 ));
                             }
                         }
-                        let verified = self
-                            .fetch_assigned_photos(credentials.as_ref(), draft_id, &operation)
-                            .await?;
+                        let verified = self.fetch_assigned_photos(draft_id, &operation).await?;
                         verify_replacement(draft_id, &photos, &verified)?;
                         (verified, photos.len(), "replaced")
                     }
@@ -338,11 +275,7 @@ impl<'a> VintedPublication<'a> {
                 upload_session_id,
                 &temp_uuid,
             );
-            match self
-                .api
-                .mutate(credentials.as_ref(), &operation, Some(body))
-                .await
-            {
+            match self.api.mutate(&operation, Some(body)).await {
                 Ok(response) => {
                     return normalize_result(
                         &operation,
@@ -393,230 +326,15 @@ impl<'a> VintedPublication<'a> {
 
     async fn fetch_assigned_photos(
         &self,
-        credentials: Option<&VintedCredentialRecord>,
         draft_id: &str,
         operation: &PublicationOperation,
     ) -> Result<Vec<UploadedPhoto>, AppError> {
-        let response = self
-            .api
-            .fetch_draft(credentials, draft_id)
-            .await
-            .map_err(|error| {
-                publication_error(error, operation, &[], MutationStatus::NotAttempted)
-            })?;
+        let response = self.api.fetch_draft(draft_id).await.map_err(|error| {
+            publication_error(error, operation, &[], MutationStatus::NotAttempted)
+        })?;
         decode_draft_photos(draft_id, &response)
             .map_err(|error| publication_error(error, operation, &[], MutationStatus::NotAttempted))
     }
-}
-
-pub struct HttpVintedPublicationApi {
-    auth: VintedAuthentication,
-    portal_api_base_url: String,
-}
-
-impl HttpVintedPublicationApi {
-    pub fn new() -> Self {
-        Self {
-            auth: VintedAuthentication::new(),
-            portal_api_base_url: VINTED_FI_BINDING.portal_api_host.to_owned(),
-        }
-    }
-
-    #[cfg(test)]
-    fn with_portal_api_base_url(mut self, portal_api_base_url: String) -> Self {
-        self.portal_api_base_url = portal_api_base_url;
-        self
-    }
-
-    fn endpoint(&self, path: &str) -> Result<Url, AppError> {
-        let mut url = Url::parse(&self.portal_api_base_url).map_err(|error| {
-            AppError::unexpected("Vinted API binding is invalid").with_source(error)
-        })?;
-        url.set_path(&format!("{API_V2_PATH}{path}"));
-        Ok(url)
-    }
-
-    async fn configuration_request(
-        &self,
-        credentials: &VintedCredentialRecord,
-    ) -> Result<Value, AppError> {
-        let url = self.endpoint("items/configuration")?;
-        let request = self.auth.authenticated_request(
-            Method::GET,
-            url.to_string(),
-            credentials,
-            MAX_RESPONSE_BYTES,
-            transport_error,
-        )?;
-        let response = self
-            .auth
-            .executor()
-            .execute(request)
-            .await
-            .map_err(execution_error)?;
-        let status = response.status;
-        let value = bounded_json(response)?;
-        if status.is_success() {
-            Ok(value)
-        } else {
-            Err(upstream_error(status, &value, "configuration"))
-        }
-    }
-
-    async fn fetch_draft_request(
-        &self,
-        credentials: &VintedCredentialRecord,
-        draft_id: &str,
-    ) -> Result<Value, AppError> {
-        let url = self.endpoint(&format!("item_upload/items/{draft_id}"))?;
-        let request = self.auth.authenticated_request(
-            Method::GET,
-            url.to_string(),
-            credentials,
-            MAX_RESPONSE_BYTES,
-            transport_error,
-        )?;
-        let response = self
-            .auth
-            .executor()
-            .execute(request)
-            .await
-            .map_err(execution_error)?;
-        decode_draft_response(response)
-    }
-
-    async fn upload_photo_request(
-        &self,
-        credentials: &VintedCredentialRecord,
-        upload_session_id: &str,
-        image: PreparedImage,
-    ) -> Result<UploadedPhoto, AppError> {
-        let url = self.endpoint("photos")?;
-        let mut request = self.auth.authenticated_request(
-            Method::POST,
-            url.to_string(),
-            credentials,
-            MAX_RESPONSE_BYTES,
-            transport_error,
-        )?;
-        request.body = RequestBody::Multipart(vec![
-            MultipartPart::bytes("photo[type]", b"item".to_vec()),
-            MultipartPart::bytes("upload_session_id", upload_session_id.as_bytes().to_vec()),
-            MultipartPart::bytes("photo[file]", image.bytes)
-                .file_name(image.file_name)
-                .mime_type(image.media_type),
-        ]);
-        let response = self
-            .auth
-            .executor()
-            .execute(request)
-            .await
-            .map_err(execution_error)?;
-        decode_photo_response(response)
-    }
-
-    async fn mutation_request(
-        &self,
-        credentials: &VintedCredentialRecord,
-        operation: &PublicationOperation,
-        body: Option<Value>,
-    ) -> Result<Value, AppError> {
-        let (method, path) = operation_endpoint(operation);
-        let url = self.endpoint(&path)?;
-        let mut request = self.auth.authenticated_request(
-            method,
-            url.to_string(),
-            credentials,
-            MAX_RESPONSE_BYTES,
-            transport_error,
-        )?;
-        for (name, value) in [
-            ("x-upload-form", "true"),
-            ("x-enable-dynamic-attribute-condition", "true"),
-            ("x-enable-dynamic-attribute-size", "true"),
-            ("x-enable-dynamic-attribute-video-game-rating", "true"),
-        ] {
-            insert_header(&mut request.headers, name, value);
-        }
-        if let Some(body) = body {
-            insert_header(&mut request.headers, "content-type", "application/json");
-            request.body = RequestBody::Bytes(serde_json::to_vec(&body).map_err(|error| {
-                AppError::unexpected("Failed to serialize Vinted publication").with_source(error)
-            })?);
-        }
-        let response = self
-            .auth
-            .executor()
-            .execute(request)
-            .await
-            .map_err(mutation_execution_error)?;
-        decode_mutation_response(response)
-    }
-}
-
-impl Default for HttpVintedPublicationApi {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl VintedPublicationApi for HttpVintedPublicationApi {
-    fn configuration<'a>(
-        &'a self,
-        credentials: Option<&'a VintedCredentialRecord>,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
-        Box::pin(async move {
-            self.configuration_request(required_native_credentials(credentials)?)
-                .await
-        })
-    }
-
-    fn fetch_draft<'a>(
-        &'a self,
-        credentials: Option<&'a VintedCredentialRecord>,
-        draft_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
-        Box::pin(async move {
-            self.fetch_draft_request(required_native_credentials(credentials)?, draft_id)
-                .await
-        })
-    }
-
-    fn upload_photo<'a>(
-        &'a self,
-        credentials: Option<&'a VintedCredentialRecord>,
-        upload_session_id: &'a str,
-        image: PreparedImage,
-    ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>> {
-        Box::pin(async move {
-            self.upload_photo_request(
-                required_native_credentials(credentials)?,
-                upload_session_id,
-                image,
-            )
-            .await
-        })
-    }
-
-    fn mutate<'a>(
-        &'a self,
-        credentials: Option<&'a VintedCredentialRecord>,
-        operation: &'a PublicationOperation,
-        body: Option<Value>,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
-        Box::pin(async move {
-            self.mutation_request(required_native_credentials(credentials)?, operation, body)
-                .await
-        })
-    }
-}
-
-fn required_native_credentials(
-    credentials: Option<&VintedCredentialRecord>,
-) -> Result<&VintedCredentialRecord, AppError> {
-    credentials.ok_or_else(|| {
-        AppError::unexpected("native Vinted publication credentials were not provided")
-    })
 }
 
 #[derive(Clone)]
@@ -1082,18 +800,6 @@ const fn operation_name(operation: &PublicationOperation) -> &'static str {
     }
 }
 
-fn readiness_blocked_error(readiness: PublicationReadiness) -> AppError {
-    let mut error = AppError::validation(
-        "vinted.prerequisite_blocked",
-        "Vinted requires user action before images can be uploaded or a listing can be changed",
-    )
-    .with_details(json!({ "readiness": readiness }));
-    error.next_actions.push(NextAction {
-        command: crate::invocation::vinted_fi("readiness"),
-    });
-    error
-}
-
 fn value_as_id(value: &Value) -> Option<String> {
     value
         .as_str()
@@ -1366,27 +1072,17 @@ fn invalid_response(stage: &str) -> AppError {
     )
 }
 
-fn insert_header(
-    headers: &mut reqwest::header::HeaderMap,
-    name: &'static str,
-    value: &'static str,
-) {
-    headers.insert(
-        HeaderName::from_static(name),
-        HeaderValue::from_static(value),
-    );
-}
-
-fn transport_error(error: TransportError) -> AppError {
+#[cfg(test)]
+fn transport_error(error: crate::transport::TransportError) -> AppError {
     let phase = match error.phase {
         crate::transport::TransportErrorPhase::Request => "request",
         crate::transport::TransportErrorPhase::Response => "response",
     };
     let kind = match error.kind {
-        TransportErrorKind::Timeout => "timeout",
-        TransportErrorKind::Connection => "connection",
-        TransportErrorKind::ResponseTooLarge => "response_too_large",
-        TransportErrorKind::Other => "other",
+        crate::transport::TransportErrorKind::Timeout => "timeout",
+        crate::transport::TransportErrorKind::Connection => "connection",
+        crate::transport::TransportErrorKind::ResponseTooLarge => "response_too_large",
+        crate::transport::TransportErrorKind::Other => "other",
     };
     let mut app_error = AppError::upstream("vinted.transport_failed", "Vinted request failed")
         .with_details(json!({ "transport_phase": phase, "transport_kind": kind }))
@@ -1396,8 +1092,9 @@ fn transport_error(error: TransportError) -> AppError {
     app_error
 }
 
-fn mutation_execution_error(error: TransportError) -> AppError {
-    if error.kind == TransportErrorKind::ResponseTooLarge {
+#[cfg(test)]
+fn mutation_execution_error(error: crate::transport::TransportError) -> AppError {
+    if error.kind == crate::transport::TransportErrorKind::ResponseTooLarge {
         let status = error.status.map(|status| status.as_u16());
         invalid_response("publication")
             .with_details(json!({
@@ -1412,17 +1109,10 @@ fn mutation_execution_error(error: TransportError) -> AppError {
     }
 }
 
-fn execution_error(error: TransportError) -> AppError {
-    if error.kind == TransportErrorKind::ResponseTooLarge {
-        invalid_response("publication")
-    } else {
-        transport_error(error)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::{TransportError, TransportErrorKind};
     use std::{
         collections::VecDeque,
         sync::{
@@ -1431,70 +1121,11 @@ mod tests {
         },
     };
 
-    use crate::marketplace::vinted::readiness::{
-        PrerequisiteCheck, ReadinessState, SellingPrerequisiteType, SessionReadiness,
-    };
-
-    struct UnknownReadiness;
-
-    impl VintedReadinessApi for UnknownReadiness {
-        fn readiness<'a>(
-            &'a self,
-            _credentials: &'a VintedCredentialRecord,
-        ) -> Pin<Box<dyn Future<Output = Result<PublicationReadiness, AppError>> + Send + 'a>>
-        {
-            Box::pin(async { Ok(readiness(ReadinessState::Unknown)) })
-        }
-    }
-
-    static UNKNOWN_READINESS: UnknownReadiness = UnknownReadiness;
-
-    struct SequencedReadiness {
-        calls: AtomicUsize,
-    }
-
-    impl VintedReadinessApi for SequencedReadiness {
-        fn readiness<'a>(
-            &'a self,
-            _credentials: &'a VintedCredentialRecord,
-        ) -> Pin<Box<dyn Future<Output = Result<PublicationReadiness, AppError>> + Send + 'a>>
-        {
-            let call = self.calls.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                Ok(readiness(if call == 0 {
-                    ReadinessState::ConfirmedBlocked
-                } else {
-                    ReadinessState::Unknown
-                }))
-            })
-        }
-    }
-
-    fn readiness(status: ReadinessState) -> PublicationReadiness {
-        PublicationReadiness {
-            status,
-            session: SessionReadiness {
-                authenticated: true,
-                status: ReadinessState::ConfirmedReady,
-                health: "valid",
-                validation: "fixture",
-            },
-            prerequisites: vec![PrerequisiteCheck {
-                prerequisite_type: SellingPrerequisiteType::PhoneVerification,
-                status,
-                source: "fixture",
-                user_action: "Complete phone verification in Vinted.".to_owned(),
-                action_url: None,
-            }],
-        }
-    }
-
     struct FixturePublicationApi {
         configurations: Mutex<VecDeque<Value>>,
         uploaded_sessions: Mutex<Vec<String>>,
         mutation_sessions: Mutex<Vec<String>>,
         rejected_mutations: AtomicUsize,
-        requires_native_credentials: bool,
     }
 
     impl FixturePublicationApi {
@@ -1504,24 +1135,13 @@ mod tests {
                 uploaded_sessions: Mutex::new(Vec::new()),
                 mutation_sessions: Mutex::new(Vec::new()),
                 rejected_mutations: AtomicUsize::new(rejected_mutations),
-                requires_native_credentials: true,
             }
-        }
-
-        fn browser_session(mut self) -> Self {
-            self.requires_native_credentials = false;
-            self
         }
     }
 
     impl VintedPublicationApi for FixturePublicationApi {
-        fn requires_native_credentials(&self) -> bool {
-            self.requires_native_credentials
-        }
-
         fn configuration<'a>(
             &'a self,
-            _credentials: Option<&'a VintedCredentialRecord>,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
             Box::pin(async move {
                 Ok(self
@@ -1535,7 +1155,6 @@ mod tests {
 
         fn fetch_draft<'a>(
             &'a self,
-            _credentials: Option<&'a VintedCredentialRecord>,
             draft_id: &'a str,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
             Box::pin(async move {
@@ -1551,7 +1170,6 @@ mod tests {
 
         fn upload_photo<'a>(
             &'a self,
-            _credentials: Option<&'a VintedCredentialRecord>,
             upload_session_id: &'a str,
             _image: PreparedImage,
         ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>> {
@@ -1571,7 +1189,6 @@ mod tests {
 
         fn mutate<'a>(
             &'a self,
-            _credentials: Option<&'a VintedCredentialRecord>,
             _operation: &'a PublicationOperation,
             body: Option<Value>,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
@@ -1630,14 +1247,12 @@ mod tests {
     impl VintedPublicationApi for CompletionApi {
         fn configuration<'a>(
             &'a self,
-            _credentials: Option<&'a VintedCredentialRecord>,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
             Box::pin(async { Ok(json!({"upload_session_id": "server-session"})) })
         }
 
         fn fetch_draft<'a>(
             &'a self,
-            _credentials: Option<&'a VintedCredentialRecord>,
             draft_id: &'a str,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
             Box::pin(async move {
@@ -1659,7 +1274,6 @@ mod tests {
 
         fn upload_photo<'a>(
             &'a self,
-            _credentials: Option<&'a VintedCredentialRecord>,
             _upload_session_id: &'a str,
             _image: PreparedImage,
         ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>> {
@@ -1671,7 +1285,6 @@ mod tests {
 
         fn mutate<'a>(
             &'a self,
-            _credentials: Option<&'a VintedCredentialRecord>,
             operation: &'a PublicationOperation,
             body: Option<Value>,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
@@ -1731,20 +1344,6 @@ mod tests {
         }
     }
 
-    fn credentials() -> VintedCredentialRecord {
-        VintedCredentialRecord::new_for_adapter(
-            PortalId::Fi,
-            "user".to_owned(),
-            None,
-            "access".to_owned(),
-            "refresh".to_owned(),
-            u64::MAX,
-            "device".to_owned(),
-            "anonymous".to_owned(),
-            None,
-        )
-    }
-
     fn image_path() -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("fixture.png");
@@ -1780,98 +1379,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detectable_blocker_stops_before_image_access_or_upload() {
-        let api = FixturePublicationApi::new([], 0);
-        let readiness_api = SequencedReadiness {
-            calls: AtomicUsize::new(0),
-        };
-        let session = |_: PortalId| Ok(credentials());
-        let error = VintedPublication::new(&session, &api, &readiness_api)
-            .execute(
-                PortalId::Fi,
-                PublicationOperation::Publish,
-                Some(input()),
-                vec![PathBuf::from("missing-image.jpg")],
-            )
-            .await
-            .unwrap_err();
-
-        assert_eq!(error.code, "vinted.prerequisite_blocked");
-        assert!(api.uploaded_sessions.lock().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn browser_publication_does_not_require_native_credentials() {
-        let (_directory, path) = image_path();
-        let api = FixturePublicationApi::new([json!({"upload_session_id": "browser-session"})], 0)
-            .browser_session();
-        let session = |_: PortalId| {
-            Err(AppError::authentication(
-                "fixture.native_auth_missing",
-                "native credentials are unavailable",
-            ))
-        };
-
-        let result = VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
-            .execute(
-                PortalId::Fi,
-                PublicationOperation::Publish,
-                Some(input()),
-                vec![path],
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(result.item_id.as_deref(), Some("71"));
-        assert_eq!(*api.uploaded_sessions.lock().unwrap(), ["browser-session"]);
-    }
-
-    #[tokio::test]
-    async fn workflow_continues_after_manual_verification() {
-        let (_directory, path) = image_path();
-        let api = FixturePublicationApi::new([json!({"upload_session_id": "server-session"})], 0);
-        let readiness_api = SequencedReadiness {
-            calls: AtomicUsize::new(0),
-        };
-        let session = |_: PortalId| Ok(credentials());
-        let publication = VintedPublication::new(&session, &api, &readiness_api);
-
-        publication
-            .execute(
-                PortalId::Fi,
-                PublicationOperation::Publish,
-                Some(input()),
-                vec![path.clone()],
-            )
-            .await
-            .unwrap_err();
-        let result = publication
-            .execute(
-                PortalId::Fi,
-                PublicationOperation::Publish,
-                Some(input()),
-                vec![path],
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(result.item_id.as_deref(), Some("71"));
-        assert_eq!(api.uploaded_sessions.lock().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
     async fn workflow_uses_server_session_for_photos_and_mutation() {
         let (_directory, path) = image_path();
         let api = FixturePublicationApi::new([json!({"upload_session_id": "server-session"})], 0);
-        let session = |_: PortalId| Ok(credentials());
 
-        VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
-            .execute(
-                PortalId::Fi,
-                PublicationOperation::Publish,
-                Some(input()),
-                vec![path],
-            )
+        VintedPublication::new(&api)
+            .execute(PublicationOperation::Publish, Some(input()), vec![path])
             .await
             .unwrap();
 
@@ -1889,15 +1402,9 @@ mod tests {
             ],
             1,
         );
-        let session = |_: PortalId| Ok(credentials());
 
-        VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
-            .execute(
-                PortalId::Fi,
-                PublicationOperation::Publish,
-                Some(input()),
-                vec![path],
-            )
+        VintedPublication::new(&api)
+            .execute(PublicationOperation::Publish, Some(input()), vec![path])
             .await
             .unwrap();
 
@@ -1921,15 +1428,9 @@ mod tests {
             ],
             2,
         );
-        let session = |_: PortalId| Ok(credentials());
 
-        let error = VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
-            .execute(
-                PortalId::Fi,
-                PublicationOperation::Publish,
-                Some(input()),
-                vec![path],
-            )
+        let error = VintedPublication::new(&api)
+            .execute(PublicationOperation::Publish, Some(input()), vec![path])
             .await
             .unwrap_err();
 
@@ -2074,12 +1575,11 @@ mod tests {
     #[tokio::test]
     async fn corrected_validation_attempt_reuses_persisted_replacement_without_uploading_again() {
         let api = CompletionApi::new(vec![photo(9)], 1);
-        let session = |_| Ok(credentials());
-        let workflow = VintedPublication::new(&session, &api, &UNKNOWN_READINESS);
+        let workflow = VintedPublication::new(&api);
         let (_directory, path) = image_path();
 
         let first = workflow
-            .execute(PortalId::Fi, completion(), Some(input()), vec![path])
+            .execute(completion(), Some(input()), vec![path])
             .await
             .unwrap_err();
         assert_eq!(first.code, "vinted.publication_validation_failed");
@@ -2093,7 +1593,7 @@ mod tests {
         assert_eq!(api.updates.load(Ordering::SeqCst), 1);
 
         let result = workflow
-            .execute(PortalId::Fi, completion(), Some(input()), Vec::new())
+            .execute(completion(), Some(input()), Vec::new())
             .await
             .unwrap();
         assert_eq!(result.photo_action, Some("reused"));
@@ -2106,10 +1606,9 @@ mod tests {
     #[tokio::test]
     async fn explicit_images_are_reported_as_verified_replace_all() {
         let api = CompletionApi::new(vec![photo(9), photo(8)], 0);
-        let session = |_| Ok(credentials());
         let (_directory, path) = image_path();
-        let result = VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
-            .execute(PortalId::Fi, completion(), Some(input()), vec![path])
+        let result = VintedPublication::new(&api)
+            .execute(completion(), Some(input()), vec![path])
             .await
             .unwrap();
 
@@ -2121,9 +1620,8 @@ mod tests {
     #[tokio::test]
     async fn empty_remote_draft_stops_before_final_mutation() {
         let api = CompletionApi::new(Vec::new(), 0);
-        let session = |_| Ok(credentials());
-        let error = VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
-            .execute(PortalId::Fi, completion(), Some(input()), Vec::new())
+        let error = VintedPublication::new(&api)
+            .execute(completion(), Some(input()), Vec::new())
             .await
             .unwrap_err();
 
@@ -2135,10 +1633,9 @@ mod tests {
     #[tokio::test]
     async fn uncertain_replacement_preserves_old_and_intended_assignments() {
         let api = CompletionApi::new(vec![photo(9)], 0).rejecting_update();
-        let session = |_| Ok(credentials());
         let (_directory, path) = image_path();
-        let error = VintedPublication::new(&session, &api, &UNKNOWN_READINESS)
-            .execute(PortalId::Fi, completion(), Some(input()), vec![path])
+        let error = VintedPublication::new(&api)
+            .execute(completion(), Some(input()), vec![path])
             .await
             .unwrap_err();
         let partial = error.partial.unwrap();
@@ -2406,16 +1903,6 @@ mod tests {
         assert_eq!(
             unknown.partial.unwrap()["uploaded_photo_assignments_reusable"],
             true
-        );
-    }
-
-    #[test]
-    fn test_portal_api_base_url_can_be_rebound() {
-        let api = HttpVintedPublicationApi::new()
-            .with_portal_api_base_url("http://127.0.0.1:9".to_owned());
-        assert_eq!(
-            api.endpoint("photos").unwrap().as_str(),
-            "http://127.0.0.1:9/api/v2/photos"
         );
     }
 }

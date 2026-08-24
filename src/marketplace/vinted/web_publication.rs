@@ -15,7 +15,6 @@ use crate::{
     domain::envelope::NextAction,
     error::AppError,
     marketplace::vinted::{
-        auth::VintedCredentialRecord,
         publication::{
             PreparedImage, PublicationOperation, UploadedPhoto, VintedPublicationApi,
             decode_draft_response, decode_mutation_response, decode_photo_response,
@@ -150,20 +149,14 @@ impl Default for AgentBrowserVintedPublicationApi {
 }
 
 impl VintedPublicationApi for AgentBrowserVintedPublicationApi {
-    fn requires_native_credentials(&self) -> bool {
-        false
-    }
-
     fn configuration<'a>(
         &'a self,
-        _credentials: Option<&'a VintedCredentialRecord>,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
         Box::pin(self.configuration_request())
     }
 
     fn fetch_draft<'a>(
         &'a self,
-        _credentials: Option<&'a VintedCredentialRecord>,
         draft_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
         Box::pin(self.fetch_draft_request(draft_id))
@@ -171,7 +164,6 @@ impl VintedPublicationApi for AgentBrowserVintedPublicationApi {
 
     fn upload_photo<'a>(
         &'a self,
-        _credentials: Option<&'a VintedCredentialRecord>,
         upload_session_id: &'a str,
         image: PreparedImage,
     ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>> {
@@ -180,7 +172,6 @@ impl VintedPublicationApi for AgentBrowserVintedPublicationApi {
 
     fn mutate<'a>(
         &'a self,
-        _credentials: Option<&'a VintedCredentialRecord>,
         operation: &'a PublicationOperation,
         body: Option<Value>,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
@@ -216,6 +207,10 @@ fn json_request_script(
             const method = {method};
             const encodedBody = {body};
             const csrfToken = {csrf_token};
+            if (csrfToken !== null) {{
+                window.__fleaCsrfToken = csrfToken;
+                localStorage.setItem('__fleaCsrfToken', csrfToken);
+            }}
             const headers = {{ accept: 'application/json,text/plain,*/*,image/webp' }};
             if (csrfToken !== null) headers['x-csrf-token'] = csrfToken;
             let requestBody;
@@ -253,6 +248,9 @@ fn photo_upload_script(upload_session_id: &str, image: &PreparedImage, csrf_toke
     format!(
         r#"(async () => {{
             {response_helper}
+            const csrfToken = {csrf_token};
+            window.__fleaCsrfToken = csrfToken;
+            localStorage.setItem('__fleaCsrfToken', csrfToken);
             const raw = atob({bytes});
             const content = new Uint8Array(raw.length);
             for (let index = 0; index < raw.length; index++) content[index] = raw.charCodeAt(index);
@@ -265,7 +263,7 @@ fn photo_upload_script(upload_session_id: &str, image: &PreparedImage, csrf_toke
                 credentials: 'include',
                 headers: {{
                     accept: 'application/json,text/plain,*/*,image/webp',
-                    'x-csrf-token': {csrf_token}
+                    'x-csrf-token': csrfToken
                 }},
                 body: form
             }});

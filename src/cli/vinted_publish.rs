@@ -1,6 +1,6 @@
 use std::{fs, io::Read, path::PathBuf};
 
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
@@ -87,9 +87,6 @@ pub enum VintedDraftCommand {
     Delete {
         /// Numeric Vinted draft identifier.
         draft_id: String,
-        /// Select the native API or persistent web browser transport.
-        #[arg(long, value_enum, default_value_t)]
-        transport: VintedPublicationTransport,
     },
 }
 
@@ -107,13 +104,6 @@ impl VintedDraftCommand {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
-pub enum VintedPublicationTransport {
-    #[default]
-    Native,
-    Web,
-}
-
 #[derive(Debug, Args)]
 pub struct PublicationInputArgs {
     /// Complete Vinted listing JSON, or `-` for stdin.
@@ -122,9 +112,6 @@ pub struct PublicationInputArgs {
     /// JPEG, PNG, HEIC, or HEIF image in final display order.
     #[arg(long, value_name = "PATH", required = true)]
     pub image: Vec<PathBuf>,
-    /// Select the native API or persistent web browser transport.
-    #[arg(long, value_enum, default_value_t)]
-    pub transport: VintedPublicationTransport,
 }
 
 #[derive(Debug, Args)]
@@ -135,9 +122,6 @@ pub struct DraftCompletionInputArgs {
     /// Replace all remote photos with these images in final display order.
     #[arg(long, value_name = "PATH")]
     pub image: Vec<PathBuf>,
-    /// Select the native API or persistent web browser transport.
-    #[arg(long, value_enum, default_value_t)]
-    pub transport: VintedPublicationTransport,
 }
 
 pub async fn execute_readiness(
@@ -152,45 +136,20 @@ pub async fn execute_readiness(
     ))
 }
 
-struct PublicationApis<'a> {
-    native: &'a dyn VintedPublicationApi,
-    web: &'a dyn VintedPublicationApi,
-    readiness: &'a dyn VintedReadinessApi,
-}
-
 pub async fn execute_direct(
     portal: PortalId,
     args: PublicationInputArgs,
-    session: &dyn VintedSearchSession,
-    native_api: &dyn VintedPublicationApi,
-    web_api: &dyn VintedPublicationApi,
-    readiness_api: &dyn VintedReadinessApi,
+    api: &dyn VintedPublicationApi,
 ) -> Result<CommandOutcome, AppError> {
-    let transport = args.transport;
-    let apis = PublicationApis {
-        native: native_api,
-        web: web_api,
-        readiness: readiness_api,
-    };
-    execute_operation(
-        portal,
-        PublicationOperation::Publish,
-        Some(args),
-        transport,
-        session,
-        apis,
-    )
-    .await
+    execute_operation(portal, PublicationOperation::Publish, Some(args), api).await
 }
 
 pub async fn execute_draft(
     portal: PortalId,
     command: VintedDraftCommand,
     session: &dyn VintedSearchSession,
-    native_publication_api: &dyn VintedPublicationApi,
-    web_publication_api: &dyn VintedPublicationApi,
+    publication_api: &dyn VintedPublicationApi,
     draft_api: &dyn VintedDraftApi,
-    readiness_api: &dyn VintedReadinessApi,
 ) -> Result<CommandOutcome, AppError> {
     match command {
         VintedDraftCommand::List { page, limit } => {
@@ -223,69 +182,40 @@ pub async fn execute_draft(
         }
         _ => {}
     }
-    let (operation, values, transport) = match command {
+    let (operation, values) = match command {
         VintedDraftCommand::List { .. }
         | VintedDraftCommand::Show { .. }
         | VintedDraftCommand::Validate { .. } => unreachable!("read commands returned above"),
-        VintedDraftCommand::Create(values) => {
-            let transport = values.transport;
-            (PublicationOperation::CreateDraft, Some(values), transport)
-        }
+        VintedDraftCommand::Create(values) => (PublicationOperation::CreateDraft, Some(values)),
         VintedDraftCommand::Update { draft_id, values } => {
-            let transport = values.transport;
-            (
-                PublicationOperation::UpdateDraft { draft_id },
-                Some(values),
-                transport,
-            )
+            (PublicationOperation::UpdateDraft { draft_id }, Some(values))
         }
-        VintedDraftCommand::Publish { draft_id, values } => {
-            let transport = values.transport;
-            (
-                PublicationOperation::CompleteDraft { draft_id },
-                Some(PublicationInputArgs {
-                    input: values.input,
-                    image: values.image,
-                    transport,
-                }),
-                transport,
-            )
-        }
-        VintedDraftCommand::Delete {
-            draft_id,
-            transport,
-        } => (
-            PublicationOperation::DeleteDraft { draft_id },
-            None,
-            transport,
+        VintedDraftCommand::Publish { draft_id, values } => (
+            PublicationOperation::CompleteDraft { draft_id },
+            Some(PublicationInputArgs {
+                input: values.input,
+                image: values.image,
+            }),
         ),
+        VintedDraftCommand::Delete { draft_id } => {
+            (PublicationOperation::DeleteDraft { draft_id }, None)
+        }
     };
-    let apis = PublicationApis {
-        native: native_publication_api,
-        web: web_publication_api,
-        readiness: readiness_api,
-    };
-    execute_operation(portal, operation, values, transport, session, apis).await
+    execute_operation(portal, operation, values, publication_api).await
 }
 
 async fn execute_operation(
     portal: PortalId,
     operation: PublicationOperation,
     values: Option<PublicationInputArgs>,
-    transport: VintedPublicationTransport,
-    session: &dyn VintedSearchSession,
-    apis: PublicationApis<'_>,
+    api: &dyn VintedPublicationApi,
 ) -> Result<CommandOutcome, AppError> {
     let (input, images) = match values {
         Some(values) => (Some(read_input(&values.input)?), values.image),
         None => (None, Vec::new()),
     };
-    let api = match transport {
-        VintedPublicationTransport::Native => apis.native,
-        VintedPublicationTransport::Web => apis.web,
-    };
-    let result = VintedPublication::new(session, api, apis.readiness)
-        .execute(portal, operation, input, images)
+    let result = VintedPublication::new(api)
+        .execute(operation, input, images)
         .await?;
     let next_actions = publication_next_actions(portal, result.item_id.as_deref());
     Ok(CommandOutcome::new(CommandData::VintedPublication(result)).with_next_actions(next_actions))

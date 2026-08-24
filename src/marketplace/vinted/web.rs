@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ffi::OsStr,
     fs,
     io::{Read, Write},
@@ -61,6 +62,9 @@ impl AgentBrowserSession {
     }
 
     pub fn open(&self) -> Result<(), AppError> {
+        if self.evaluate("location.origin === 'https://www.vinted.fi'")? == Value::Bool(true) {
+            return Ok(());
+        }
         let output = self.run(["--json", "open", web_publication_url()], None)?;
         decode_success(&output).map(|_| ())
     }
@@ -77,6 +81,13 @@ impl AgentBrowserSession {
     }
 
     pub fn csrf_token(&self) -> Result<String, AppError> {
+        if let Some(token) = self
+            .evaluate("window.__fleaCsrfToken || localStorage.getItem('__fleaCsrfToken') || null")?
+            .as_str()
+            .filter(|token| valid_csrf_token(token))
+        {
+            return Ok(token.to_owned());
+        }
         let output = self.run(
             [
                 "--json",
@@ -88,18 +99,19 @@ impl AgentBrowserSession {
             None,
         )?;
         let data = decode_success(&output)?;
+        let mut seen_urls = HashSet::new();
         let request_ids = data
             .get("requests")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter(|request| {
-                request
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .is_some_and(|url| url.contains(".js"))
+            .rev()
+            .filter_map(|request| {
+                let url = request.get("url").and_then(Value::as_str)?;
+                let request_id = request.get("requestId").and_then(Value::as_str)?;
+                (url.contains(".js") && seen_urls.insert(url.to_owned()))
+                    .then(|| request_id.to_owned())
             })
-            .filter_map(|request| request.get("requestId").and_then(Value::as_str))
             .collect::<Vec<_>>();
 
         for request_ids in request_ids.chunks(4) {
@@ -122,7 +134,12 @@ impl AgentBrowserSession {
                     .and_then(Value::as_str)
                     .and_then(extract_csrf_token)
                 {
-                    return Ok(token.to_owned());
+                    let token = token.to_owned();
+                    let encoded = serde_json::to_string(&token).expect("CSRF token serializes");
+                    self.evaluate(&format!(
+                        "window.__fleaCsrfToken = {encoded}; localStorage.setItem('__fleaCsrfToken', {encoded}); true"
+                    ))?;
+                    return Ok(token);
                 }
             }
         }
@@ -304,11 +321,14 @@ fn extract_csrf_token(body: &str) -> Option<&str> {
     let marker = "X-CSRF-Token\",\"";
     let start = body.find(marker)? + marker.len();
     let token = body.get(start..)?.split('"').next()?;
-    (token.len() == 36
+    valid_csrf_token(token).then_some(token)
+}
+
+fn valid_csrf_token(token: &str) -> bool {
+    token.len() == 36
         && token
             .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-'))
-    .then_some(token)
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
 }
 
 fn active_cdp_endpoint(_profile: &Path) -> Option<String> {

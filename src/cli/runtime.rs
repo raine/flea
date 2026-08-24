@@ -36,7 +36,7 @@ use crate::{
                 HttpVintedListingApi, VintedListingApi, VintedListingRequest, VintedListingResult,
                 VintedListings,
             },
-            publication::{HttpVintedPublicationApi, VintedPublicationApi},
+            publication::VintedPublicationApi,
             publication_discovery::{
                 HttpVintedPublicationDiscoveryApi, VintedPublicationDiscoveryApi,
             },
@@ -75,7 +75,6 @@ pub struct ApplicationDependencies {
     vinted_draft: Arc<dyn VintedDraftApi>,
     vinted_listing: Arc<dyn VintedListingApi>,
     vinted_publication: Arc<dyn VintedPublicationApi>,
-    vinted_web_publication: Arc<dyn VintedPublicationApi>,
     vinted_publication_discovery: Arc<dyn VintedPublicationDiscoveryApi>,
     vinted_readiness: Arc<dyn VintedReadinessApi>,
 }
@@ -99,8 +98,7 @@ impl ApplicationDependencies {
             vinted_item: Arc::new(HttpVintedItemApi::new()),
             vinted_draft: Arc::new(HttpVintedDraftApi::new()),
             vinted_listing: Arc::new(HttpVintedListingApi::new()),
-            vinted_publication: Arc::new(HttpVintedPublicationApi::new()),
-            vinted_web_publication: Arc::new(AgentBrowserVintedPublicationApi::new()),
+            vinted_publication: Arc::new(AgentBrowserVintedPublicationApi::new()),
             vinted_publication_discovery: Arc::new(HttpVintedPublicationDiscoveryApi::new()),
             vinted_readiness: Arc::new(HttpVintedReadinessApi::new()),
         }
@@ -166,11 +164,6 @@ impl ApplicationDependencies {
 
     pub fn with_vinted_publication_api(mut self, api: Arc<dyn VintedPublicationApi>) -> Self {
         self.vinted_publication = api;
-        self
-    }
-
-    pub fn with_vinted_web_publication_api(mut self, api: Arc<dyn VintedPublicationApi>) -> Self {
-        self.vinted_web_publication = api;
         self
     }
 
@@ -359,22 +352,13 @@ async fn execute_vinted(
                 args.command,
                 dependencies.vinted_search_session.as_ref(),
                 dependencies.vinted_publication.as_ref(),
-                dependencies.vinted_web_publication.as_ref(),
                 dependencies.vinted_draft.as_ref(),
-                dependencies.vinted_readiness.as_ref(),
             )
             .await
         }
         VintedCommand::Publish(args) => {
-            vinted_publish::execute_direct(
-                portal,
-                args,
-                dependencies.vinted_search_session.as_ref(),
-                dependencies.vinted_publication.as_ref(),
-                dependencies.vinted_web_publication.as_ref(),
-                dependencies.vinted_readiness.as_ref(),
-            )
-            .await
+            vinted_publish::execute_direct(portal, args, dependencies.vinted_publication.as_ref())
+                .await
         }
         VintedCommand::Item(args) => {
             let (item_id, raw) = match args.command {

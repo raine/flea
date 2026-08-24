@@ -569,9 +569,9 @@ mod tests {
     }
 
     #[test]
-    fn vinted_publication_accepts_web_transport() {
-        for args in [
-            vec![
+    fn vinted_publication_uses_the_browser_transport_without_selection() {
+        assert!(
+            Cli::try_parse_from([
                 "flea",
                 "vinted",
                 "publish",
@@ -579,21 +579,22 @@ mod tests {
                 "listing.json",
                 "--image",
                 "photo.jpg",
-                "--transport",
-                "web",
-            ],
-            vec![
+            ])
+            .is_ok()
+        );
+        assert!(Cli::try_parse_from(["flea", "vinted", "draft", "delete", "123"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
                 "flea",
                 "vinted",
                 "draft",
                 "delete",
                 "123",
                 "--transport",
-                "web",
-            ],
-        ] {
-            assert!(Cli::try_parse_from(args).is_ok());
-        }
+                "native",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
