@@ -429,6 +429,14 @@ and private temporary conversion artifacts are removed after processing.
 
 ## Development
 
+The validation suite uses [cargo-nextest](https://nexte.st/) to run tests in
+parallel. It is included in the Nix development shell. Install it for other
+development environments with:
+
+```sh
+cargo install cargo-nextest --locked
+```
+
 Run the repository validation suite with:
 
 ```sh

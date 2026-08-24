@@ -1417,7 +1417,7 @@ mod tests {
 
     #[test]
     fn output_bounds_and_encoding_are_deterministic() {
-        let image = DynamicImage::ImageRgb8(ImageBuffer::from_fn(3_000, 1_200, |x, y| {
+        let image = DynamicImage::ImageRgb8(ImageBuffer::from_fn(2_561, 2, |x, y| {
             let value = x.wrapping_mul(31).wrapping_add(y.wrapping_mul(17));
             Rgb([
                 value as u8,
