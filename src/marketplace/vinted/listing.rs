@@ -91,12 +91,21 @@ impl<'a> VintedListings<'a> {
                 let credentials = self.session.credentials(portal).await?;
                 let lookup = self.api.wardrobe_item(&credentials, &item_id).await?;
                 let detail = match lookup {
-                    ListingLookup::Missing => absent_detail(item_id, VintedListingState::Missing),
+                    ListingLookup::Missing => self
+                        .account_item(&credentials, &item_id)
+                        .await?
+                        .map_or_else(
+                            || Ok(absent_detail(item_id.clone(), VintedListingState::Missing)),
+                            |item| summary_detail(&item_id, &item),
+                        )?,
                     ListingLookup::Deleted => absent_detail(item_id, VintedListingState::Deleted),
                     ListingLookup::Found(wardrobe) => {
-                        let state = response_item(&wardrobe).map(normalize_state)?;
+                        let item = response_item(&wardrobe)?;
+                        let state = normalize_state(item);
                         if state == VintedListingState::Deleted {
                             absent_detail(item_id, state)
+                        } else if state == VintedListingState::Moderated {
+                            summary_detail(&item_id, &Value::Object(item.clone()))?
                         } else {
                             let edit = self.api.item_for_edit(&credentials, &item_id).await?;
                             normalize_detail(&item_id, &wardrobe, &edit)?
@@ -111,6 +120,45 @@ impl<'a> VintedListings<'a> {
                 Ok(VintedListingResult::Collection(Box::new(collection)))
             }
         }
+    }
+
+    async fn account_item(
+        &self,
+        credentials: &VintedCredentialRecord,
+        item_id: &str,
+    ) -> Result<Option<Value>, AppError> {
+        let mut inspected = 0;
+        let mut match_item = None;
+        for condition in ["active", "drafts"] {
+            let mut page = 1;
+            loop {
+                let raw = match self
+                    .api
+                    .wardrobe_items(credentials, condition, page, LIST_PAGE_SIZE)
+                    .await
+                {
+                    Ok(raw) => raw,
+                    Err(_) if match_item.is_some() => return Ok(match_item),
+                    Err(error) => return Err(error),
+                };
+                let (items, total_pages) = list_page(&raw)?;
+                inspected += items.len();
+                if match_item.is_none() {
+                    match_item = items
+                        .iter()
+                        .find(|item| identifier(item.get("id")).as_deref() == Some(item_id))
+                        .cloned();
+                }
+                if match_item.is_some() || page >= total_pages || inspected >= MAX_LIST_ITEMS {
+                    break;
+                }
+                page += 1;
+            }
+            if inspected >= MAX_LIST_ITEMS {
+                break;
+            }
+        }
+        Ok(match_item)
     }
 
     async fn list(
@@ -302,6 +350,36 @@ fn absent_detail(listing_id: String, state: VintedListingState) -> VintedListing
         photos: Vec::new(),
         canonical_url: None,
     }
+}
+
+fn summary_detail(expected_id: &str, item: &Value) -> Result<VintedListingDetail, AppError> {
+    let summary = normalize_summary(item)?;
+    if summary.listing_id != expected_id {
+        return Err(invalid_response(
+            "listing response returned a different item ID",
+        ));
+    }
+    Ok(VintedListingDetail {
+        listing_id: summary.listing_id,
+        state: summary.state,
+        title: summary.title,
+        description: None,
+        price: summary.price,
+        condition: None,
+        category: None,
+        brand: None,
+        colors: Vec::new(),
+        shipping: None,
+        photos: item
+            .get("photos")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(order, photo)| normalize_photo(order, photo))
+            .collect(),
+        canonical_url: summary.canonical_url,
+    })
 }
 
 fn normalize_detail(

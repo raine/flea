@@ -39,7 +39,7 @@ impl VintedListingApi for FixtureApi {
             .push(format!("wardrobe:{item_id}"));
         let result = match item_id {
             "9001" => Ok(ListingLookup::Found(fixture("published-wardrobe"))),
-            "9002" => Ok(ListingLookup::Missing),
+            "9002" | "9004" | "9005" | "9006" => Ok(ListingLookup::Missing),
             "9003" => Ok(ListingLookup::Deleted),
             _ => panic!("unexpected item ID"),
         };
@@ -73,6 +73,50 @@ impl VintedListingApi for FixtureApi {
             _ => panic!("unexpected condition"),
         }));
         Box::pin(async move { result })
+    }
+}
+
+struct FailingApi;
+
+impl VintedListingApi for FailingApi {
+    fn wardrobe_item<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        item_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<ListingLookup, AppError>> + Send + 'a>> {
+        Box::pin(async move {
+            if item_id == "9010" {
+                Err(AppError::upstream(
+                    "fixture.detail_failed",
+                    "detail endpoint failed",
+                ))
+            } else {
+                Ok(ListingLookup::Missing)
+            }
+        })
+    }
+
+    fn item_for_edit<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        _item_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        panic!("editable detail should not be requested")
+    }
+
+    fn wardrobe_items<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        _condition: &'a str,
+        _page: usize,
+        _per_page: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async {
+            Err(AppError::upstream(
+                "fixture.collection_failed",
+                "collection endpoint failed",
+            ))
+        })
     }
 }
 
@@ -154,6 +198,63 @@ async fn publication_item_id_resolves_immediately_without_search_indexing() {
 }
 
 #[tokio::test]
+async fn moderated_listing_falls_back_to_account_summary() {
+    let api = FixtureApi::new();
+    let session = |_| Ok(credentials());
+    let result = VintedListings::new(&session, &api)
+        .execute(
+            PortalId::Fi,
+            VintedListingRequest::Show {
+                item_id: "9004".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    let VintedListingResult::Detail(detail) = result else {
+        panic!("expected listing detail")
+    };
+
+    assert_eq!(detail.state, VintedListingState::Moderated);
+    assert_eq!(detail.title.as_deref(), Some("Bicycle lock pending review"));
+    assert_eq!(
+        detail.canonical_url.as_deref(),
+        Some("https://www.vinted.fi/items/9004-bicycle-lock")
+    );
+    assert_eq!(detail.photos[0].id.as_deref(), Some("51"));
+    assert!(detail.description.is_none());
+    assert!(detail.shipping.is_none());
+    assert_eq!(
+        api.calls.lock().unwrap().as_slice(),
+        ["wardrobe:9004", "list:active:1:100", "list:drafts:1:100"]
+    );
+}
+
+#[tokio::test]
+async fn active_account_state_wins_for_duplicate_ids() {
+    let api = FixtureApi::new();
+    let session = |_| Ok(credentials());
+    let result = VintedListings::new(&session, &api)
+        .execute(
+            PortalId::Fi,
+            VintedListingRequest::Show {
+                item_id: "9006".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    let VintedListingResult::Detail(detail) = result else {
+        panic!("expected listing detail")
+    };
+
+    assert_eq!(detail.state, VintedListingState::Moderated);
+    assert_eq!(detail.title.as_deref(), Some("Duplicate pending listing"));
+    assert_eq!(
+        api.calls.lock().unwrap().as_slice(),
+        ["wardrobe:9006", "list:active:1:100", "list:drafts:1:100"]
+    );
+}
+
+#[tokio::test]
 async fn missing_and_deleted_states_do_not_request_editable_details() {
     let api = FixtureApi::new();
     let session = |_| Ok(credentials());
@@ -186,6 +287,50 @@ async fn missing_and_deleted_states_do_not_request_editable_details() {
 }
 
 #[tokio::test]
+async fn item_absent_from_detail_and_account_collections_is_missing() {
+    let api = FixtureApi::new();
+    let session = |_| Ok(credentials());
+    let result = VintedListings::new(&session, &api)
+        .execute(
+            PortalId::Fi,
+            VintedListingRequest::Show {
+                item_id: "9005".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+    let VintedListingResult::Detail(detail) = result else {
+        panic!("expected listing detail")
+    };
+
+    assert_eq!(detail.state, VintedListingState::Missing);
+    assert_eq!(
+        api.calls.lock().unwrap().as_slice(),
+        ["wardrobe:9005", "list:active:1:100", "list:drafts:1:100"]
+    );
+}
+
+#[tokio::test]
+async fn endpoint_errors_are_not_misclassified_as_absence() {
+    let session = |_| Ok(credentials());
+    for (item_id, expected_code) in [
+        ("9010", "fixture.detail_failed"),
+        ("9011", "fixture.collection_failed"),
+    ] {
+        let error = VintedListings::new(&session, &FailingApi)
+            .execute(
+                PortalId::Fi,
+                VintedListingRequest::Show {
+                    item_id: item_id.to_owned(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, expected_code);
+    }
+}
+
+#[tokio::test]
 async fn list_combines_active_and_draft_associated_items() {
     let api = FixtureApi::new();
     let session = |_| Ok(credentials());
@@ -196,13 +341,40 @@ async fn list_combines_active_and_draft_associated_items() {
     let VintedListingResult::Collection(collection) = result else {
         panic!("expected collection")
     };
-    assert_eq!(collection.count, 2);
-    assert_eq!(collection.active_count, 1);
+    assert_eq!(collection.count, 4);
+    assert_eq!(collection.active_count, 3);
     assert_eq!(collection.draft_count, 1);
-    assert_eq!(collection.listings[1].state, VintedListingState::Draft);
+    assert_eq!(collection.listings[3].state, VintedListingState::Draft);
     assert_eq!(
         api.calls.lock().unwrap().as_slice(),
         ["list:active:1:100", "list:drafts:1:100"]
+    );
+}
+
+#[test]
+fn cli_moderated_listing_succeeds_with_review_guidance() {
+    let api = Arc::new(FixtureApi::new());
+    let dependencies = flea::dependencies::ApplicationDependencies::production()
+        .with_vinted_credentials_provider(|_| Ok(credentials()))
+        .with_vinted_listing_api(api);
+    let result = run_with_dependencies(
+        [
+            "flea", "--format", "json", "vinted", "listing", "show", "9004",
+        ],
+        &dependencies,
+    );
+    let envelope: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"]["state"], "moderated");
+    assert_eq!(
+        envelope["warnings"][0]["code"],
+        "vinted_listing.under_review"
+    );
+    assert_eq!(
+        envelope["next_actions"][0]["command"],
+        "flea vinted --portal fi listing show 9004"
     );
 }
 

@@ -253,9 +253,12 @@ context together with the safe user action or Vinted URL.
 
 Publication output points to `vinted listing show ITEM_ID`, which reads the
 account wardrobe and editable item directly without waiting for search indexing.
-The result includes listing state, publication fields, photo order, shipping
-summary when disclosed, and canonical URL. Account listing enumeration combines
-active and draft-associated wardrobe items within a fixed output bound.
+During Vinted review, inspection falls back to the bounded account collections
+and returns `state: moderated` with available summary fields and canonical URL.
+Follow its next action after waiting for review instead of changing listing
+input. Editable fields, photo order, and shipping details appear when Vinted
+makes them available. Account listing enumeration combines active and
+draft-associated wardrobe items within a fixed output bound.
 
 Run command help for current syntax, constraints, and examples:
 

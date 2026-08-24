@@ -8,7 +8,10 @@ use crate::{
         },
         category, draft, favorite, listing, saved_search, vinted_category, vinted_publish,
     },
-    domain::envelope::NextAction,
+    domain::{
+        envelope::{NextAction, Warning},
+        vinted_listing::VintedListingState,
+    },
     error::{AppError, ExitClass},
     marketplace::{
         MarketplaceContext, MarketplaceId, PortalId, marketplace, marketplaces,
@@ -397,9 +400,26 @@ async fn execute_vinted(
             .execute(portal, request)
             .await?
             {
-                VintedListingResult::Detail(detail) => Ok(CommandOutcome::new(
-                    CommandData::VintedListingDetail(*detail),
-                )),
+                VintedListingResult::Detail(detail) => {
+                    let moderated = detail.state == VintedListingState::Moderated;
+                    let review_action = NextAction {
+                        command: format!(
+                            "flea vinted --portal {portal} listing show {}",
+                            detail.listing_id
+                        ),
+                    };
+                    let mut outcome =
+                        CommandOutcome::new(CommandData::VintedListingDetail(*detail));
+                    if moderated {
+                        outcome = outcome
+                            .with_warnings(vec![Warning {
+                                code: "vinted_listing.under_review".to_owned(),
+                                message: "Vinted is reviewing this listing; wait for review before changing listing input".to_owned(),
+                            }])
+                            .with_next_actions(vec![review_action]);
+                    }
+                    Ok(outcome)
+                }
                 VintedListingResult::Collection(collection) => Ok(CommandOutcome::new(
                     CommandData::VintedListingCollection(*collection),
                 )),
