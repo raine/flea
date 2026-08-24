@@ -171,7 +171,10 @@ fn composer_readiness_omits_discovery_catalogs_and_reports_validation() {
             "title":"Lock", "description":"Steel lock", "catalog_id":4380,
             "price":"10.00", "currency":"EUR", "package_size_id":1,
             "brand_id":22, "brand":"Abus", "color_ids":[3],
-            "item_attributes":[{"code":"condition","ids":[6]}]
+            "item_attributes":[
+                {"code":"condition","ids":[6]},
+                {"code":"size","ids":[42]}
+            ]
         }))
         .unwrap(),
     )
@@ -242,7 +245,10 @@ fn composer_links_supplied_brand_to_focused_category_discovery() {
             "catalog_id":4380,"price":"25.00","currency":"EUR",
             "package_size_id":1,"brand_id":123456,
             "brand":"Vibram Fivefingers","color_ids":[3],
-            "item_attributes":[{"code":"condition","ids":[6]}]
+            "item_attributes":[
+                {"code":"condition","ids":[6]},
+                {"code":"size","ids":[42]}
+            ]
         }"#,
     )
     .unwrap();
