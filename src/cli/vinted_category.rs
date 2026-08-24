@@ -15,8 +15,9 @@ use crate::{
             composer::{
                 PublicationCategoryCollection, PublicationCategorySuggestion,
                 VintedComposerReadiness, VintedPublicationComposer, categories_for_search,
-                category_suggestions_from_search, publication_attribute_definitions,
-                publication_attribute_options, selection_command,
+                category_suggestions_from_search, local_category_fallback,
+                publication_attribute_definitions, publication_attribute_options,
+                selection_command,
             },
             publication_discovery::{
                 DiscoveryRequest, DiscoveryScope, PublicationDiscoveryOutput,
@@ -185,15 +186,26 @@ pub async fn execute(
         let catalogs = api
             .execute(&credentials, &DiscoveryRequest::Catalogs)
             .await?;
-        let categories = categories_for_search(&response, &catalogs);
+        let mut categories = categories_for_search(&response, &catalogs);
+        let used_local_fallback = categories.is_empty();
+        if used_local_fallback {
+            categories = local_category_fallback(&query, &catalogs, 8);
+        }
         let suggestions = category_suggestions_from_search(&response);
         let count = categories.len();
-        let guidance = (count == 0).then(|| {
-            format!(
+        let guidance = if used_local_fallback && count > 0 {
+            Some(format!(
+                "Vinted's localized category service returned no direct matches on portal {portal} with locale {}. These leaf categories are locally ranked from the runtime catalog.",
+                VINTED_FI_BINDING.iso_locale
+            ))
+        } else if count == 0 {
+            Some(format!(
                 "Vinted's localized category service returned no matches for this query on portal {portal} with locale {}. Browse the localized catalog or try a Vinted-provided suggestion when available.",
                 VINTED_FI_BINDING.iso_locale
-            )
-        });
+            ))
+        } else {
+            None
+        };
         let mut next_actions = category_search_next_actions(&query, count, &suggestions);
         next_actions.extend(
             categories
@@ -437,6 +449,55 @@ mod tests {
                 "flea vinted --portal fi category list",
                 "flea vinted --portal fi category search 'reppu'"
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_upstream_results_offer_ranked_local_leaf_categories() {
+        let api = FixtureApi {
+            search: json!({"catalog_ids":[]}),
+            catalogs: json!({"catalogs":[
+                {"id":100,"title":"Miehet","catalogs":[
+                    {"id":110,"title":"Kengät","catalogs":[
+                        {"id":1453,"title":"Juoksukengät","catalogs":[]},
+                        {"id":2678,"title":"Vaelluskengät","catalogs":[]}
+                    ]}
+                ]}
+            ]}),
+            requests: Mutex::new(Vec::new()),
+        };
+        let session = |_| Ok(credentials());
+        let outcome = execute(
+            PortalId::Fi,
+            VintedCategoryCommand::Search {
+                keyword: "paljasjalkakengät".into(),
+            },
+            &session,
+            &api,
+        )
+        .await
+        .unwrap();
+
+        let CommandData::VintedCategories(result) = outcome.data else {
+            panic!("expected normalized category search output");
+        };
+        assert_eq!(result.categories[0].id, 1453);
+        assert!(
+            result
+                .guidance
+                .as_deref()
+                .unwrap()
+                .contains("locally ranked")
+        );
+        assert_eq!(
+            outcome.next_actions[0].command,
+            "flea vinted --portal fi category compose 1453"
+        );
+        assert!(
+            outcome
+                .next_actions
+                .iter()
+                .all(|action| !action.command.ends_with("category list"))
         );
     }
 

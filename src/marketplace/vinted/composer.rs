@@ -259,6 +259,93 @@ pub fn categories_for_search(search: &Value, catalogs: &Value) -> Vec<Publicatio
     categories
 }
 
+pub fn local_category_fallback(
+    query: &str,
+    catalogs: &Value,
+    limit: usize,
+) -> Vec<PublicationCategory> {
+    let normalized_query = normalize_category_text(query);
+    if normalized_query.len() < 3 || limit == 0 {
+        return Vec::new();
+    }
+
+    let mut terms = vec![(normalized_query.clone(), 100_u32)];
+    for (needle, category_term) in [
+        ("paljasjalk", "juoksukengat"),
+        ("varvaskenk", "juoksukengat"),
+        ("fivefinger", "juoksukengat"),
+        ("barefoot", "juoksukengat"),
+    ] {
+        if normalized_query.contains(needle) {
+            terms.push((category_term.to_owned(), 80));
+        }
+    }
+
+    let mut ranked = categories_from_response(catalogs)
+        .into_iter()
+        .filter(|category| category.leaf)
+        .filter_map(|category| {
+            let title = normalize_category_text(&category.title);
+            let path = category
+                .path
+                .iter()
+                .map(|segment| normalize_category_text(segment))
+                .collect::<Vec<_>>();
+            let mut score = 0_u32;
+
+            for (term, weight) in &terms {
+                if title == *term {
+                    score += weight * 10;
+                } else if title.contains(term) || term.contains(&title) {
+                    score += weight * 6;
+                }
+                if path.iter().any(|segment| segment == term) {
+                    score += weight * 3;
+                } else if path
+                    .iter()
+                    .any(|segment| segment.contains(term) || term.contains(segment))
+                {
+                    score += weight;
+                }
+            }
+
+            for segment in &path {
+                if segment.len() >= 4 && normalized_query.contains(segment) {
+                    score += 40;
+                }
+            }
+
+            (score > 0).then_some((score, category))
+        })
+        .collect::<Vec<_>>();
+    ranked.sort_by(|(left_score, left), (right_score, right)| {
+        right_score
+            .cmp(left_score)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    if terms.len() > 1
+        && let Some(best_score) = ranked.first().map(|(score, _)| *score)
+    {
+        ranked.retain(|(score, _)| *score == best_score);
+    }
+    ranked.truncate(limit);
+    ranked.into_iter().map(|(_, category)| category).collect()
+}
+
+fn normalize_category_text(value: &str) -> String {
+    value
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter_map(|character| match character {
+            'ä' | 'å' => Some('a'),
+            'ö' => Some('o'),
+            character if character.is_alphanumeric() => Some(character),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn category_suggestions_from_search(search: &Value) -> Vec<PublicationCategorySuggestion> {
     let mut keywords = Vec::new();
     let mut seen = BTreeSet::new();
@@ -1367,6 +1454,28 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn local_category_fallback_maps_barefoot_terms_to_running_shoes() {
+        let catalogs = json!({"catalogs":[
+            {"id":100,"title":"Miehet","catalogs":[
+                {"id":110,"title":"Kengät","catalogs":[
+                    {"id":111,"title":"Juoksukengät","catalogs":[]},
+                    {"id":112,"title":"Vaelluskengät","catalogs":[]}
+                ]}
+            ]},
+            {"id":200,"title":"Koti","catalogs":[
+                {"id":210,"title":"Matot","catalogs":[]}
+            ]}
+        ]});
+
+        let result = local_category_fallback("paljasjalkakengät", &catalogs, 8);
+
+        assert_eq!(result[0].id, 111);
+        assert_eq!(result[0].path, ["Miehet", "Kengät", "Juoksukengät"]);
+        assert!(result.iter().all(|category| category.leaf));
+        assert!(!result.iter().any(|category| category.id == 210));
     }
 
     #[test]
