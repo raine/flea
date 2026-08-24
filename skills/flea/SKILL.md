@@ -39,6 +39,10 @@ Discover filters after changing query or category. Retrieve lazy options with
 filter flags or repeatable `--attribute CODE=ID[,ID...]`. Prices accept two
 decimal places. Omit the query to browse and add `--include-facets` for filters.
 
+Shopping queries are multilingual and can match listings from connected markets.
+`item show` preserves the seller's original text; Vinted's buyer-facing web UI
+translates listing text and offers the original.
+
 Vinted is shipping-first, so location filtering is unavailable. Inspect search
 IDs. `seller.seller_disclosed_location` is exposure-permitted
 seller profile data, not a catalog filter or guaranteed item location. Never
@@ -60,6 +64,12 @@ flea vinted draft delete DRAFT_ID
 flea vinted publish --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
 ```
+
+Publication category search uses portal-localized taxonomy labels, unlike
+multilingual shopping search. Use Finnish category terms on the `fi` portal and
+treat the returned category IDs as opaque. Write listing text naturally in the
+seller's language; rely on Vinted's buyer-facing translation instead of creating
+translated duplicate listings.
 
 Completion reuses photos; `--image` replaces them. Complete verification
 manually, inspect before retrying, and clear cookies with `auth web logout`.
