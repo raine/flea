@@ -1458,16 +1458,16 @@ mod tests {
             Box::pin(async { Ok(json!({"upload_session_id": "fixture-session"})) })
         }
 
-        fn fetch_draft<'a>(
+        fn fetch_item<'a>(
             &'a self,
-            draft_id: &'a str,
+            item_id: &'a str,
         ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
             Box::pin(async move {
                 let state = self.editable_state.lock().unwrap().clone();
                 Ok(json!({
                     "item": {
-                        "id": draft_id,
-                        "is_draft": true,
+                        "id": item_id,
+                        "is_draft": item_id != "84",
                         "title": state["title"],
                         "description": state["description"],
                         "manufacturer": state["manufacturer"],
@@ -1575,7 +1575,7 @@ mod tests {
             .await
             .unwrap();
         let created_state = api
-            .fetch_draft(created.draft_id.as_deref().unwrap())
+            .fetch_item(created.draft_id.as_deref().unwrap())
             .await
             .unwrap();
         assert_eq!(created_state["item"]["title"], listing.title);
@@ -1585,11 +1585,14 @@ mod tests {
             json!(listing.manufacturer)
         );
 
-        VintedPublication::new(&api)
+        let completed = VintedPublication::new(&api)
             .execute(completion(), Some(listing.clone()), Vec::new())
             .await
             .unwrap();
-        let completed_state = api.fetch_draft("42").await.unwrap();
+        let completed_state = api
+            .fetch_item(completed.item_id.as_deref().unwrap())
+            .await
+            .unwrap();
         assert_eq!(completed_state["item"]["title"], listing.title);
         assert_eq!(completed_state["item"]["description"], listing.description);
         assert_eq!(

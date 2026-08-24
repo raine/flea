@@ -85,7 +85,7 @@ fn vinted_publication_discovery_guides_the_category_and_attribute_chain() {
     assert_eq!(search["data"]["categories"][0]["id"], 4380);
     assert_eq!(
         search["next_actions"][0]["command"],
-        "flea vinted category compose 4380"
+        "flea vinted --portal fi category compose 4380"
     );
 
     let compose = run_discovery_json(&["vinted", "category", "compose", "4380"]);

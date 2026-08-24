@@ -66,11 +66,10 @@ flea vinted publish --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
 ```
 
-Publication category search sends keywords to Vinted's portal-localized
-taxonomy service. Output reports the portal and request locale, resolves opaque
-IDs through the localized catalog, and preserves upstream aliases or
-suggestions. Use Finnish terms on `fi`; after zero results, follow suggestions
-or browse `category list`. Follow a leaf result's `next_actions` into
+Publication category search uses portal-localized taxonomy labels. Output
+reports the portal and request locale, resolves opaque IDs through the localized
+catalog, and preserves upstream aliases or suggestions. Use Finnish terms on
+`fi`; after zero results, follow suggestions or browse `category list`. Follow a leaf result's `next_actions` into
 `category compose`, the primary source for fields, options, issues, and
 correction actions.
 
