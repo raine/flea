@@ -396,6 +396,82 @@ impl<T: Transport> VintedAuthentication<T> {
         &self.transport
     }
 
+    pub async fn refresh_credentials(
+        &self,
+        credentials: &VintedCredentialRecord,
+        now_unix: u64,
+    ) -> Result<VintedCredentialRecord, AppError> {
+        let mut headers = native_headers(
+            &credentials.device_uuid,
+            &credentials.anonymous_id,
+            refresh_execution_error,
+        )?;
+        insert_header(
+            &mut headers,
+            "x-v-udt",
+            credentials.user_device_token.as_deref().unwrap_or(""),
+        )
+        .map_err(refresh_execution_error)?;
+        let request = transport_request(
+            Method::POST,
+            format!("{}/oauth/token", self.portal_base_url),
+            headers,
+            form_body(&[
+                ("client_id", CLIENT_ID),
+                ("grant_type", "refresh_token"),
+                ("scope", SCOPE),
+                ("refresh_token", &credentials.refresh_token),
+            ]),
+        );
+        let response = self
+            .transport
+            .execute(request)
+            .await
+            .map_err(refresh_execution_error)?;
+        ensure_refresh_success(response.status)?;
+        let user_device_token = response
+            .headers
+            .get("x-v-udt")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| credentials.user_device_token.clone());
+        let decoded: RefreshTokenResponse =
+            decode_json(response, "refresh_token_exchange").map_err(classify_malformed_refresh)?;
+        let expires_in = decoded
+            .expires_in
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                classify_malformed_refresh(unexpected_response("refresh_token_exchange"))
+            })?;
+        if decoded.access_token.is_empty() || !decoded.token_type.eq_ignore_ascii_case("bearer") {
+            return Err(classify_malformed_refresh(unexpected_response(
+                "refresh_token_exchange",
+            )));
+        }
+        let refresh_token = decoded
+            .refresh_token
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| credentials.refresh_token.clone());
+        let access_expires_at_unix = now_unix.checked_add(expires_in).ok_or_else(clock_error)?;
+        let mut refreshed = VintedCredentialRecord {
+            access_token: decoded.access_token,
+            refresh_token,
+            access_expires_at_unix,
+            user_device_token,
+            ..credentials.clone()
+        };
+        let (user_id, login) = self
+            .validate_credentials(&refreshed)
+            .await
+            .map_err(classify_refresh_validation)?;
+        refreshed.user_id = user_id;
+        refreshed.login = login;
+        StoredCredential::validate(&refreshed)
+            .map_err(|_| classify_malformed_refresh(unexpected_response("refresh_validation")))?;
+        Ok(refreshed)
+    }
+
     pub async fn validate_credentials(
         &self,
         credentials: &VintedCredentialRecord,
@@ -463,7 +539,7 @@ impl<T: Transport> VintedAuthentication<T> {
     }
 
     #[cfg(test)]
-    fn with_portal_base_url(mut self, portal_base_url: String) -> Self {
+    pub(crate) fn with_portal_base_url(mut self, portal_base_url: String) -> Self {
         self.portal_base_url = portal_base_url;
         self
     }
@@ -500,6 +576,16 @@ impl std::fmt::Debug for VintedTokens {
 struct TokenResponse {
     access_token: String,
     refresh_token: String,
+    token_type: String,
+    #[serde(default)]
+    expires_in: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct RefreshTokenResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
     token_type: String,
     #[serde(default)]
     expires_in: Option<u64>,
@@ -696,6 +782,19 @@ fn token_execution_error(error: TransportError) -> AppError {
     }
 }
 
+fn refresh_execution_error(error: TransportError) -> AppError {
+    if let Some(status) = error.status
+        && let Err(status_error) = ensure_refresh_success(status)
+    {
+        return status_error;
+    }
+    if error.phase == TransportErrorPhase::Response {
+        classify_malformed_refresh(unexpected_response("refresh_token_exchange")).with_source(error)
+    } else {
+        refresh_transport_error().with_source(error)
+    }
+}
+
 fn validation_execution_error(error: TransportError) -> AppError {
     if let Some(status) = error.status
         && let Err(status_error) = ensure_validation_success(status)
@@ -744,6 +843,39 @@ fn ensure_token_success(status: StatusCode) -> Result<(), AppError> {
     })))
 }
 
+fn ensure_refresh_success(status: StatusCode) -> Result<(), AppError> {
+    if status.is_success() {
+        return Ok(());
+    }
+    if status == StatusCode::BAD_REQUEST
+        || status == StatusCode::UNAUTHORIZED
+        || status == StatusCode::FORBIDDEN
+    {
+        return Err(restart_error(
+            "vinted_auth.refresh_rejected",
+            "Vinted rejected the stored refresh credentials; browser login is required",
+        )
+        .with_details(serde_json::json!({
+            "stage": "refresh_token_exchange",
+            "status": status.as_u16()
+        })));
+    }
+    let mut error = AppError::upstream(
+        "vinted_auth.refresh_unavailable",
+        "Vinted could not refresh the stored session; the stored credentials were preserved",
+    )
+    .with_details(serde_json::json!({
+        "stage": "refresh_token_exchange",
+        "status": status.as_u16()
+    }))
+    .retry_classification(crate::retry::RetryClassification {
+        upstream_transient: status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS,
+        safe_to_retry: true,
+    });
+    error.next_actions.push(status_action());
+    Err(error)
+}
+
 fn ensure_validation_success(status: StatusCode) -> Result<(), AppError> {
     if status.is_success() {
         return Ok(());
@@ -773,6 +905,58 @@ fn token_transport_error() -> AppError {
         "the Vinted token exchange could not be completed; restart browser login because the authorization-code outcome is ambiguous",
     )
     .with_details(serde_json::json!({ "stage": "token_exchange" }))
+}
+
+fn refresh_transport_error() -> AppError {
+    let mut error = AppError::upstream(
+        "vinted_auth.refresh_transport_failed",
+        "the Vinted session refresh could not reach the upstream service; the stored credentials were preserved",
+    )
+    .with_details(serde_json::json!({ "stage": "refresh_token_exchange" }))
+    .retry_classification(crate::retry::RetryClassification {
+        upstream_transient: true,
+        safe_to_retry: true,
+    });
+    error.next_actions.push(status_action());
+    error
+}
+
+fn classify_malformed_refresh(mut error: AppError) -> AppError {
+    error.code = "vinted_auth.refresh_malformed".to_owned();
+    error.message =
+        "Vinted returned a malformed session refresh response; the stored credentials were preserved"
+            .to_owned();
+    error.exit_class = ExitClass::Upstream;
+    error.upstream_transient = true;
+    error.safe_to_retry = true;
+    error.next_actions.clear();
+    error.next_actions.push(status_action());
+    error
+}
+
+fn classify_refresh_validation(error: AppError) -> AppError {
+    if error.code == "vinted_auth.validation_rejected" {
+        return restart_error(
+            "vinted_auth.refresh_rejected",
+            "Vinted rejected the refreshed session; browser login is required",
+        )
+        .with_details(serde_json::json!({ "stage": "refresh_validation" }));
+    }
+    if error.code == "vinted_auth.unexpected_response" {
+        return classify_malformed_refresh(error);
+    }
+    let mut classified = AppError::upstream(
+        "vinted_auth.refresh_validation_failed",
+        "the refreshed Vinted session could not be validated; the stored credentials were preserved",
+    )
+    .with_details(serde_json::json!({ "stage": "refresh_validation" }))
+    .retry_classification(crate::retry::RetryClassification {
+        upstream_transient: true,
+        safe_to_retry: true,
+    })
+    .with_source(error);
+    classified.next_actions.push(status_action());
+    classified
 }
 
 fn validation_transport_error() -> AppError {
@@ -807,6 +991,12 @@ fn restart_error(code: &str, message: &str) -> AppError {
 fn restart_action() -> NextAction {
     NextAction {
         command: crate::invocation::vinted_fi("auth login"),
+    }
+}
+
+fn status_action() -> NextAction {
+    NextAction {
+        command: crate::invocation::vinted_fi("auth status"),
     }
 }
 
@@ -1048,6 +1238,155 @@ mod tests {
         assert_eq!(
             error.next_actions[0].command,
             "flea vinted --portal fi auth login"
+        );
+    }
+
+    fn stored_credentials() -> VintedCredentialRecord {
+        VintedCredentialRecord {
+            portal: PortalId::Fi,
+            user_id: "42".to_owned(),
+            login: Some("old-login".to_owned()),
+            access_token: "access-old".to_owned(),
+            refresh_token: "refresh-old".to_owned(),
+            access_expires_at_unix: 900,
+            device_uuid: "device-secret".to_owned(),
+            anonymous_id: "anonymous-secret".to_owned(),
+            user_device_token: Some("device-token-old".to_owned()),
+        }
+    }
+
+    #[tokio::test]
+    async fn refreshes_and_validates_rotated_credentials() {
+        let token_body = serde_json::json!({
+            "access_token": "access-new",
+            "refresh_token": "refresh-new",
+            "token_type": "Bearer",
+            "expires_in": 3600
+        })
+        .to_string();
+        let current_body = serde_json::json!({
+            "user": { "id": 42, "login": "current-login" }
+        })
+        .to_string();
+        let (base_url, requests, worker) = mock_service(vec![
+            ("200 OK", token_body, vec![("X-V-Udt", "device-token-new")]),
+            ("200 OK", current_body, Vec::new()),
+        ]);
+        let auth = VintedAuthentication::new().with_portal_base_url(base_url);
+
+        let refreshed = auth
+            .refresh_credentials(&stored_credentials(), 1_000)
+            .await
+            .unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(refreshed.access_token, "access-new");
+        assert_eq!(refreshed.refresh_token, "refresh-new");
+        assert_eq!(refreshed.access_expires_at_unix, 4_600);
+        assert_eq!(refreshed.login.as_deref(), Some("current-login"));
+        assert_eq!(
+            refreshed.user_device_token.as_deref(),
+            Some("device-token-new")
+        );
+        let requests = requests.lock().unwrap();
+        assert!(requests[0].contains("grant_type=refresh_token"));
+        assert!(requests[0].contains("refresh_token=refresh-old"));
+        assert!(requests[1].starts_with("GET /api/v2/users/current HTTP/1.1"));
+        assert!(requests[1].contains("authorization: Bearer access-new"));
+    }
+
+    #[tokio::test]
+    async fn refresh_preserves_the_token_when_rotation_is_omitted() {
+        let token_body = serde_json::json!({
+            "access_token": "access-new",
+            "token_type": "Bearer",
+            "expires_in": 60
+        })
+        .to_string();
+        let current_body = serde_json::json!({ "user": { "id": "42" } }).to_string();
+        let (base_url, _, worker) = mock_service(vec![
+            ("200 OK", token_body, Vec::new()),
+            ("200 OK", current_body, Vec::new()),
+        ]);
+        let auth = VintedAuthentication::new().with_portal_base_url(base_url);
+
+        let refreshed = auth
+            .refresh_credentials(&stored_credentials(), 1_000)
+            .await
+            .unwrap();
+        worker.join().unwrap();
+
+        assert_eq!(refreshed.refresh_token, "refresh-old");
+        assert_eq!(refreshed.user_device_token, Some("device-token-old".into()));
+    }
+
+    #[tokio::test]
+    async fn rejected_refresh_requires_browser_login_without_exposing_secrets() {
+        let body = r#"{"error":"invalid_grant","error_description":"refresh-old"}"#;
+        let (base_url, _, worker) =
+            mock_service(vec![("400 Bad Request", body.to_owned(), Vec::new())]);
+        let auth = VintedAuthentication::new().with_portal_base_url(base_url);
+
+        let error = auth
+            .refresh_credentials(&stored_credentials(), 1_000)
+            .await
+            .unwrap_err();
+        worker.join().unwrap();
+
+        assert_eq!(error.code, "vinted_auth.refresh_rejected");
+        assert!(!error.safe_to_retry);
+        assert_eq!(
+            error.next_actions[0].command,
+            "flea vinted --portal fi auth login"
+        );
+        let debug = format!("{error:?}");
+        for secret in ["refresh-old", "access-old", "device-secret"] {
+            assert!(!debug.contains(secret));
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_refresh_is_safe_to_retry() {
+        let (base_url, _, worker) = mock_service(vec![(
+            "200 OK",
+            r#"{"access_token":"access-new","token_type":"Bearer"}"#.to_owned(),
+            Vec::new(),
+        )]);
+        let auth = VintedAuthentication::new().with_portal_base_url(base_url);
+
+        let error = auth
+            .refresh_credentials(&stored_credentials(), 1_000)
+            .await
+            .unwrap_err();
+        worker.join().unwrap();
+
+        assert_eq!(error.code, "vinted_auth.refresh_malformed");
+        assert!(error.upstream_transient);
+        assert!(error.safe_to_retry);
+        assert_eq!(
+            error.next_actions[0].command,
+            "flea vinted --portal fi auth status"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_transport_failure_is_safe_to_retry() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        let auth = VintedAuthentication::new().with_portal_base_url(base_url);
+
+        let error = auth
+            .refresh_credentials(&stored_credentials(), 1_000)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "vinted_auth.refresh_transport_failed");
+        assert!(error.upstream_transient);
+        assert!(error.safe_to_retry);
+        assert_eq!(
+            error.next_actions[0].command,
+            "flea vinted --portal fi auth status"
         );
     }
 }

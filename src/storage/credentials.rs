@@ -70,6 +70,7 @@ impl<R: StoredCredential, W: AtomicFileStore> TypedCredentialStore<R, W> {
         })
     }
 
+    #[cfg(test)]
     pub fn load(&self) -> Result<Option<R>, CredentialStoreError> {
         self.lock()?.load()
     }

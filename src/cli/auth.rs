@@ -81,7 +81,7 @@ pub enum VintedAuthCommand {
     Login,
     #[command(
         about = "Show authentication status",
-        long_about = "Validate the stored Vinted session with local expiry and an online account request."
+        long_about = "Refresh the stored Vinted session when needed and validate it with an online account request."
     )]
     Status,
     #[command(

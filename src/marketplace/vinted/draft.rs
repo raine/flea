@@ -158,7 +158,7 @@ impl<'a> VintedDrafts<'a> {
         request: DraftListRequest,
     ) -> Result<VintedDraftCollection, AppError> {
         validate_page(&request)?;
-        let credentials = self.session.credentials(portal)?;
+        let credentials = self.session.credentials(portal).await?;
         let document = self.api.list(&credentials, &request).await?;
         normalize_collection(&document.body, &request)
     }
@@ -169,7 +169,7 @@ impl<'a> VintedDrafts<'a> {
         draft_id: &str,
     ) -> Result<VintedDraftState, AppError> {
         validate_draft_id(draft_id)?;
-        let credentials = self.session.credentials(portal)?;
+        let credentials = self.session.credentials(portal).await?;
         let document = self.api.show(&credentials, draft_id).await?;
         normalize_draft(document, draft_id)
     }

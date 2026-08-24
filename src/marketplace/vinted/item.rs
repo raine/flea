@@ -41,15 +41,30 @@ pub enum VintedItemResult {
 }
 
 pub trait VintedItemSession: Send + Sync {
-    fn credentials(&self, portal: PortalId) -> Result<VintedCredentialRecord, AppError>;
+    fn credentials<'a>(
+        &'a self,
+        portal: PortalId,
+    ) -> Pin<Box<dyn Future<Output = Result<VintedCredentialRecord, AppError>> + Send + 'a>>;
 }
 
 impl<F> VintedItemSession for F
 where
     F: Fn(PortalId) -> Result<VintedCredentialRecord, AppError> + Send + Sync,
 {
-    fn credentials(&self, portal: PortalId) -> Result<VintedCredentialRecord, AppError> {
-        self(portal)
+    fn credentials<'a>(
+        &'a self,
+        portal: PortalId,
+    ) -> Pin<Box<dyn Future<Output = Result<VintedCredentialRecord, AppError>> + Send + 'a>> {
+        Box::pin(std::future::ready(self(portal)))
+    }
+}
+
+impl VintedItemSession for super::session::VintedCredentialResolver {
+    fn credentials<'a>(
+        &'a self,
+        portal: PortalId,
+    ) -> Pin<Box<dyn Future<Output = Result<VintedCredentialRecord, AppError>> + Send + 'a>> {
+        Box::pin(self.credentials(portal))
     }
 }
 
@@ -77,7 +92,7 @@ impl<'a> VintedItems<'a> {
         request: VintedItemRequest,
     ) -> Result<VintedItemResult, AppError> {
         validate_item_id(&request.item_id)?;
-        let credentials = self.session.credentials(portal)?;
+        let credentials = self.session.credentials(portal).await?;
         let raw = self.api.item(&credentials, &request.item_id).await?;
         let detail = normalize_item(&raw, &request.item_id)?;
         if request.raw {

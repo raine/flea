@@ -129,7 +129,7 @@ pub async fn execute_readiness(
     session: &dyn VintedSearchSession,
     readiness_api: &dyn VintedReadinessApi,
 ) -> Result<CommandOutcome, AppError> {
-    let credentials = session.credentials(portal)?;
+    let credentials = session.credentials(portal).await?;
     let result = readiness_api.readiness(&credentials).await?;
     Ok(CommandOutcome::new(
         CommandData::VintedPublicationReadiness(result),

@@ -143,7 +143,7 @@ pub async fn execute(
         }
     };
     validate_request(&request)?;
-    let credentials = session.credentials(portal)?;
+    let credentials = session.credentials(portal).await?;
     let response = api.execute(&credentials, &request).await?;
     if normalize_categories {
         let catalogs = api

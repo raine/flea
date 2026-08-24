@@ -73,15 +73,30 @@ pub enum SearchResult {
 }
 
 pub trait VintedSearchSession: Send + Sync {
-    fn credentials(&self, portal: PortalId) -> Result<VintedCredentialRecord, AppError>;
+    fn credentials<'a>(
+        &'a self,
+        portal: PortalId,
+    ) -> Pin<Box<dyn Future<Output = Result<VintedCredentialRecord, AppError>> + Send + 'a>>;
 }
 
 impl<F> VintedSearchSession for F
 where
     F: Fn(PortalId) -> Result<VintedCredentialRecord, AppError> + Send + Sync,
 {
-    fn credentials(&self, portal: PortalId) -> Result<VintedCredentialRecord, AppError> {
-        self(portal)
+    fn credentials<'a>(
+        &'a self,
+        portal: PortalId,
+    ) -> Pin<Box<dyn Future<Output = Result<VintedCredentialRecord, AppError>> + Send + 'a>> {
+        Box::pin(std::future::ready(self(portal)))
+    }
+}
+
+impl VintedSearchSession for super::session::VintedCredentialResolver {
+    fn credentials<'a>(
+        &'a self,
+        portal: PortalId,
+    ) -> Pin<Box<dyn Future<Output = Result<VintedCredentialRecord, AppError>> + Send + 'a>> {
+        Box::pin(self.credentials(portal))
     }
 }
 
@@ -108,7 +123,7 @@ impl<'a> VintedSearch<'a> {
         portal: PortalId,
         input: SearchRequest,
     ) -> Result<SearchResult, AppError> {
-        let credentials = self.session.credentials(portal)?;
+        let credentials = self.session.credentials(portal).await?;
         let raw_output = input.raw;
         let request = prepare_request(input)?;
         let raw = self.api.execute(&credentials, &request).await?;

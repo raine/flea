@@ -88,7 +88,7 @@ impl<'a> VintedListings<'a> {
         match request {
             VintedListingRequest::Show { item_id } => {
                 validate_item_id(&item_id)?;
-                let credentials = self.session.credentials(portal)?;
+                let credentials = self.session.credentials(portal).await?;
                 let lookup = self.api.wardrobe_item(&credentials, &item_id).await?;
                 let detail = match lookup {
                     ListingLookup::Missing => absent_detail(item_id, VintedListingState::Missing),
@@ -106,7 +106,7 @@ impl<'a> VintedListings<'a> {
                 Ok(VintedListingResult::Detail(Box::new(detail)))
             }
             VintedListingRequest::List => {
-                let credentials = self.session.credentials(portal)?;
+                let credentials = self.session.credentials(portal).await?;
                 let collection = self.list(&credentials).await?;
                 Ok(VintedListingResult::Collection(Box::new(collection)))
             }

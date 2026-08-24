@@ -69,7 +69,7 @@ impl<'a> VintedPublicationComposer<'a> {
         category_id: u64,
         supplied: Option<Value>,
     ) -> Result<VintedComposer, AppError> {
-        let credentials = self.session.credentials(portal)?;
+        let credentials = self.session.credentials(portal).await?;
         let catalogs = self
             .api
             .execute(&credentials, &DiscoveryRequest::Catalogs)

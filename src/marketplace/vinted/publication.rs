@@ -180,7 +180,7 @@ impl<'a> VintedPublication<'a> {
         validate_operation(&operation, input.as_ref(), &image_paths).map_err(|error| {
             publication_error(error, &operation, &[], MutationStatus::NotAttempted)
         })?;
-        let credentials = self.session.credentials(portal).map_err(|error| {
+        let credentials = self.session.credentials(portal).await.map_err(|error| {
             publication_error(error, &operation, &[], MutationStatus::NotAttempted)
         })?;
 
