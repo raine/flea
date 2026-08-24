@@ -10,6 +10,12 @@
   exposure-aware seller-disclosed location fields
 - Add direct Vinted account listing inspection and bounded active and draft
   enumeration without relying on search indexing
+- Vinted catalog search supports categories, common and dynamic attributes,
+  decimal price ranges, every catalog sort order, pagination, and raw output
+- Vinted filter commands discover active filters, retrieve lazy facets, and
+  search contextual option lists such as brands
+- Nested Vinted options preserve hierarchy, counts, selected state, metadata,
+  totals, and truncation in the shared facet output
 
 ## v0.1.2 (2026-08-23)
 

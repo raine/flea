@@ -1,0 +1,8 @@
+{
+  "options": [
+    { "id": "53", "title": "Fixture Brand", "items_count": 7 },
+    { "id": "88", "title": "Example Label", "items_count": 5 }
+  ],
+  "selected_filters": { "code": "brand", "ids": ["53"] },
+  "is_selection_highlighted": true
+}

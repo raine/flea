@@ -1,7 +1,7 @@
 use clap::Parser;
 use flea::{
     cli::{
-        Cli, Command, ToriCommand, category::CategoryCommand, draft::DraftCommand,
+        Cli, Command, ToriCommand, VintedCommand, category::CategoryCommand, draft::DraftCommand,
         listing::ListingCommand, search::SearchSort,
     },
     output::OutputFormat,
@@ -36,16 +36,34 @@ fn every_command_leaf_parses() {
             "search",
             "takki",
             "--price-from",
-            "10",
+            "10.50",
             "--price-to",
-            "50",
+            "50.25",
             "--sort",
             "newest",
             "--page",
             "2",
             "--limit",
             "20",
+            "--catalog",
+            "123",
+            "--brand",
+            "53,88",
+            "--size",
+            "4",
+            "--condition",
+            "1,2",
+            "--color",
+            "7",
+            "--material",
+            "12,14",
+            "--attribute",
+            "contextual_code=90,91",
+            "--include-facets",
         ],
+        vec!["flea", "vinted", "filter", "list"],
+        vec!["flea", "vinted", "filter", "facets", "brand"],
+        vec!["flea", "vinted", "filter", "search", "brand", "Marimekko"],
         vec!["flea", "marketplaces"],
         vec!["flea", "capabilities"],
         vec!["flea", "tori", "category", "search", "chairs"],
@@ -396,6 +414,68 @@ fn clap_rejects_duplicate_scalar_search_flags() {
         "flea", "tori", "search", "chair", "--page", "1", "--page", "2",
     ]);
     assert!(result.is_err());
+}
+
+#[test]
+fn parses_vinted_dynamic_filters_and_filter_discovery() {
+    let cli = Cli::parse_from([
+        "flea",
+        "vinted",
+        "search",
+        "takki",
+        "--catalog",
+        "123",
+        "--brand",
+        "53,88",
+        "--status",
+        "1",
+        "--attribute",
+        "contextual_code=90,91",
+        "--price-from",
+        "10.50",
+        "--include-facets",
+    ]);
+    let Command::Vinted(vinted) = cli.command else {
+        panic!("expected Vinted command");
+    };
+    let VintedCommand::Search(search) = vinted.command else {
+        panic!("expected Vinted search command");
+    };
+    assert_eq!(search.query.as_deref(), Some("takki"));
+    assert_eq!(search.context.catalog, ["123"]);
+    assert_eq!(search.context.brand, ["53", "88"]);
+    assert_eq!(search.context.status, ["1"]);
+    assert_eq!(search.context.price_from.unwrap().as_str(), "10.50");
+    assert!(search.include_facets);
+
+    let cli = Cli::parse_from([
+        "flea",
+        "vinted",
+        "filter",
+        "search",
+        "brand",
+        "Mari",
+        "--query",
+        "mekko",
+        "--catalog",
+        "123",
+    ]);
+    let Command::Vinted(vinted) = cli.command else {
+        panic!("expected Vinted command");
+    };
+    assert!(matches!(vinted.command, VintedCommand::Filter(_)));
+}
+
+#[test]
+fn vinted_prices_and_raw_facet_combinations_reject_malformed_input() {
+    for arguments in [
+        vec!["flea", "vinted", "search", "--price-from", "1e3"],
+        vec!["flea", "vinted", "search", "--price-from", "10.001"],
+        vec!["flea", "vinted", "search", "--raw", "--include-facets"],
+        vec!["flea", "vinted", "search", "--attribute", "missing-equals"],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err());
+    }
 }
 
 #[test]

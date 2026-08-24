@@ -167,6 +167,31 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(search.contains("Helsinki-area example:"));
     assert!(search.contains("--area Helsinki,Espoo,Vantaa"));
 
+    let vinted = stdout(&invoke(&["vinted", "--help"]));
+    assert!(vinted.contains("search        Search Vinted listings"));
+    assert!(vinted.contains("filter        Discover and search contextual Vinted filters"));
+
+    let vinted_search = stdout(&invoke(&["vinted", "search", "--help"]));
+    for flag in [
+        "--catalog",
+        "--brand",
+        "--size",
+        "--status",
+        "--color",
+        "--material",
+        "--attribute",
+        "--include-facets",
+        "--raw",
+    ] {
+        assert!(vinted_search.contains(flag), "missing {flag}");
+    }
+    assert!(vinted_search.contains("--price-from 10.50"));
+
+    let vinted_filter = stdout(&invoke(&["vinted", "filter", "--help"]));
+    assert!(vinted_filter.contains("list    Discover contextual Vinted catalog filters"));
+    assert!(vinted_filter.contains("facets  Retrieve options for a lazy or truncated filter"));
+    assert!(vinted_filter.contains("search  Search options within a contextual Vinted filter"));
+
     let auth = stdout(&invoke(&["tori", "auth", "--help"]));
     assert!(auth.contains("login   Sign in through the browser"));
     assert!(auth.contains("status  Show authentication status"));

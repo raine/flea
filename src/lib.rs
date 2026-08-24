@@ -43,9 +43,7 @@ pub mod dependencies {
                     PrerequisiteCheck, PublicationReadiness, ReadinessState,
                     SellingPrerequisiteType, SessionReadiness, VintedReadinessApi,
                 },
-                search::{
-                    CatalogueSearchRequest, SearchResult as VintedSearchResult, VintedSearchApi,
-                },
+                search::{SearchResult as VintedSearchResult, VintedSearchApi},
             },
         },
         transport::{

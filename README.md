@@ -2,8 +2,8 @@
 
 `flea` gives coding agents explicit command trees for Tori.fi and Vinted.
 Tori supports listing workflows. Vinted supports persisted browser
-authentication, search, item inspection, source-derived draft operations, and
-publication.
+authentication, contextual catalog search, item inspection, source-derived
+draft operations, and publication.
 
 ## Why flea?
 
@@ -118,6 +118,28 @@ Authenticated operations cover:
   publication, and deletion
 - Published listing inspection, updates, sold-state transitions, and deletion
 
+Vinted catalog operations require authentication. Filter codes and option IDs
+are contextual data, so discover them before applying catalog or dynamic
+selections:
+
+```sh
+flea vinted auth login
+flea vinted filter list --query takki
+flea vinted filter facets catalog --query takki
+flea vinted filter search brand Marimekko --query takki
+flea vinted search takki --catalog 123 --brand 53 --status 1
+flea vinted search mekko --price-from 10.50 --price-to 80 --sort newest
+flea vinted search --attribute contextual_code=10,20 --include-facets
+```
+
+`--catalog`, `--brand`, `--size`, `--status` (condition), `--color`, and
+`--material` are shortcuts for Vinted attributes. Use repeatable
+`--attribute CODE=ID[,ID...]` for active filter codes returned by discovery.
+Search supports browsing without text, every Vinted sort order, decimal euro
+prices, pagination, bounded results, contextual facets, and exact upstream
+`--raw` output. Lazy and truncated filters use `filter facets`; searchable
+option lists use `filter search`.
+
 Authenticated Vinted search results can be inspected by their numeric item ID:
 
 ```sh
@@ -201,9 +223,11 @@ The result includes listing state, publication fields, photo order, shipping
 summary when disclosed, and canonical URL. Account listing enumeration combines
 active and draft-associated wardrobe items within a fixed output bound.
 
-Run command help for current syntax and constraints:
+Run command help for current syntax, constraints, and examples:
 
 ```sh
+flea vinted search --help
+flea vinted filter --help
 flea tori search --help
 flea tori favorite --help
 flea tori saved-search --help

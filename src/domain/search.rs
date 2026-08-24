@@ -99,6 +99,18 @@ pub struct SearchFacet {
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<SearchFacetRange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_type: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lazy: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub selection_highlighted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -176,4 +188,24 @@ pub struct LocationCollection {
     pub returned: usize,
     pub total: usize,
     pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct FilterCollection {
+    pub filters: Vec<SearchFacet>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub option_query: Option<String>,
+    pub returned: usize,
+    pub total: usize,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub applied_filters: Vec<AppliedFilter>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }

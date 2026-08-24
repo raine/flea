@@ -1,0 +1,56 @@
+{
+  "filters": [
+    {
+      "id": "catalog-filter",
+      "title": "Category",
+      "code": "catalog",
+      "selection_type": "single",
+      "display_type": "list",
+      "is_hidden": false,
+      "is_lazy": false,
+      "position": 1,
+      "options": [
+        {
+          "id": "100",
+          "title": "Clothing",
+          "items_count": 40,
+          "options": [
+            {
+              "id": "123",
+              "title": "Coats",
+              "items_count": 12,
+              "options": [
+                { "id": "124", "title": "Wool coats", "items_count": 3 }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "brand-filter",
+      "title": "Brand",
+      "code": "brand",
+      "selection_type": "multi",
+      "display_type": "list_search",
+      "is_lazy": true,
+      "total_count_max": 8,
+      "options": [
+        { "id": "53", "title": "Fixture Brand", "items_count": 7 }
+      ]
+    },
+    {
+      "id": "context-filter",
+      "title": "Contextual",
+      "code": "fixture_context",
+      "selection_type": "multi",
+      "display_type": "grid",
+      "is_hidden": true,
+      "options": []
+    }
+  ],
+  "selected_filters": [
+    { "code": "catalog", "ids": ["124"] },
+    { "code": "brand", "ids": ["53"] }
+  ]
+}

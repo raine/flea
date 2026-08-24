@@ -1,0 +1,10 @@
+{
+  "filter_code": "brand",
+  "total_count": 8,
+  "total_count_max": 8,
+  "options": [
+    { "id": "53", "title": "Fixture Brand", "items_count": 7 },
+    { "id": "88", "title": "Example Label", "items_count": 5 },
+    { "id": "99", "title": "Sample Label", "items_count": 2 }
+  ]
+}

@@ -619,6 +619,12 @@ fn normalize_facet(value: &Value, option_limit: usize) -> SearchFacet {
         returned_option_count,
         truncated: option_count > option_limit,
         range,
+        selection_type: None,
+        display_type: None,
+        hidden: false,
+        lazy: false,
+        selection_highlighted: false,
+        position: None,
     }
 }
 

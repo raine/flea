@@ -23,15 +23,25 @@ support.
 
 Vinted search requires authentication. Tokens are short-lived and Flea cannot
 refresh them, so follow the login action for missing or expired sessions.
+Filter codes and option IDs are contextual. Discover them instead of
+guessing or reusing examples.
 
 ```sh
 flea vinted auth status
 flea vinted auth login
+flea vinted filter list [--query TEXT] [filters]
+flea vinted filter facets CODE [--query TEXT] [filters]
+flea vinted filter search CODE OPTION_TEXT [--query TEXT] [filters]
 flea vinted search [QUERY] [--price-from EUR] [--price-to EUR]
 flea vinted search [QUERY] --sort relevance|newest|price-asc|price-desc
 flea vinted search [QUERY] --page PAGE --limit LIMIT
 flea vinted item show ITEM_ID [--raw]
 ```
+
+Discover filters after changing query or category. Retrieve lazy options with
+`filter facets`; search brands with `filter search`. Apply IDs using the common
+filter flags or repeatable `--attribute CODE=ID[,ID...]`. Prices accept two
+decimal places. Omit the query to browse and add `--include-facets` for filters.
 
 Inspect search IDs. `seller.seller_disclosed_location` is exposure-permitted
 seller profile data, not a catalog filter or guaranteed item location. Never

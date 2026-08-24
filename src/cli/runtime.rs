@@ -393,7 +393,25 @@ async fn execute_vinted(
             VintedSearchResult::Search(collection) => {
                 Ok(CommandOutcome::new(CommandData::Search(*collection)))
             }
+            VintedSearchResult::Filters(collection) => {
+                Ok(CommandOutcome::new(CommandData::Filters(collection)))
+            }
             VintedSearchResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
+        },
+        VintedCommand::Filter(args) => match VintedSearch::new(
+            dependencies.vinted_search_session.as_ref(),
+            dependencies.vinted_search.as_ref(),
+        )
+        .execute_filter(portal, args.command.into())
+        .await?
+        {
+            VintedSearchResult::Filters(collection) => {
+                Ok(CommandOutcome::new(CommandData::Filters(collection)))
+            }
+            VintedSearchResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
+            VintedSearchResult::Search(collection) => {
+                Ok(CommandOutcome::new(CommandData::Search(*collection)))
+            }
         },
         VintedCommand::Unsupported(parts) => Err(capability_unavailable(
             MarketplaceContext::VINTED_FI,
