@@ -177,13 +177,37 @@ fn invalid_plain_auth_output_falls_back_to_the_exact_structured_failure() {
 }
 
 #[test]
-fn skill_output_stays_plain_when_json_is_requested() {
+fn skill_output_uses_the_envelope_when_json_is_requested() {
     let result = run_with_dependencies(
-        ["flea", "skill", "--format", "json"],
+        ["flea", "skill", "vinted", "--format", "json"],
         &ApplicationDependencies::production(),
     );
 
     assert_eq!(result.exit_code, 0);
-    assert_eq!(result.presentation, Presentation::PlainStdout);
-    assert_eq!(result.document, include_str!("../skills/flea/SKILL.md"));
+    assert_eq!(result.presentation, Presentation::Structured);
+    let envelope: Value = serde_json::from_str(&result.document).unwrap();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"]["skill"], "vinted");
+    assert_eq!(
+        envelope["data"]["document"],
+        include_str!("../skills/flea/vinted.md")
+    );
+}
+
+#[test]
+fn skill_output_uses_the_envelope_when_toon_is_requested() {
+    let result = run_with_dependencies(
+        ["flea", "--format", "toon", "skill", "tori"],
+        &ApplicationDependencies::production(),
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.presentation, Presentation::Structured);
+    let envelope: Value = toon_format::decode_default(&result.document).unwrap();
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"]["skill"], "tori");
+    assert_eq!(
+        envelope["data"]["document"],
+        include_str!("../skills/flea/tori.md")
+    );
 }

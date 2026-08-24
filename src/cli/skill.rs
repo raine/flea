@@ -9,7 +9,9 @@ use serde::Serialize;
 use crate::error::{AppError, ExitClass};
 
 const SKILL_NAME: &str = "flea";
-const SKILL_CONTENT: &str = include_str!("../../skills/flea/SKILL.md");
+const ROUTER_SKILL_CONTENT: &str = include_str!("../../skills/flea/SKILL.md");
+const TORI_SKILL_CONTENT: &str = include_str!("../../skills/flea/tori.md");
+const VINTED_SKILL_CONTENT: &str = include_str!("../../skills/flea/vinted.md");
 
 #[derive(Debug, Args)]
 pub struct SkillArgs {
@@ -20,8 +22,18 @@ pub struct SkillArgs {
 #[derive(Debug, Subcommand)]
 pub enum SkillCommand {
     #[command(
-        about = "Install the flea skill for coding agents",
-        long_about = "Install the bundled flea skill into one or more supported coding-agent skill directories."
+        about = "Print the complete Tori operating guide",
+        long_about = "Print the complete bundled Tori operating guide as Markdown."
+    )]
+    Tori,
+    #[command(
+        about = "Print the complete Vinted operating guide",
+        long_about = "Print the complete bundled Vinted operating guide as Markdown."
+    )]
+    Vinted,
+    #[command(
+        about = "Install the flea router skill for coding agents",
+        long_about = "Install the bundled flea router skill into one or more supported coding-agent skill directories."
     )]
     Install(SkillInstallArgs),
 }
@@ -75,17 +87,36 @@ impl AgentTarget {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SkillDocument {
+    Router,
+    Tori,
+    Vinted,
+    Install,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SkillOutput {
+    pub skill: SkillDocument,
     pub document: String,
 }
 
 pub fn dispatch(args: SkillArgs) -> Result<SkillOutput, AppError> {
     match args.command {
-        None => Ok(SkillOutput {
-            document: SKILL_CONTENT.to_owned(),
-        }),
+        None => Ok(skill_document(SkillDocument::Router, ROUTER_SKILL_CONTENT)),
+        Some(SkillCommand::Tori) => Ok(skill_document(SkillDocument::Tori, TORI_SKILL_CONTENT)),
+        Some(SkillCommand::Vinted) => {
+            Ok(skill_document(SkillDocument::Vinted, VINTED_SKILL_CONTENT))
+        }
         Some(SkillCommand::Install(args)) => install(args),
+    }
+}
+
+fn skill_document(skill: SkillDocument, document: &str) -> SkillOutput {
+    SkillOutput {
+        skill,
+        document: document.to_owned(),
     }
 }
 
@@ -126,7 +157,7 @@ fn install(args: SkillInstallArgs) -> Result<SkillOutput, AppError> {
             skill_error(format!("cannot create skill directory for {}", target.name))
                 .with_source(error)
         })?;
-        fs::write(&path, SKILL_CONTENT).map_err(|error| {
+        fs::write(&path, ROUTER_SKILL_CONTENT).map_err(|error| {
             skill_error(format!("cannot install skill for {}", target.name)).with_source(error)
         })?;
         document.push_str(&format!(
@@ -136,7 +167,10 @@ fn install(args: SkillInstallArgs) -> Result<SkillOutput, AppError> {
         ));
     }
 
-    Ok(SkillOutput { document })
+    Ok(SkillOutput {
+        skill: SkillDocument::Install,
+        document,
+    })
 }
 
 fn all_agents(home: &Path) -> Vec<AgentTarget> {

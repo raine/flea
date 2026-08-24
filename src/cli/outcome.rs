@@ -135,6 +135,7 @@ pub enum PlainOutput {
         authenticated: bool,
     },
     Document(String),
+    SkillDocument(String),
 }
 
 #[derive(Debug, Default)]
@@ -178,6 +179,11 @@ impl CommandOutcome {
 
     pub fn with_plain_document(mut self, document: String) -> Self {
         self.presentation = CommandPresentation::Plain(PlainOutput::Document(document));
+        self
+    }
+
+    pub fn with_skill_document(mut self, document: String) -> Self {
+        self.presentation = CommandPresentation::Plain(PlainOutput::SkillDocument(document));
         self
     }
 

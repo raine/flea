@@ -4,7 +4,9 @@ use std::{
     process::{Command, Output},
 };
 
-const CANONICAL_SKILL: &str = include_str!("../skills/flea/SKILL.md");
+const ROUTER_SKILL: &str = include_str!("../skills/flea/SKILL.md");
+const TORI_SKILL: &str = include_str!("../skills/flea/tori.md");
+const VINTED_SKILL: &str = include_str!("../skills/flea/vinted.md");
 
 fn invoke(home: &Path, cwd: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_flea"))
@@ -24,33 +26,78 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
-fn skill_prints_the_project_skill_source() {
+fn skill_prints_the_compact_router() {
     let directory = tempfile::tempdir().unwrap();
     let output = invoke(directory.path(), directory.path(), &["skill"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), CANONICAL_SKILL);
-    assert!(CANONICAL_SKILL.contains("draft validate DRAFT_ID"));
-    assert!(CANONICAL_SKILL.contains("draft publish DRAFT_ID --if-revision"));
-    assert!(CANONICAL_SKILL.contains(".data.revision"));
-    assert!(CANONICAL_SKILL.contains("Use `taxonomy_value` with `search --category`"));
-    assert!(CANONICAL_SKILL.contains("flea vinted search [QUERY]"));
-    assert!(CANONICAL_SKILL.contains("flea vinted item show ITEM_ID"));
-    assert!(CANONICAL_SKILL.contains("seller profile data"));
-    assert!(CANONICAL_SKILL.contains("not a catalog filter or guaranteed item location"));
-    assert!(CANONICAL_SKILL.contains("search requires authentication"));
-    let words = CANONICAL_SKILL.split_whitespace().count();
-    assert!(
-        words <= 600,
-        "skill grew beyond its primer budget: {words} words"
-    );
+    assert_eq!(stdout(&output), ROUTER_SKILL);
+    assert!(ROUTER_SKILL.contains("flea skill tori"));
+    assert!(ROUTER_SKILL.contains("flea skill vinted"));
+    assert!(ROUTER_SKILL.contains("Before searching, inspecting listings"));
+    assert!(ROUTER_SKILL.split_whitespace().count() <= 200);
+    assert!(!ROUTER_SKILL.contains("draft publish DRAFT_ID"));
     assert!(stderr(&output).is_empty());
+}
+
+#[test]
+fn tori_skill_preserves_complete_operating_guidance() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = invoke(directory.path(), directory.path(), &["skill", "tori"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), TORI_SKILL);
+    for guidance in [
+        "flea tori search [QUERY] [filters]",
+        "flea tori location search [NAME]",
+        "flea tori category search QUERY",
+        "favorite add|remove LISTING_ID",
+        "saved-search list|show|create|update|delete",
+        "draft validate DRAFT_ID",
+        "draft publish DRAFT_ID --if-revision",
+        ".data.revision",
+        "listing list|show|update|dispose|delete",
+        "Use `taxonomy_value` with `search --category`",
+    ] {
+        assert!(TORI_SKILL.contains(guidance), "missing {guidance}");
+    }
+    assert!(!TORI_SKILL.contains("flea vinted"));
+}
+
+#[test]
+fn vinted_skill_preserves_complete_operating_guidance() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = invoke(directory.path(), directory.path(), &["skill", "vinted"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), VINTED_SKILL);
+    for guidance in [
+        "search requires authentication",
+        "flea vinted filter facets CODE",
+        "flea vinted filter search CODE OPTION_TEXT",
+        "flea vinted search [QUERY]",
+        "flea vinted item show ITEM_ID",
+        "multilingual",
+        "portal-localized taxonomy labels",
+        "seller profile",
+        "not a catalog filter or guaranteed item location",
+        "flea vinted category compose CATEGORY_ID",
+        "flea vinted draft publish DRAFT_ID",
+        "flea vinted listing show ITEM_ID",
+    ] {
+        assert!(VINTED_SKILL.contains(guidance), "missing {guidance}");
+    }
+    assert!(!VINTED_SKILL.contains("flea tori"));
 }
 
 #[test]
 fn skill_install_targets_an_explicit_agent() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path();
+    let unrelated = home.join(".claude/skills/unrelated/SKILL.md");
+    fs::create_dir_all(unrelated.parent().unwrap()).unwrap();
+    fs::write(&unrelated, "unrelated skill\n").unwrap();
+
     let output = invoke(home, home, &["skill", "install", "--agent", "claude"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
@@ -60,8 +107,9 @@ fn skill_install_targets_an_explicit_agent() {
     );
     assert_eq!(
         fs::read_to_string(home.join(".claude/skills/flea/SKILL.md")).unwrap(),
-        CANONICAL_SKILL
+        ROUTER_SKILL
     );
+    assert_eq!(fs::read_to_string(unrelated).unwrap(), "unrelated skill\n");
     assert!(!home.join(".codex/skills/flea/SKILL.md").exists());
 }
 
@@ -86,7 +134,7 @@ fn skill_install_defaults_to_detected_user_and_workspace_agents() {
         home.join(".config/opencode/skills/flea/SKILL.md"),
         home.join(".codex/skills/flea/SKILL.md"),
     ] {
-        assert_eq!(fs::read_to_string(path).unwrap(), CANONICAL_SKILL);
+        assert_eq!(fs::read_to_string(path).unwrap(), ROUTER_SKILL);
     }
 }
 

@@ -200,7 +200,13 @@ pub async fn dispatch(
         Command::Vinted(args) => execute_vinted(args.portal, args.command, dependencies).await,
         Command::Skill(args) => super::skill::dispatch(args).map(|output| {
             let document = output.document.clone();
-            CommandOutcome::new(CommandData::Skill(output)).with_plain_document(document)
+            let is_install = matches!(output.skill, super::skill::SkillDocument::Install);
+            let outcome = CommandOutcome::new(CommandData::Skill(output));
+            if is_install {
+                outcome.with_plain_document(document)
+            } else {
+                outcome.with_skill_document(document)
+            }
         }),
         Command::Unsupported(parts) => Err(unsupported_root_command(&parts)),
     }

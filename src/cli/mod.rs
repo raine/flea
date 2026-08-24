@@ -40,6 +40,9 @@ pub struct Cli {
     #[arg(long, global = true, value_enum, default_value_t)]
     pub format: OutputFormat,
 
+    #[arg(skip)]
+    pub format_explicit: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }

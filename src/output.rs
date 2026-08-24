@@ -28,6 +28,7 @@ pub fn render<T: Serialize>(value: &T, format: OutputFormat) -> Result<String, A
 pub fn render_plain(
     presentation: &CommandPresentation,
     format: OutputFormat,
+    format_explicit: bool,
 ) -> Result<Option<String>, AppError> {
     match presentation {
         CommandPresentation::Structured => Ok(None),
@@ -48,5 +49,9 @@ pub fn render_plain(
         }
         CommandPresentation::Plain(PlainOutput::AuthenticationLogin { .. }) => Ok(None),
         CommandPresentation::Plain(PlainOutput::Document(document)) => Ok(Some(document.clone())),
+        CommandPresentation::Plain(PlainOutput::SkillDocument(document)) if !format_explicit => {
+            Ok(Some(document.clone()))
+        }
+        CommandPresentation::Plain(PlainOutput::SkillDocument(_)) => Ok(None),
     }
 }

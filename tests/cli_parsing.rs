@@ -149,6 +149,8 @@ fn every_command_leaf_parses() {
         vec!["flea", "tori", "saved-search", "delete", "alert-1"],
         vec!["flea", "tori", "location", "search", "Helsinki"],
         vec!["flea", "skill"],
+        vec!["flea", "skill", "tori"],
+        vec!["flea", "skill", "vinted"],
         vec!["flea", "skill", "install", "--agent", "claude"],
     ];
 

@@ -92,7 +92,13 @@ where
     let session = match DiagnosticsSession::initialize() {
         Ok(session) => session,
         Err(error) => {
-            return finish(cli.format, Err(error.into_app_error()), None, context);
+            return finish(
+                cli.format,
+                cli.format_explicit,
+                Err(error.into_app_error()),
+                None,
+                context,
+            );
         }
     };
     let dependencies = cli::runtime::ApplicationDependencies::production();
@@ -126,7 +132,16 @@ where
     #[cfg(not(test))]
     install_safe_panic_hook();
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    cli::Cli::try_parse_from(args).map_err(clap_presentation)
+    let format_explicit = args.iter().any(|arg| {
+        let value = arg.to_string_lossy();
+        value == "--format" || value.starts_with("--format=")
+    });
+    cli::Cli::try_parse_from(args)
+        .map(|mut cli| {
+            cli.format_explicit = format_explicit;
+            cli
+        })
+        .map_err(clap_presentation)
 }
 
 fn run_command(
@@ -135,10 +150,12 @@ fn run_command(
     diagnostics: Option<&DiagnosticsContext>,
 ) -> RunResult {
     let format = cli.format;
+    let format_explicit = cli.format_explicit;
     let context = cli.command.context();
     catch_unwind(AssertUnwindSafe(|| {
         finish(
             format,
+            format_explicit,
             execute_command(cli.command, dependencies),
             diagnostics,
             context,
@@ -147,6 +164,7 @@ fn run_command(
     .unwrap_or_else(|_| {
         finish(
             format,
+            format_explicit,
             Err(AppError::unexpected("command failed unexpectedly")),
             diagnostics,
             context,
@@ -180,13 +198,14 @@ fn clap_presentation(error: clap::Error) -> RunResult {
 
 fn finish(
     format: output::OutputFormat,
+    format_explicit: bool,
     result: Result<cli::outcome::CommandOutcome, AppError>,
     diagnostics: Option<&DiagnosticsContext>,
     context: Option<marketplace::MarketplaceContext>,
 ) -> RunResult {
     let (envelope, exit_code) = match result {
         Ok(outcome) => {
-            match output::render_plain(&outcome.presentation, format) {
+            match output::render_plain(&outcome.presentation, format, format_explicit) {
                 Ok(Some(document)) => {
                     return RunResult {
                         document,
@@ -195,7 +214,9 @@ fn finish(
                     };
                 }
                 Ok(None) => {}
-                Err(error) => return finish(format, Err(error), diagnostics, context),
+                Err(error) => {
+                    return finish(format, format_explicit, Err(error), diagnostics, context);
+                }
             }
             let mut envelope = Envelope::success(outcome.data);
             envelope.context = context;

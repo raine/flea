@@ -74,19 +74,28 @@ flea skill install --agent claude --agent codex
 | OpenCode | `~/.config/opencode/skills/flea/SKILL.md` |
 | Codex | `~/.codex/skills/flea/SKILL.md` |
 
-Print the embedded skill for inspection or custom integration:
+Print the compact router or a complete marketplace guide for inspection and
+custom integration:
 
 ```sh
 flea skill
+flea skill tori
+flea skill vinted
 ```
 
-The canonical skill lives at
-[`skills/flea/SKILL.md`](skills/flea/SKILL.md). Installed files are generated
-copies.
+The router lives at [`skills/flea/SKILL.md`](skills/flea/SKILL.md), with the
+standalone Tori and Vinted guides beside it. Installation registers only the
+router. It directs coding agents to load the matching guide from the installed
+flea binary before operating a marketplace, keeping guidance aligned with the
+binary version.
+
+Pass `--format toon` or `--format json` explicitly to receive the selected guide
+and its identifier in the standard structured envelope. Without an explicit
+format, each read command prints only its Markdown document.
 
 Once installed, ask the coding agent to perform the marketplace task in natural
-language. The skill directs it to discover machine values and inspect remote
-state.
+language. The router directs it to load the complete marketplace guide, discover
+machine values, and inspect remote state.
 
 ## Capabilities
 

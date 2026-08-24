@@ -198,7 +198,9 @@ fn help_tables_include_agent_oriented_summaries() {
     assert!(auth.contains("logout  Clear authentication state"));
 
     let skill = stdout(&invoke(&["skill", "--help"]));
-    assert!(skill.contains("install  Install the flea skill for coding agents"));
+    assert!(skill.contains("tori     Print the complete Tori operating guide"));
+    assert!(skill.contains("vinted   Print the complete Vinted operating guide"));
+    assert!(skill.contains("install  Install the flea router skill for coding agents"));
     assert!(skill.contains("flea skill [OPTIONS] [COMMAND]"));
 }
 
