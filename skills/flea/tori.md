@@ -5,9 +5,6 @@ description: Operate Tori.fi with flea.
 
 # Flea Tori guide
 
-TOON is default. Add `--format json` for JSON. Run `flea capabilities` for
-support.
-
 ## Rules
 
 - Treat IDs, revisions, and options as opaque. Discover them with `category`,

@@ -5,9 +5,6 @@ description: Operate Vinted with flea.
 
 # Flea Vinted guide
 
-TOON is default. Add `--format json` for JSON. Run `flea capabilities` for
-support.
-
 ## Rules
 
 - Treat IDs, revisions, and options as opaque. Use semantic listing values when

@@ -5,8 +5,10 @@ description: Route Tori.fi and Vinted tasks to flea's complete marketplace guide
 
 # Flea
 
-Use flea to operate Tori.fi and Vinted. TOON is default. Add `--format json`
-for JSON. Run `flea capabilities` for current support.
+Use flea to operate Tori.fi and Vinted. Keep the default TOON output for agent
+operations because it is token-efficient. Pass `--format json` only when a
+downstream command requires strict JSON for machine parsing. Run
+`flea capabilities` for current support.
 
 ## Load marketplace guidance
 
