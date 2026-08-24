@@ -21,10 +21,9 @@ support.
 
 ## Find Vinted listings
 
-Vinted search requires authentication. Tokens are short-lived and Flea cannot
-refresh them, so follow the login action for missing or expired sessions.
-Filter codes and option IDs are contextual. Discover them instead of
-guessing or reusing examples.
+Vinted search requires authentication. Follow login actions for missing or
+expired short-lived tokens. Filter codes and option IDs are contextual.
+Discover them instead of guessing or reusing examples.
 
 ```sh
 flea vinted auth status
@@ -43,9 +42,10 @@ Discover filters after changing query or category. Retrieve lazy options with
 filter flags or repeatable `--attribute CODE=ID[,ID...]`. Prices accept two
 decimal places. Omit the query to browse and add `--include-facets` for filters.
 
-Inspect search IDs. `seller.seller_disclosed_location` is exposure-permitted
-seller profile data, not a catalog filter or guaranteed item location. Never
-infer it from presentation text. `--raw` preserves upstream JSON.
+Vinted is shipping-first, so location filtering is unavailable. Inspect search
+IDs. `seller.seller_disclosed_location` is exposure-permitted seller profile
+data, not a guaranteed item location. Never infer it from presentation text.
+`--raw` preserves upstream JSON.
 
 ## Publish Vinted listings
 
