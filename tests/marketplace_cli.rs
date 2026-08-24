@@ -40,14 +40,20 @@ impl VintedPublicationDiscoveryApi for DiscoveryFixture {
                 }]}),
                 DiscoveryRequest::Attributes { .. } => {
                     let size_options = (0..1_500)
-                        .map(|index| json!({"id": index + 42, "title": format!("Size {index}")}))
+                        .map(|index| {
+                            json!({
+                                "id": index + 42,
+                                "title": format!("Size {index}"),
+                                "value": format!("eu_{}", index + 42)
+                            })
+                        })
                         .collect::<Vec<_>>();
                     json!({"attributes":[
                         {
                             "code":"condition",
                             "configuration":{
                                 "title":"Condition","required":true,
-                                "options":[{"id":6,"title":"Good"}]
+                                "options":[{"id":6,"title":"Good","code":"good"}]
                             }
                         },
                         {
@@ -79,12 +85,14 @@ impl VintedPublicationDiscoveryApi for DiscoveryFixture {
                     "brands":[{"id":22,"title":"Abus"}],
                     "disable_custom_brands":false
                 }),
-                DiscoveryRequest::Colors => json!({"colors":[{"id":3,"title":"Black"}]}),
+                DiscoveryRequest::Colors => {
+                    json!({"colors":[{"id":3,"title":"Black","code":"black"}]})
+                }
                 DiscoveryRequest::Configuration => json!({
                     "currencies":["EUR"],"minimum_price":"1.00","maximum_price":"10000.00"
                 }),
                 DiscoveryRequest::PackageSizes { .. } => {
-                    json!({"package_sizes":[{"id":1,"title":"Small"}]})
+                    json!({"package_sizes":[{"id":1,"title":"Small","code":"small"}]})
                 }
             })
         })
@@ -107,6 +115,13 @@ fn discovery_dependencies() -> ApplicationDependencies {
             ))
         })
         .with_vinted_publication_discovery_api(Arc::new(DiscoveryFixture))
+}
+
+fn run_discovery_result(args: &[&str]) -> flea::RunResult {
+    let arguments = std::iter::once("flea")
+        .chain(["--format", "json"])
+        .chain(args.iter().copied());
+    flea::run_with_dependencies(arguments, &discovery_dependencies())
 }
 
 fn run_discovery_document(format: &str, args: &[&str]) -> String {
@@ -353,6 +368,127 @@ fn composer_defaults_to_concise_readiness_and_reports_validation() {
         incomplete["next_actions"]
             .as_array()
             .is_some_and(|actions| !actions.is_empty())
+    );
+}
+
+#[test]
+fn composer_resolves_semantic_values_from_their_live_scoped_catalogs() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        serde_json::to_vec(&json!({
+            "title":"Lock", "description":"Steel lock", "catalog_id":4380,
+            "price":"10.00", "currency":"EUR",
+            "package_size":"small", "brand_id":22, "brand":"Abus",
+            "colors":["black"], "condition":"good", "size":"eu_42"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let output = run_discovery_json(&[
+        "vinted",
+        "category",
+        "compose",
+        "4380",
+        "--input",
+        file.path().to_str().unwrap(),
+        "--full",
+    ]);
+
+    assert_eq!(output["data"]["form"]["ready"], true);
+    assert_eq!(output["data"]["listing_input"]["package_size_id"], 1);
+    assert_eq!(output["data"]["listing_input"]["color_ids"], json!([3]));
+    assert_eq!(
+        output["data"]["listing_input"]["item_attributes"],
+        json!([
+            {"code":"size","ids":[42]},
+            {"code":"condition","ids":[6]}
+        ])
+    );
+    assert_eq!(
+        output["data"]["semantic_resolutions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|resolution| resolution["scope"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["selection", "selection", "portal", "category"]
+    );
+    assert!(
+        output["data"]["semantic_resolutions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|resolution| resolution.get("id").is_none())
+    );
+}
+
+#[test]
+fn composer_returns_correction_actions_for_unavailable_semantic_values() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), r#"{"colors":["violet"]}"#).unwrap();
+    let output = run_discovery_json(&[
+        "vinted",
+        "category",
+        "compose",
+        "4380",
+        "--input",
+        file.path().to_str().unwrap(),
+    ]);
+
+    assert_eq!(output["data"]["ready"], false);
+    let issue = output["data"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["field"] == "color")
+        .unwrap();
+    assert_eq!(issue["code"], "semantic_unavailable");
+    assert_eq!(issue["raw"]["scope"], "portal");
+    assert!(
+        output["data"]["next_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["field"] == "color"
+                && action["command"] == "flea vinted category colors")
+    );
+}
+
+#[test]
+fn direct_publication_stops_before_mutation_for_semantic_corrections() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        r#"{
+            "title":"Lock","description":"Steel lock","catalog_id":4380,
+            "price":"10.00","currency":"EUR","package_size":"small",
+            "brand_id":22,"brand":"Abus","colors":["violet"],
+            "condition":"good","size":"eu_42"
+        }"#,
+    )
+    .unwrap();
+    let result = run_discovery_result(&[
+        "vinted",
+        "publish",
+        "--input",
+        file.path().to_str().unwrap(),
+        "--image",
+        "/path/not/read-before-resolution.jpg",
+    ]);
+    let output: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 20);
+    assert_eq!(
+        output["error"]["code"],
+        "vinted.listing_input_correction_required"
+    );
+    assert_eq!(output["error"]["safe_to_retry"], false);
+    assert_eq!(output["error"]["details"]["issues"][0]["field"], "color");
+    assert_eq!(
+        output["next_actions"][0]["command"],
+        "flea vinted category colors"
     );
 }
 

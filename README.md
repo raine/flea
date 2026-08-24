@@ -331,7 +331,17 @@ submitted `selection_payload` and emits exact commands that append each opaque
 option for the next layer. `category attributes --input` remains available for
 workflows that already have a selection array.
 
-A minimal complete input has this shape:
+Listing input accepts semantic `size`, `condition`, `colors`, and `package_size`
+values. The composer resolves localized labels and canonical machine values
+against the live selection-, portal-, and category-scoped catalogs. Direct draft
+and publication commands perform the same resolution before uploading images or
+mutating remote state. Ambiguous, unavailable, and conflicting values produce
+field-level issues and correction actions without attempting a mutation.
+`semantic_resolutions` reports the matched label and scope without exposing an
+ID. Explicit `item_attributes`, `color_ids`, and `package_size_id` remain
+supported for workflows that require deterministic opaque values.
+
+A minimal complete semantic input has this shape:
 
 ```json
 {
@@ -340,8 +350,10 @@ A minimal complete input has this shape:
   "catalog_id": 123,
   "price": "5.00",
   "currency": "EUR",
-  "package_size_id": 1,
-  "item_attributes": [{ "code": "condition", "ids": [1] }]
+  "package_size": "medium",
+  "condition": "satisfactory",
+  "size": "43",
+  "colors": ["black", "grey"]
 }
 ```
 

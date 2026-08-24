@@ -61,7 +61,7 @@ pub enum VintedCategoryCommand {
     },
     #[command(
         about = "Compose and validate a Vinted publication form",
-        long_about = "Primary guided entry point for Vinted publication. Combine a category-scoped runtime ID with selection-scoped attributes, category-scoped brands and package sizes, portal-scoped colors, and account-scoped configuration. The default response contains readiness, selected values, issues, and next actions. Optional partial or complete ListingInput JSON confirms seller facts and enables payload validation. Add --full to include the complete field and runtime option catalogs.",
+        long_about = "Primary guided entry point for Vinted publication. Combine a category-scoped runtime ID with selection-scoped attributes, category-scoped brands and package sizes, portal-scoped colors, and account-scoped configuration. The default response contains readiness, selected values, issues, and next actions. Optional partial or complete ListingInput JSON accepts semantic size, condition, color, and package values as well as explicit opaque IDs. Add --full to include the complete field and runtime option catalogs.",
         after_help = "Examples:\n  flea --format json vinted category search SEARCH_TEXT\n  flea vinted category compose CATEGORY_ID --input listing.json\n  flea vinted category compose CATEGORY_ID --full"
     )]
     Compose {

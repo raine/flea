@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Resolve semantic Vinted size, condition, color, and package values against
+  live scoped publication catalogs while preserving explicit opaque IDs
 - Add a non-interactive Vinted sell workflow that resolves semantic seller facts
   through scoped runtime discovery and returns either a validated publication
   proposal or structured resumable ambiguity choices

@@ -16,6 +16,7 @@ use crate::{
         vinted::{
             auth::VintedCredentialRecord,
             brand::validate_listing_brand,
+            composer::{VintedComposer, VintedPublicationComposer},
             draft::{DEFAULT_PAGE_SIZE, DraftListRequest, VintedDraftApi, VintedDrafts},
             listing::{
                 VintedListingApi, VintedListingRequest, VintedListingResult, VintedListings,
@@ -28,6 +29,7 @@ use crate::{
             publication_discovery::VintedPublicationDiscoveryApi,
             readiness::VintedReadinessApi,
             search::VintedSearchSession,
+            semantic_values::has_semantic_values,
         },
     },
 };
@@ -278,7 +280,11 @@ async fn execute_operation(
     listing_api: &dyn VintedListingApi,
 ) -> Result<CommandOutcome, AppError> {
     let (mut input, images) = match values {
-        Some(values) => (Some(read_input(&values.input)?), values.image),
+        Some(values) => {
+            let value = read_input(&values.input)?;
+            let input = resolve_publication_input(portal, value, session, discovery_api).await?;
+            (Some(input), values.image)
+        }
         None => (None, Vec::new()),
     };
     if let Some(input) = input.as_mut() {
@@ -510,7 +516,82 @@ fn publication_next_actions(portal: PortalId, item_id: Option<&str>) -> Vec<Next
         .unwrap_or_default()
 }
 
-fn read_input(path: &PathBuf) -> Result<ListingInput, AppError> {
+async fn resolve_publication_input(
+    portal: PortalId,
+    value: serde_json::Value,
+    session: &dyn VintedSearchSession,
+    discovery_api: &dyn VintedPublicationDiscoveryApi,
+) -> Result<ListingInput, AppError> {
+    if !has_semantic_values(&value) {
+        return serde_json::from_value(value).map_err(invalid_listing_json);
+    }
+    let category_id = value
+        .get("catalog_id")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| {
+            AppError::validation(
+                "vinted.catalog_id_required",
+                "Semantic listing resolution requires an explicit runtime catalog_id",
+            )
+        })?;
+    let composer = VintedPublicationComposer::new(session, discovery_api)
+        .compose(portal, category_id, Some(value))
+        .await?;
+    let semantic_issues = composer
+        .form
+        .issues
+        .iter()
+        .filter(|issue| issue.code.starts_with("semantic_"))
+        .collect::<Vec<_>>();
+    if !semantic_issues.is_empty() {
+        return Err(composer_correction_error(&composer, &semantic_issues));
+    }
+    serde_json::from_value(
+        composer
+            .normalized_input
+            .clone()
+            .expect("semantic composer retains normalized input"),
+    )
+    .map_err(invalid_listing_json)
+}
+
+fn composer_correction_error(
+    composer: &VintedComposer,
+    issues: &[&crate::domain::field::ValidationIssue],
+) -> AppError {
+    let fields = issues
+        .iter()
+        .map(|issue| issue.field.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let actions = composer
+        .issue_actions
+        .iter()
+        .filter(|action| fields.contains(action.field.as_str()))
+        .collect::<Vec<_>>();
+    let mut error = AppError::validation(
+        "vinted.listing_input_correction_required",
+        "Semantic listing values require correction before publication",
+    )
+    .with_details(json!({
+        "issues": issues,
+        "correction_actions": actions,
+        "semantic_resolutions": &composer.semantic_resolutions,
+    }));
+    error
+        .next_actions
+        .extend(actions.into_iter().map(|action| NextAction {
+            command: action.command.clone(),
+        }));
+    error
+}
+
+fn invalid_listing_json(error: serde_json::Error) -> AppError {
+    AppError::usage(format!(
+        "Publication input must be valid Vinted listing JSON: {error}"
+    ))
+}
+
+fn read_input(path: &PathBuf) -> Result<serde_json::Value, AppError> {
     let bytes = if path.as_os_str() == "-" {
         let mut bytes = Vec::new();
         std::io::stdin()
@@ -532,11 +613,7 @@ fn read_input(path: &PathBuf) -> Result<ListingInput, AppError> {
     if bytes.len() > 1024 * 1024 {
         return Err(AppError::usage("Publication input exceeds 1 MiB"));
     }
-    serde_json::from_slice(&bytes).map_err(|error| {
-        AppError::usage(format!(
-            "Publication input must be valid Vinted listing JSON: {error}"
-        ))
-    })
+    serde_json::from_slice(&bytes).map_err(invalid_listing_json)
 }
 
 #[cfg(test)]
@@ -813,7 +890,7 @@ mod tests {
         .unwrap();
         let input = read_input(&path).unwrap();
         fs::remove_file(path).unwrap();
-        assert_eq!(input.catalog_id, 1);
-        assert_eq!(input.currency, "EUR");
+        assert_eq!(input["catalog_id"], 1);
+        assert_eq!(input["currency"], "EUR");
     }
 }

@@ -10,8 +10,9 @@ support.
 
 ## Rules
 
-- Treat IDs, revisions, and options as opaque. Discover them with `category`,
-  `filter`, or `show`.
+- Treat IDs, revisions, and options as opaque. Use semantic listing values when
+  supported, and discover explicit IDs with `category`, `filter`, or `show` only
+  for deterministic advanced workflows.
 - Follow `next_actions` and `safe_to_retry`; inspect uncertain mutations.
 - Remote state wins. Do not duplicate a field in flags and `--input` JSON.
 - Put category fields in `attributes` using the draft's composer model.
@@ -108,13 +109,21 @@ the next action requires complete fields and runtime option catalogs for brands,
 colors, package sizes, currencies, or category attributes.
 
 Brands and package sizes are category scoped. Colors are portal scoped,
-configuration is account scoped, and attributes are selection scoped. Composer
-`form.fields` includes the first layer of required category attributes, while
-`form.options` supplies their runtime IDs. Follow the matching `issue_actions`
-or `next_actions` command to select an option and discover dependent layers.
-These commands carry the category and selected parent values without requiring
-a hand-built selection array. Attribute output preserves `selection_payload`;
-continue following `next_actions` through additional layers.
+configuration is account scoped, and attributes are selection scoped. Put
+semantic `size`, `condition`, `colors`, and `package_size` values directly in
+listing input. Localized labels and canonical machine values resolve against
+those live scoped catalogs. Use `semantic_resolutions` to confirm matched labels
+and scopes. Ambiguous or unavailable values produce field-level correction
+actions. Explicit `item_attributes`, `color_ids`, and `package_size_id` remain
+available when an advanced workflow already has exact runtime IDs.
+
+Composer `form.fields` includes the first layer of required category attributes,
+while `form.options` supplies their runtime IDs. Follow the matching
+`issue_actions` or `next_actions` command to select an option and discover
+dependent layers. These commands carry the category and selected parent values
+without requiring a hand-built selection array. Attribute output preserves
+`selection_payload`; continue following `next_actions` through additional
+layers.
 
 A supplied brand name without an ID triggers category-scoped matching. One exact
 or normalized match fills its opaque ID and canonical name. Check

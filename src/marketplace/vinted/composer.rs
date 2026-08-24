@@ -21,6 +21,7 @@ use crate::{
                 DiscoveryRequest, DiscoveryScope, VintedPublicationDiscoveryApi,
             },
             search::VintedSearchSession,
+            semantic_values::{SemanticValueResolution, resolve_semantic_listing_values},
         },
     },
 };
@@ -66,8 +67,12 @@ pub struct VintedComposer {
     pub suggestions: Vec<ComposerSuggestion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub issue_actions: Vec<ComposerIssueAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_resolutions: Vec<SemanticValueResolution>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listing_input: Option<ListingInput>,
+    #[serde(skip_serializing)]
+    pub(crate) normalized_input: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -81,6 +86,8 @@ pub struct VintedComposerReadiness {
     pub brand_validation: Option<BrandValidation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub next_actions: Vec<ComposerIssueAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_resolutions: Vec<SemanticValueResolution>,
 }
 
 impl From<&VintedComposer> for VintedComposerReadiness {
@@ -122,6 +129,7 @@ impl From<&VintedComposer> for VintedComposerReadiness {
             issues: composer.form.issues.clone(),
             brand_validation: composer.brand_validation.clone(),
             next_actions,
+            semantic_resolutions: composer.semantic_resolutions.clone(),
         }
     }
 }
@@ -212,6 +220,22 @@ impl<'a> VintedPublicationComposer<'a> {
             self.api.execute(&credentials, &configuration_request),
             self.api.execute(&credentials, &packages_request),
         );
+        let attributes = attributes?;
+        let brands = brands?;
+        let colors = colors?;
+        let configuration = configuration?;
+        let packages = packages?;
+        let semantic = supplied
+            .map(|input| resolve_semantic_listing_values(input, &attributes, &colors, &packages))
+            .transpose()?;
+        let (supplied, semantic_issues, semantic_resolutions) = match semantic {
+            Some(resolution) => (
+                Some(resolution.input),
+                resolution.issues,
+                resolution.resolved,
+            ),
+            None => (None, Vec::new(), Vec::new()),
+        };
         let selection = supplied
             .as_ref()
             .and_then(Value::as_object)
@@ -219,10 +243,8 @@ impl<'a> VintedPublicationComposer<'a> {
         let brand_search = if let Some((id, Some(name))) = selection.as_ref()
             && id != &Some(1)
             && !name.is_empty()
-            && (id.is_none()
-                || brands.as_ref().ok().is_none_or(|response| {
-                    id.is_some_and(|id| !response_contains_brand(response, id))
-                })) {
+            && (id.is_none() || id.is_some_and(|id| !response_contains_brand(&brands, id)))
+        {
             Some(
                 self.api
                     .execute(
@@ -241,18 +263,22 @@ impl<'a> VintedPublicationComposer<'a> {
             decide_brand(
                 *id,
                 name.as_deref(),
-                brands.as_ref().ok(),
+                Some(&brands),
                 brand_search.as_ref().map(|result| result.as_ref()),
             )
         });
-        compose_from_documents(
+        compose_from_documents_with_semantics(
             category,
             supplied,
-            &attributes?,
-            (brands.as_ref().unwrap_or(&Value::Null), brand_validation),
-            &colors?,
-            &configuration?,
-            &packages?,
+            ComposerDocuments {
+                attributes: &attributes,
+                brand: (&brands, brand_validation),
+                colors: &colors,
+                configuration: &configuration,
+                packages: &packages,
+            },
+            semantic_issues,
+            semantic_resolutions,
         )
     }
 }
@@ -447,6 +473,15 @@ fn collect_categories(value: &Value, parents: &[String], output: &mut Vec<Public
     }
 }
 
+struct ComposerDocuments<'a> {
+    attributes: &'a Value,
+    brand: (&'a Value, Option<BrandValidation>),
+    colors: &'a Value,
+    configuration: &'a Value,
+    packages: &'a Value,
+}
+
+#[cfg(test)]
 fn compose_from_documents(
     category: PublicationCategory,
     supplied: Option<Value>,
@@ -456,8 +491,37 @@ fn compose_from_documents(
     configuration: &Value,
     packages: &Value,
 ) -> Result<VintedComposer, AppError> {
-    let (brands, brand_validation) = brand;
+    compose_from_documents_with_semantics(
+        category,
+        supplied,
+        ComposerDocuments {
+            attributes,
+            brand,
+            colors,
+            configuration,
+            packages,
+        },
+        Vec::new(),
+        Vec::new(),
+    )
+}
+
+fn compose_from_documents_with_semantics(
+    category: PublicationCategory,
+    supplied: Option<Value>,
+    documents: ComposerDocuments<'_>,
+    semantic_issues: Vec<ValidationIssue>,
+    semantic_resolutions: Vec<SemanticValueResolution>,
+) -> Result<VintedComposer, AppError> {
+    let ComposerDocuments {
+        attributes,
+        brand: (brands, brand_validation),
+        colors,
+        configuration,
+        packages,
+    } = documents;
     let attribute_selection_payload = attribute_selections(category.id, supplied.as_ref());
+    let normalized_input = supplied.clone();
     let supplied_object = match supplied.as_ref() {
         Some(Value::Object(object)) => Some(object),
         Some(_) => return Err(AppError::usage("Composer input must be a JSON object")),
@@ -667,6 +731,7 @@ fn compose_from_documents(
     add_optional_listing_fields(&mut form);
     summarize_options(&mut form);
     form.validate();
+    apply_semantic_issues(&mut form, semantic_issues);
     if let Some(validation) = brand_validation.as_ref()
         && !validation.valid
     {
@@ -731,8 +796,25 @@ fn compose_from_documents(
         brand_validation,
         suggestions,
         issue_actions,
+        semantic_resolutions,
         listing_input,
+        normalized_input,
     })
+}
+
+fn apply_semantic_issues(form: &mut PublicationForm, semantic_issues: Vec<ValidationIssue>) {
+    for issue in semantic_issues {
+        form.issues.retain(|existing| existing.field != issue.field);
+        if let Some(field) = form
+            .fields
+            .iter_mut()
+            .find(|field| field.key == issue.field)
+        {
+            field.invalidate(&issue.message);
+        }
+        form.issues.push(issue);
+    }
+    form.ready = form.issues.is_empty();
 }
 
 fn add_field(
