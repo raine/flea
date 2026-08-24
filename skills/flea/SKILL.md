@@ -10,14 +10,11 @@ support.
 
 ## Rules
 
-- Treat IDs, revisions, and option values as opaque. Discover them with
-  `category`, `location`, or `show`.
-- Follow `next_actions` and honor `safe_to_retry`. Inspect uncertain mutations
-  before retrying them.
-- Inspect returned drafts and listings after mutations. Remote state wins.
-- A field cannot appear in both flags and `--input` JSON.
-- Optional category fields belong in `attributes`; keys and values must match
-  the selected draft's composer model.
+- Treat IDs, revisions, and options as opaque. Discover them with `category`,
+  `location`, or `show`.
+- Follow `next_actions` and `safe_to_retry`; inspect uncertain mutations.
+- Remote state wins. Do not duplicate a field in flags and `--input` JSON.
+- Put category fields in `attributes` using the draft's composer model.
 
 ## Find Vinted listings
 
@@ -43,13 +40,11 @@ filter flags or repeatable `--attribute CODE=ID[,ID...]`. Prices accept two
 decimal places. Omit the query to browse and add `--include-facets` for filters.
 
 Vinted is shipping-first, so location filtering is unavailable. Inspect search
-IDs. `seller.seller_disclosed_location` is exposure-permitted seller profile
-data, not a guaranteed item location. Never infer it from presentation text.
-`--raw` preserves upstream JSON.
+IDs. `seller.seller_disclosed_location` is exposure-permitted
+seller profile data, not a catalog filter or guaranteed item location. Never
+infer it from presentation text. `--raw` preserves upstream JSON.
 
 ## Publish Vinted listings
-
-Pass complete JSON and ordered images:
 
 ```sh
 flea vinted category compose CATEGORY_ID --input listing.json
@@ -64,9 +59,9 @@ flea vinted listing show ITEM_ID
 flea vinted listing list
 ```
 
-Completion reuses verified remote photos; `--image` replaces all photos.
-`draft show` returns photo IDs and `draft validate` classifies blockers. Follow
-publication `next_actions`; `listing show` inspects visibility without search.
+`--image` replaces all photos. `draft show` returns photo IDs and `draft
+validate` classifies blockers. Follow publication `next_actions`; `listing show`
+inspects visibility.
 
 ## Find Tori listings
 
@@ -78,27 +73,20 @@ flea tori category search QUERY
 flea tori category list [--parent ID]
 ```
 
-Public search and item inspection need no login. Define geography explicitly:
-`--location Helsinki` selects the city, `--area` accepts places, and coordinates
-with `--radius-km` define a boundary. Clarify ambiguous areas.
+Public search and item inspection need no login. Set geography with `--location`,
+`--area`, or coordinates plus `--radius-km`; clarify ambiguous areas.
 
-Merge searches by `listing_id`; ranks across queries are not comparable. Use
-`--explain N` or `item show` for opaque matches. Return linked title, price,
-location, and URL with scope and ordering. Manage favorites with
-`flea tori favorite add|remove LISTING_ID`. Use structured price fields, never
-parse `price.display`.
+Merge searches by `listing_id`; ranks across queries differ. Use `--explain N`
+or `item show` for opaque matches. Use structured prices, never `price.display`.
+Manage favorites with `flea tori favorite add|remove LISTING_ID`.
 
 Use `taxonomy_value` with `search --category` and `category_id` for drafts.
-Follow pagination actions instead of dumping the taxonomy.
-
-Manage authenticated alerts with
-`flea tori saved-search list|show|create|update|delete`. Choose notification
-channels explicitly. Omitted update channels retain remote state.
+Follow pagination actions. Manage alerts with
+`flea tori saved-search list|show|create|update|delete`; choose channels.
 
 ## Create and publish listings
 
-Authenticated work begins with `flea tori auth status`; follow its reported login
-action when needed.
+Start with `flea tori auth status` and follow its login action.
 
 ```sh
 flea tori draft preview --input listing.json
@@ -110,12 +98,10 @@ flea tori draft image add DRAFT_ID PATH...
 flea tori draft validate DRAFT_ID
 ```
 
-Preview checks local input; `--verify-category` checks its category.
-`draft validate` checks publication readiness.
-
-Discover fields with `draft show DRAFT_ID --include-fields` and values with
-`--include-options FIELD`. Set condition with `--condition VALUE`, other optional
-fields in `attributes`, and clear one with JSON `null`.
+Preview validates local input; `--verify-category` checks its category. Discover
+fields with `draft show DRAFT_ID --include-fields` and values with
+`--include-options FIELD`. Use `--condition`, `attributes`, and JSON `null` to
+set or clear optional fields.
 
 Publish with the exact validated revision:
 
@@ -126,8 +112,6 @@ revision="$(printf '%s\n' "$validation" | jq -er '.data.revision')"
 flea tori draft publish DRAFT_ID --if-revision "$revision"
 ```
 
-On revision conflict, follow `next_actions`, inspect state, and use the returned
-revision.
-
-Manage account listings with `flea tori listing list|show|update|dispose|delete`.
-`dispose` marks a listing sold.
+On revision conflict, inspect state and use the returned revision. Manage account
+listings with `flea tori listing list|show|update|dispose|delete`; `dispose` marks
+one sold.

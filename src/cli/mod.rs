@@ -227,12 +227,12 @@ pub enum VintedCommand {
         long_about = "Search or browse Vinted listings with catalog, dynamic attributes, decimal prices, ordering, pagination, and optional contextual facets. Authentication is required. Run `flea vinted auth login` first.",
         after_long_help = "Examples:\n  flea vinted search takki --price-from 10.50 --sort newest\n  flea vinted search --catalog 123 --brand 53,88 --status 1 --include-facets\n  flea vinted search mekko --attribute fixture_code=10,20"
     )]
-    Search(vinted_search::VintedSearchArgs),
+    Search(Box<vinted_search::VintedSearchArgs>),
     #[command(
         about = "Discover and search contextual Vinted filters",
         long_about = "Discover active filter codes and option IDs, retrieve lazy facets, and search large option lists with the same context used for catalog search."
     )]
-    Filter(vinted_search::VintedFilterArgs),
+    Filter(Box<vinted_search::VintedFilterArgs>),
     #[command(
         about = "Inspect Vinted listings (authentication required)",
         long_about = "Inspect a Vinted listing by search result ID. Seller-disclosed location is profile information, not a catalog location filter or guaranteed item location. Authentication is required."

@@ -387,7 +387,7 @@ async fn execute_vinted(
             dependencies.vinted_search_session.as_ref(),
             dependencies.vinted_search.as_ref(),
         )
-        .execute(portal, args.into())
+        .execute(portal, (*args).into())
         .await?
         {
             VintedSearchResult::Search(collection) => {
