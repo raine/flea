@@ -28,10 +28,22 @@ pub struct PublicationCategory {
     pub leaf: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PublicationCategorySuggestion {
+    pub keyword: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PublicationCategoryCollection {
+    pub portal: PortalId,
+    pub request_locale: String,
+    pub query: String,
     pub categories: Vec<PublicationCategory>,
     pub count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guidance: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<PublicationCategorySuggestion>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -173,6 +185,16 @@ pub fn categories_for_search(search: &Value, catalogs: &Value) -> Vec<Publicatio
     categories
 }
 
+pub fn category_suggestions_from_search(search: &Value) -> Vec<PublicationCategorySuggestion> {
+    let mut keywords = Vec::new();
+    let mut seen = BTreeSet::new();
+    collect_suggestion_keywords(search, false, &mut keywords, &mut seen);
+    keywords
+        .into_iter()
+        .map(|keyword| PublicationCategorySuggestion { keyword })
+        .collect()
+}
+
 fn category_ids_from_search(value: &Value) -> BTreeSet<u64> {
     let mut ids = BTreeSet::new();
     collect_search_ids(value, &mut ids);
@@ -201,13 +223,80 @@ fn collect_search_ids(value: &Value, ids: &mut BTreeSet<u64>) {
                 ids.insert(id);
             }
             for (key, value) in object {
-                if key.contains("catalog") || key == "id" || key == "results" || key == "data" {
+                if key.contains("catalog")
+                    || key == "id"
+                    || key == "results"
+                    || key == "data"
+                    || is_suggestion_key(key)
+                {
                     collect_search_ids(value, ids);
                 }
             }
         }
         _ => {}
     }
+}
+
+fn collect_suggestion_keywords(
+    value: &Value,
+    suggestion_context: bool,
+    output: &mut Vec<String>,
+    seen: &mut BTreeSet<String>,
+) {
+    const MAX_SUGGESTIONS: usize = 20;
+    const MAX_KEYWORD_BYTES: usize = 256;
+
+    if output.len() == MAX_SUGGESTIONS {
+        return;
+    }
+    match value {
+        Value::String(value) if suggestion_context => {
+            let value = value.trim();
+            if !value.is_empty()
+                && value.len() <= MAX_KEYWORD_BYTES
+                && !value.chars().any(char::is_control)
+                && seen.insert(value.to_owned())
+            {
+                output.push(value.to_owned());
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_suggestion_keywords(value, suggestion_context, output, seen);
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                let nested_context = is_suggestion_key(key);
+                if suggestion_context
+                    && matches!(
+                        key.as_str(),
+                        "keyword" | "query" | "title" | "name" | "label"
+                    )
+                {
+                    collect_suggestion_keywords(value, true, output, seen);
+                } else if nested_context || (!suggestion_context && matches!(key.as_str(), "data"))
+                {
+                    collect_suggestion_keywords(value, nested_context, output, seen);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_suggestion_key(key: &str) -> bool {
+    matches!(
+        key,
+        "alias"
+            | "aliases"
+            | "suggestion"
+            | "suggestions"
+            | "suggested_keyword"
+            | "suggested_keywords"
+            | "suggested_query"
+            | "suggested_queries"
+    )
 }
 
 fn collect_categories(value: &Value, parents: &[String], output: &mut Vec<PublicationCategory>) {
@@ -952,14 +1041,45 @@ mod tests {
     #[test]
     fn category_search_ids_resolve_through_the_localized_catalog() {
         let catalogs = json!({"catalogs":[
-            {"id":10,"title":"Cycling","catalogs":[
-                {"id":4380,"title":"Locks","catalogs":[]},
-                {"id":4381,"title":"Lights","catalogs":[]}
+            {"id":10,"title":"Pyöräily","catalogs":[
+                {"id":4380,"title":"Reput","catalogs":[]},
+                {"id":4381,"title":"Valot","catalogs":[]}
             ]}
         ]});
         let result = categories_for_search(&json!({"catalog_ids":[4380]}), &catalogs);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].path, ["Cycling", "Locks"]);
+        assert_eq!(result[0].path, ["Pyöräily", "Reput"]);
+    }
+
+    #[test]
+    fn category_search_uses_upstream_aliases_and_suggestions() {
+        let catalogs = json!({"catalogs":[
+            {"id":10,"title":"Asusteet","catalogs":[
+                {"id":4380,"title":"Reput","catalogs":[]}
+            ]}
+        ]});
+        let response = json!({
+            "aliases": [{"keyword":"reppu", "catalog_id":4380}],
+            "suggestions": ["selkäreppu", {"query":"reput"}]
+        });
+
+        let categories = categories_for_search(&response, &catalogs);
+        assert_eq!(categories.len(), 1);
+        assert_eq!(categories[0].title, "Reput");
+        assert_eq!(
+            category_suggestions_from_search(&response),
+            vec![
+                PublicationCategorySuggestion {
+                    keyword: "reppu".into()
+                },
+                PublicationCategorySuggestion {
+                    keyword: "selkäreppu".into()
+                },
+                PublicationCategorySuggestion {
+                    keyword: "reput".into()
+                },
+            ]
+        );
     }
 
     #[test]

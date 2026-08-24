@@ -13,7 +13,10 @@ use crate::{
         auth::{VintedAuthentication, VintedCredentialRecord},
         binding::VINTED_FI_BINDING,
     },
-    transport::{RequestBody, Transport, TransportError, TransportErrorKind, TransportResponse},
+    transport::{
+        RequestBody, Transport, TransportError, TransportErrorKind, TransportRequest,
+        TransportResponse,
+    },
 };
 
 const API_V2_PATH: &str = "/api/v2/";
@@ -56,6 +59,40 @@ impl HttpVintedPublicationDiscoveryApi {
         credentials: &VintedCredentialRecord,
         request: &DiscoveryRequest,
     ) -> Result<Value, AppError> {
+        let transport_request = self.request(credentials, request)?;
+        let response = self
+            .auth
+            .executor()
+            .execute(transport_request)
+            .await
+            .map_err(execution_error)?;
+        let status = response.status;
+        let value = bounded_json(response)?;
+        if status.is_success() {
+            Ok(value)
+        } else {
+            let message = value
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Vinted rejected publication discovery");
+            let mut error = AppError::upstream("vinted.discovery_failed", message);
+            error.details = Some(Box::new(json!({
+                "http_status": status.as_u16(),
+                "code": value.get("code"),
+                "message_code": value.get("message_code"),
+                "errors": value.get("errors")
+            })));
+            error.safe_to_retry = status.is_server_error();
+            error.upstream_transient = status.is_server_error();
+            Err(error)
+        }
+    }
+
+    fn request(
+        &self,
+        credentials: &VintedCredentialRecord,
+        request: &DiscoveryRequest,
+    ) -> Result<TransportRequest, AppError> {
         let (method, path) = endpoint(request);
         let mut url = self.url(request, &path)?;
         apply_query(&mut url, request);
@@ -89,32 +126,7 @@ impl HttpVintedPublicationDiscoveryApi {
             }
             _ => {}
         }
-        let response = self
-            .auth
-            .executor()
-            .execute(transport_request)
-            .await
-            .map_err(execution_error)?;
-        let status = response.status;
-        let value = bounded_json(response)?;
-        if status.is_success() {
-            Ok(value)
-        } else {
-            let message = value
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("Vinted rejected publication discovery");
-            let mut error = AppError::upstream("vinted.discovery_failed", message);
-            error.details = Some(Box::new(json!({
-                "http_status": status.as_u16(),
-                "code": value.get("code"),
-                "message_code": value.get("message_code"),
-                "errors": value.get("errors")
-            })));
-            error.safe_to_retry = status.is_server_error();
-            error.upstream_transient = status.is_server_error();
-            Err(error)
-        }
+        Ok(transport_request)
     }
 
     fn url(&self, request: &DiscoveryRequest, path: &str) -> Result<Url, AppError> {
@@ -272,6 +284,21 @@ fn execution_error(error: TransportError) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::marketplace::PortalId;
+
+    fn credentials() -> VintedCredentialRecord {
+        VintedCredentialRecord::new_for_adapter(
+            PortalId::Fi,
+            "user-1".into(),
+            Some("fixture".into()),
+            "access-token".into(),
+            "refresh-token".into(),
+            4_000_000_000,
+            "device-1".into(),
+            "anonymous-1".into(),
+            None,
+        )
+    }
 
     #[test]
     fn endpoints_match_source_derived_contract() {
@@ -303,6 +330,27 @@ mod tests {
                 selections: json!([{"code": "runtime_code", "value": ["runtime_value"]}])
             })
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn category_search_propagates_portal_locale_and_keyword() {
+        let api = HttpVintedPublicationDiscoveryApi::new();
+        let request = api
+            .request(
+                &credentials(),
+                &DiscoveryRequest::SearchCatalog {
+                    keyword: "reppu".into(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(request.headers["locale"], "fi-FI");
+        assert_eq!(request.headers["accept-language"], "fi");
+        assert!(
+            request
+                .url
+                .ends_with("/item_upload/catalogs/search?keyword=reppu")
         );
     }
 

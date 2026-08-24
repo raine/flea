@@ -187,6 +187,11 @@ fn help_tables_include_agent_oriented_summaries() {
     }
     assert!(vinted_search.contains("--price-from 10.50"));
 
+    let vinted_category = stdout(&invoke(&["vinted", "category", "search", "--help"]));
+    assert!(vinted_category.contains("portal-localized publication category service"));
+    assert!(vinted_category.contains("active portal and request locale"));
+    assert!(vinted_category.contains("Vinted-provided suggestions"));
+
     let vinted_filter = stdout(&invoke(&["vinted", "filter", "--help"]));
     assert!(vinted_filter.contains("list    Discover contextual Vinted catalog filters"));
     assert!(vinted_filter.contains("facets  Retrieve options for a lazy or truncated filter"));

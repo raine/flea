@@ -218,6 +218,20 @@ flea vinted listing show ITEM_ID
 flea vinted listing list
 ```
 
+Publication category search sends the keyword to Vinted's authenticated
+portal-localized category service. Its output identifies the active portal and
+request locale, resolves returned IDs through the localized catalog, and exposes
+aliases or suggestions supplied by Vinted. If a query has no matches, browse
+`category list` and search with a label from that catalog. Flea does not translate
+category queries or maintain a multilingual taxonomy.
+
+Sellers can write accurate titles and natural descriptions in their own
+language. Vinted's buyer-facing web experience provides translation for
+supported member-authored content and lets buyers view the original. The item
+API preserves the seller's original text, while structured category IDs render
+with Vinted's taxonomy labels for the viewer's locale. Buyer-facing text
+translation and seller-side category discovery are separate services.
+
 Pass one or more `--image` values to `draft publish` only when replacing the
 complete remote photo set. Output reports the photo action, assigned photo IDs,
 and upload count.

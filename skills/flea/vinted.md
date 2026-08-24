@@ -55,6 +55,7 @@ Web commands use Chrome cookies and human verification through `agent-browser`:
 ```sh
 flea vinted auth web login
 flea vinted auth web status
+flea vinted category search KEYWORD
 flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted draft show DRAFT_ID
 flea vinted draft validate DRAFT_ID
@@ -65,11 +66,16 @@ flea vinted publish --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
 ```
 
-Publication category search uses portal-localized taxonomy labels, unlike
-multilingual shopping search. Use Finnish category terms on the `fi` portal and
-treat the returned category IDs as opaque. Write listing text naturally in the
-seller's language; rely on Vinted's buyer-facing translation instead of creating
-translated duplicate listings.
+Publication category search sends keywords to Vinted's portal-localized
+taxonomy service. Output reports the portal and request locale, resolves opaque
+IDs through the localized catalog, and preserves upstream aliases or
+suggestions. Use Finnish terms on `fi`; after zero results, follow suggestions
+or browse `category list`. Do not translate queries or create a separate
+taxonomy.
+
+Write listing text naturally in the seller's language. Vinted's buyer-facing
+experience translates supported member-authored content and offers the original.
+Structured taxonomy localization and seller-text translation are separate.
 
 Completion reuses photos; `--image` replaces them. Complete verification
 manually, inspect before retrying, and clear cookies with `auth web logout`.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report Vinted publication category locale, expose upstream suggestions, and
+  guide zero-result searches through the localized catalog
 - Add bounded Vinted draft listing, complete remote draft inspection, and
   publication-readiness validation with reusable photo ordering
 - Reuse verified remote photos when publishing Vinted drafts, with explicit
