@@ -1329,6 +1329,74 @@ mod tests {
         }
     }
 
+    struct UnicodeRoundTripApi {
+        editable_state: Mutex<Value>,
+    }
+
+    impl UnicodeRoundTripApi {
+        fn new() -> Self {
+            Self {
+                editable_state: Mutex::new(json!({})),
+            }
+        }
+    }
+
+    impl VintedPublicationApi for UnicodeRoundTripApi {
+        fn configuration<'a>(
+            &'a self,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async { Ok(json!({"upload_session_id": "fixture-session"})) })
+        }
+
+        fn fetch_draft<'a>(
+            &'a self,
+            draft_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async move {
+                let state = self.editable_state.lock().unwrap().clone();
+                Ok(json!({
+                    "item": {
+                        "id": draft_id,
+                        "is_draft": true,
+                        "title": state["title"],
+                        "description": state["description"],
+                        "manufacturer": state["manufacturer"],
+                        "photos": state["assigned_photos"]
+                    }
+                }))
+            })
+        }
+
+        fn upload_photo<'a>(
+            &'a self,
+            _upload_session_id: &'a str,
+            _image: PreparedImage,
+        ) -> Pin<Box<dyn Future<Output = Result<UploadedPhoto, AppError>> + Send + 'a>> {
+            Box::pin(async { Ok(photo(9)) })
+        }
+
+        fn mutate<'a>(
+            &'a self,
+            operation: &'a PublicationOperation,
+            body: Option<Value>,
+        ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+            Box::pin(async move {
+                let body = body.expect("fixture mutation body");
+                let editable = body
+                    .get("item")
+                    .or_else(|| body.get("draft"))
+                    .expect("fixture editable state")
+                    .clone();
+                *self.editable_state.lock().unwrap() = editable;
+                Ok(match operation {
+                    PublicationOperation::CreateDraft => json!({"draft": {"id": "42"}}),
+                    PublicationOperation::CompleteDraft { .. } => json!({"item": {"id": "84"}}),
+                    _ => json!({"draft": {"id": "42"}}),
+                })
+            })
+        }
+    }
+
     fn photo(id: u64) -> UploadedPhoto {
         UploadedPhoto {
             id,
@@ -1376,6 +1444,48 @@ mod tests {
             shipment_prices: None,
             parcel: None,
         }
+    }
+
+    #[tokio::test]
+    async fn unicode_round_trips_through_authoritative_draft_state() {
+        let api = UnicodeRoundTripApi::new();
+        let (_directory, path) = image_path();
+        let mut listing = input();
+        listing.title = "Käytetty tuoli 🪑 Ελληνικά 日本語 e\u{301}".to_owned();
+        listing.description =
+            "säädettävät jalat, yleisilmeeltään siisti ✨ Кириллица काँच e\u{301}".to_owned();
+        listing.manufacturer = Some("Møbelfabrik Ångström".to_owned());
+
+        let created = VintedPublication::new(&api)
+            .execute(
+                PublicationOperation::CreateDraft,
+                Some(listing.clone()),
+                vec![path],
+            )
+            .await
+            .unwrap();
+        let created_state = api
+            .fetch_draft(created.draft_id.as_deref().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(created_state["item"]["title"], listing.title);
+        assert_eq!(created_state["item"]["description"], listing.description);
+        assert_eq!(
+            created_state["item"]["manufacturer"],
+            json!(listing.manufacturer)
+        );
+
+        VintedPublication::new(&api)
+            .execute(completion(), Some(listing.clone()), Vec::new())
+            .await
+            .unwrap();
+        let completed_state = api.fetch_draft("42").await.unwrap();
+        assert_eq!(completed_state["item"]["title"], listing.title);
+        assert_eq!(completed_state["item"]["description"], listing.description);
+        assert_eq!(
+            completed_state["item"]["manufacturer"],
+            json!(listing.manufacturer)
+        );
     }
 
     #[tokio::test]

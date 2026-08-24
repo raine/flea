@@ -220,7 +220,22 @@ fn json_request_script(
                 headers['x-enable-dynamic-attribute-condition'] = 'true';
                 headers['x-enable-dynamic-attribute-size'] = 'true';
                 headers['x-enable-dynamic-attribute-video-game-rating'] = 'true';
-                const value = JSON.parse(atob(encodedBody));
+                const bytes = Uint8Array.from(
+                    atob(encodedBody),
+                    character => character.charCodeAt(0)
+                );
+                let decodedBody;
+                try {{
+                    decodedBody = new TextDecoder('utf-8', {{ fatal: true }}).decode(bytes);
+                }} catch (_) {{
+                    return {{
+                        local_error: {{
+                            code: 'vinted.web_browser_request_invalid_utf8',
+                            message: 'the Vinted browser request body is not valid UTF-8'
+                        }}
+                    }};
+                }}
+                const value = JSON.parse(decodedBody);
                 const item = value.item || value.draft;
                 if (item && typeof item.price === 'string') item.price = Number(item.price);
                 if (item && value.upload_session_id) item.temp_uuid = value.upload_session_id;
@@ -288,6 +303,14 @@ fn browser_response_helper() -> &'static str {
 }
 
 fn decode_browser_response(value: Value) -> Result<TransportResponse, AppError> {
+    if value.pointer("/local_error/code").and_then(Value::as_str)
+        == Some("vinted.web_browser_request_invalid_utf8")
+    {
+        return Err(AppError::upstream(
+            "vinted.web_browser_request_invalid_utf8",
+            "the Vinted browser request body is not valid UTF-8",
+        ));
+    }
     let status = value.get("status").and_then(Value::as_u64).ok_or_else(|| {
         AppError::upstream(
             "vinted.web_browser_invalid_response",
@@ -365,6 +388,47 @@ mod tests {
         assert!(script.contains("item.temp_uuid = value.upload_session_id"));
         assert!(script.contains("value.push_up = false"));
         assert!(!script.contains("5.00"));
+    }
+
+    #[test]
+    fn request_script_decodes_json_bytes_as_strict_utf8() {
+        let text = json!({
+            "item": {
+                "title": "Käytetty tuoli 🪑",
+                "description": "säädettävät, Ελληνικά, 日本語, e\u{301}",
+                "manufacturer": "Møbelfabrik"
+            }
+        });
+        let script = json_request_script("POST", "/mutation", Some(&text), None).unwrap();
+        let encoded = STANDARD.encode(serde_json::to_vec(&text).unwrap());
+
+        assert!(script.contains(&format!("const encodedBody = \"{encoded}\"")));
+        assert!(script.contains("Uint8Array.from("));
+        assert!(script.contains("new TextDecoder('utf-8', { fatal: true }).decode(bytes)"));
+        assert!(script.contains("const value = JSON.parse(decodedBody)"));
+        assert!(!script.contains("JSON.parse(atob(encodedBody))"));
+        assert!(!script.contains("Käytetty"));
+    }
+
+    #[test]
+    fn invalid_utf8_decode_failure_has_a_precise_local_error() {
+        let script = json_request_script("POST", "/mutation", Some(&json!({})), None).unwrap();
+        assert!(script.contains("code: 'vinted.web_browser_request_invalid_utf8'"));
+        assert!(script.contains("the Vinted browser request body is not valid UTF-8"));
+
+        let error = decode_browser_response(json!({
+            "local_error": {
+                "code": "vinted.web_browser_request_invalid_utf8",
+                "message": "the Vinted browser request body is not valid UTF-8"
+            }
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "vinted.web_browser_request_invalid_utf8");
+        assert_eq!(
+            error.message,
+            "the Vinted browser request body is not valid UTF-8"
+        );
+        assert!(!error.safe_to_retry);
     }
 
     #[test]
