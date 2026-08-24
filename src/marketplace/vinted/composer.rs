@@ -1009,7 +1009,7 @@ fn copy_scalar_as(
     }
 }
 
-fn numeric_id(object: &Map<String, Value>) -> Option<u64> {
+pub(crate) fn numeric_id(object: &Map<String, Value>) -> Option<u64> {
     [
         "id",
         "catalog_id",
@@ -1026,7 +1026,7 @@ fn numeric_id(object: &Map<String, Value>) -> Option<u64> {
     })
 }
 
-fn object_label(object: &Map<String, Value>) -> Option<String> {
+pub(crate) fn object_label(object: &Map<String, Value>) -> Option<String> {
     ["title", "name", "label", "display_name"]
         .iter()
         .find_map(|key| {

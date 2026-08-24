@@ -523,6 +523,7 @@ async fn execute_vinted(
                 dependencies.vinted_item_session.as_ref(),
                 dependencies.vinted_listing.as_ref(),
             )
+            .with_discovery(dependencies.vinted_publication_discovery.as_ref())
             .execute(portal, request)
             .await?
             {

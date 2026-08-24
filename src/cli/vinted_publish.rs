@@ -270,6 +270,7 @@ async fn execute_operation(
             };
             let inspection_session = move |_| Ok(credentials.clone());
             let inspection = VintedListings::new(&inspection_session, listing_api)
+                .with_discovery(discovery_api)
                 .execute(
                     portal,
                     VintedListingRequest::Show {

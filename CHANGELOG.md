@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Normalize Vinted listing conditions against selection-scoped runtime composer
+  options while preserving distinct upstream and composer identity namespaces
 - Replace the duplicate Vinted `auth` and `auth web` trees with one
   `auth login/status/logout` command set that manages both catalog credentials
   and the publication browser by default; `--api` and `--browser` select one

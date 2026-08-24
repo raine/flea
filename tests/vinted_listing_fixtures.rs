@@ -7,10 +7,10 @@ use std::{
 use flea::{
     AppError, PortalId,
     dependencies::{
-        ListingLookup, VintedCredentialRecord, VintedListingApi, VintedListingRequest,
-        VintedListingResult, VintedListings,
+        DiscoveryRequest, ListingLookup, VintedCredentialRecord, VintedListingApi,
+        VintedListingRequest, VintedListingResult, VintedListings, VintedPublicationDiscoveryApi,
     },
-    domain::vinted_listing::VintedListingState,
+    domain::vinted_listing::{VintedConditionIdentityStatus, VintedListingState},
     run_with_dependencies,
 };
 use serde_json::Value;
@@ -73,6 +73,40 @@ impl VintedListingApi for FixtureApi {
             _ => panic!("unexpected condition"),
         }));
         Box::pin(async move { result })
+    }
+}
+
+struct FixtureDiscoveryApi;
+
+impl VintedPublicationDiscoveryApi for FixtureDiscoveryApi {
+    fn execute<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        request: &'a DiscoveryRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        let DiscoveryRequest::Attributes { selections } = request else {
+            panic!("unexpected discovery request")
+        };
+        assert_eq!(
+            selections,
+            &serde_json::json!([{"code": "category", "value": [3412]}])
+        );
+        Box::pin(async {
+            Ok(serde_json::json!({
+                "attributes": [{
+                    "code": "condition",
+                    "configuration": {
+                        "title": "Kunto",
+                        "groups": [{
+                            "options": [
+                                {"id": 6, "title": "Tyydyttävä"},
+                                {"id": 7, "title": "Hyvä"}
+                            ]
+                        }]
+                    }
+                }]
+            }))
+        })
     }
 }
 
@@ -140,11 +174,12 @@ fn credentials() -> VintedCredentialRecord {
 }
 
 #[tokio::test]
-async fn publication_item_id_resolves_immediately_without_search_indexing() {
+async fn publication_condition_round_trips_through_listing_inspection() {
     let publication_item_id = "9001";
     let api = FixtureApi::new();
     let session = |_| Ok(credentials());
     let result = VintedListings::new(&session, &api)
+        .with_discovery(&FixtureDiscoveryApi)
         .execute(
             PortalId::Fi,
             VintedListingRequest::Show {
@@ -168,10 +203,14 @@ async fn publication_item_id_resolves_immediately_without_search_indexing() {
         detail.price.as_ref().unwrap().currency.as_deref(),
         Some("EUR")
     );
+    let condition = detail.condition.as_ref().unwrap();
+    assert_eq!(condition.name.as_deref(), Some("Tyydyttävä"));
     assert_eq!(
-        detail.condition.as_ref().unwrap().name.as_deref(),
-        Some("Very good")
+        condition.identity.status,
+        VintedConditionIdentityStatus::ComposerMatched
     );
+    assert_eq!(condition.identity.upstream_id, None);
+    assert_eq!(condition.identity.composer_id.as_deref(), Some("6"));
     assert_eq!(
         detail.category.as_ref().unwrap().id.as_deref(),
         Some("3412")
@@ -356,7 +395,8 @@ fn cli_moderated_listing_succeeds_with_review_guidance() {
     let api = Arc::new(FixtureApi::new());
     let dependencies = flea::dependencies::ApplicationDependencies::production()
         .with_vinted_credentials_provider(|_| Ok(credentials()))
-        .with_vinted_listing_api(api);
+        .with_vinted_listing_api(api)
+        .with_vinted_publication_discovery_api(Arc::new(FixtureDiscoveryApi));
     let result = run_with_dependencies(
         [
             "flea", "--format", "json", "vinted", "listing", "show", "9004",
@@ -383,7 +423,8 @@ fn cli_listing_output_excludes_account_and_session_data() {
     let api = Arc::new(FixtureApi::new());
     let dependencies = flea::dependencies::ApplicationDependencies::production()
         .with_vinted_credentials_provider(|_| Ok(credentials()))
-        .with_vinted_listing_api(api);
+        .with_vinted_listing_api(api)
+        .with_vinted_publication_discovery_api(Arc::new(FixtureDiscoveryApi));
     let result = run_with_dependencies(
         [
             "flea", "--format", "json", "vinted", "listing", "show", "9001",
@@ -394,6 +435,17 @@ fn cli_listing_output_excludes_account_and_session_data() {
     let serialized = envelope["data"].to_string();
 
     assert_eq!(result.exit_code, 0);
+    assert_eq!(
+        envelope["data"]["condition"],
+        serde_json::json!({
+            "name": "Tyydyttävä",
+            "identity": {
+                "status": "composer_matched",
+                "upstream_id": null,
+                "composer_id": "6"
+            }
+        })
+    );
     assert!(!serialized.contains("fixture-user"));
     assert!(!serialized.contains("fixture-login"));
     assert!(!serialized.contains("access"));

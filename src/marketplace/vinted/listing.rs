@@ -9,8 +9,9 @@ use crate::{
         envelope::NextAction,
         search::SearchPrice,
         vinted_listing::{
-            VintedListingCollection, VintedListingDetail, VintedListingPhoto,
-            VintedListingShipping, VintedListingState, VintedListingSummary, VintedListingValue,
+            VintedConditionIdentity, VintedConditionIdentityStatus, VintedListingCollection,
+            VintedListingCondition, VintedListingDetail, VintedListingPhoto, VintedListingShipping,
+            VintedListingState, VintedListingSummary, VintedListingValue,
         },
     },
     error::{AppError, ExitClass},
@@ -19,7 +20,12 @@ use crate::{
         vinted::{
             auth::{VintedAuthentication, VintedCredentialRecord},
             binding::VINTED_FI_BINDING,
+            composer::{
+                numeric_id, object_label, publication_attribute_definitions,
+                publication_attribute_options,
+            },
             item::{VintedItemSession, validate_item_id},
+            publication_discovery::{DiscoveryRequest, VintedPublicationDiscoveryApi},
         },
     },
     transport::{Transport, TransportError, TransportErrorKind, TransportResponse},
@@ -73,11 +79,21 @@ pub trait VintedListingApi: Send + Sync {
 pub struct VintedListings<'a> {
     session: &'a dyn VintedItemSession,
     api: &'a dyn VintedListingApi,
+    discovery_api: Option<&'a dyn VintedPublicationDiscoveryApi>,
 }
 
 impl<'a> VintedListings<'a> {
     pub fn new(session: &'a dyn VintedItemSession, api: &'a dyn VintedListingApi) -> Self {
-        Self { session, api }
+        Self {
+            session,
+            api,
+            discovery_api: None,
+        }
+    }
+
+    pub fn with_discovery(mut self, api: &'a dyn VintedPublicationDiscoveryApi) -> Self {
+        self.discovery_api = Some(api);
+        self
     }
 
     pub async fn execute(
@@ -108,7 +124,10 @@ impl<'a> VintedListings<'a> {
                             summary_detail(&item_id, &Value::Object(item.clone()))?
                         } else {
                             let edit = self.api.item_for_edit(&credentials, &item_id).await?;
-                            normalize_detail(&item_id, &wardrobe, &edit)?
+                            let mut detail = normalize_detail(&item_id, &wardrobe, &edit)?;
+                            self.normalize_condition_identity(&credentials, &mut detail)
+                                .await;
+                            detail
                         }
                     }
                 };
@@ -119,6 +138,48 @@ impl<'a> VintedListings<'a> {
                 let collection = self.list(&credentials).await?;
                 Ok(VintedListingResult::Collection(Box::new(collection)))
             }
+        }
+    }
+
+    async fn normalize_condition_identity(
+        &self,
+        credentials: &VintedCredentialRecord,
+        detail: &mut VintedListingDetail,
+    ) {
+        let (Some(api), Some(category_id), Some(condition)) = (
+            self.discovery_api,
+            detail
+                .category
+                .as_ref()
+                .and_then(|category| category.id.as_deref())
+                .and_then(|id| id.parse::<u64>().ok()),
+            detail.condition.as_mut(),
+        ) else {
+            return;
+        };
+        let Some(name) = condition.name.as_deref() else {
+            return;
+        };
+        let request = DiscoveryRequest::Attributes {
+            selections: serde_json::json!([{"code": "category", "value": [category_id]}]),
+        };
+        let Ok(response) = api.execute(credentials, &request).await else {
+            return;
+        };
+        let expected = normalized_label(name);
+        let composer_id = publication_attribute_definitions(&response)
+            .into_iter()
+            .filter(|(code, _)| *code == "condition")
+            .flat_map(|(_, definition)| publication_attribute_options(definition))
+            .find_map(|option| {
+                let object = option.as_object()?;
+                (object_label(object).is_some_and(|label| normalized_label(&label) == expected))
+                    .then(|| numeric_id(object).map(|id| id.to_string()))
+                    .flatten()
+            });
+        if let Some(composer_id) = composer_id {
+            condition.identity.composer_id = Some(composer_id);
+            condition.identity.status = VintedConditionIdentityStatus::ComposerMatched;
         }
     }
 
@@ -446,7 +507,7 @@ fn normalize_detail(
                     .get("price")
                     .and_then(|value| normalize_price(value, wardrobe.get("currency")))
             }),
-        condition: listing_value(edit.get("status_id"), edit.get("status")),
+        condition: listing_condition(edit.get("status_id"), edit.get("status")),
         category: listing_value(
             edit.get("catalog_id"),
             edit.get("catalog_name")
@@ -563,6 +624,31 @@ fn normalize_price(value: &Value, fallback_currency: Option<&Value>) -> Option<S
         })
         .or_else(|| string(fallback_currency));
     Some(SearchPrice { amount, currency })
+}
+
+fn listing_condition(id: Option<&Value>, name: Option<&Value>) -> Option<VintedListingCondition> {
+    let upstream_id = identifier(id);
+    let name = string(name);
+    if upstream_id.is_none() && name.is_none() {
+        return None;
+    }
+    let status = if upstream_id.is_some() {
+        VintedConditionIdentityStatus::UpstreamOnly
+    } else {
+        VintedConditionIdentityStatus::Unavailable
+    };
+    Some(VintedListingCondition {
+        name,
+        identity: VintedConditionIdentity {
+            status,
+            upstream_id,
+            composer_id: None,
+        },
+    })
+}
+
+fn normalized_label(value: &str) -> String {
+    value.trim().to_lowercase()
 }
 
 fn listing_value(id: Option<&Value>, name: Option<&Value>) -> Option<VintedListingValue> {
@@ -707,6 +793,19 @@ mod tests {
             classify_absence(StatusCode::GONE, b""),
             ListingLookup::Deleted
         );
+    }
+
+    #[test]
+    fn condition_without_any_runtime_identity_is_explicitly_unavailable() {
+        let condition = listing_condition(None, Some(&Value::String("Unknown".to_owned())))
+            .expect("condition name");
+
+        assert_eq!(
+            condition.identity.status,
+            VintedConditionIdentityStatus::Unavailable
+        );
+        assert_eq!(condition.identity.upstream_id, None);
+        assert_eq!(condition.identity.composer_id, None);
     }
 
     #[test]

@@ -319,6 +319,13 @@ context together with the safe user action or Vinted URL.
 
 Publication output points to `vinted listing show ITEM_ID`, which reads the
 account wardrobe and editable item directly without waiting for search indexing.
+Condition output separates the editable listing's `upstream_id` from the
+selection-scoped `composer_id`. Flea resolves the composer identity by matching
+the localized listing condition against live attribute discovery for the
+listing's category. `identity.status` is `composer_matched`, `upstream_only`, or
+`unavailable`; null IDs remain in their named namespace and never imply that an
+upstream ID can be submitted to the composer.
+
 During Vinted review, inspection falls back to the bounded account collections
 and returns `state: moderated` with available summary fields and canonical URL.
 Follow its next action after waiting for review instead of changing listing

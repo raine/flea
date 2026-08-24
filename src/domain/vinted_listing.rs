@@ -21,6 +21,27 @@ pub struct VintedListingValue {
     pub name: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VintedConditionIdentityStatus {
+    ComposerMatched,
+    UpstreamOnly,
+    Unavailable,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct VintedConditionIdentity {
+    pub status: VintedConditionIdentityStatus,
+    pub upstream_id: Option<String>,
+    pub composer_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct VintedListingCondition {
+    pub name: Option<String>,
+    pub identity: VintedConditionIdentity,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct VintedListingShipping {
     pub package_size_id: Option<String>,
@@ -44,7 +65,7 @@ pub struct VintedListingDetail {
     pub title: Option<String>,
     pub description: Option<String>,
     pub price: Option<SearchPrice>,
-    pub condition: Option<VintedListingValue>,
+    pub condition: Option<VintedListingCondition>,
     pub category: Option<VintedListingValue>,
     pub brand: Option<VintedListingValue>,
     pub colors: Vec<VintedListingValue>,

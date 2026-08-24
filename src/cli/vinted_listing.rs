@@ -10,7 +10,7 @@ pub struct VintedListingArgs {
 pub enum VintedListingCommand {
     #[command(
         about = "Show an account listing",
-        long_about = "Inspect authoritative Vinted account state directly by item ID without relying on search indexing. Listings under review return moderated state and available summary fields until Vinted makes editable detail available."
+        long_about = "Inspect authoritative Vinted account state directly by item ID without relying on search indexing. Condition output distinguishes upstream listing IDs from selection-scoped composer option IDs resolved through runtime discovery. Listings under review return moderated state and available summary fields until Vinted makes editable detail available."
     )]
     Show {
         /// Numeric item ID returned by Vinted publication.

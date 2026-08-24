@@ -75,7 +75,11 @@ flea vinted listing list
 `listing list` enumerates active and draft-associated items for the authenticated
 account without relying on search indexing. Use it to verify that a
 review-pending publication exists while Vinted hides it from public search,
-then inspect the returned item ID with `listing show`.
+then inspect the returned item ID with `listing show`. Listing conditions expose
+separate `identity.upstream_id` and `identity.composer_id` values. Use the
+composer ID for publication correlation when `identity.status` is
+`composer_matched`. Treat `upstream_only` and `unavailable` as explicit limits,
+not as permission to submit a listing-side ID to the composer.
 
 Publication category search uses portal-localized taxonomy labels. Include
 known audience context in the query, such as `miesten`, `naisten`, or `lasten`.
