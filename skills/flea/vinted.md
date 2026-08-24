@@ -59,7 +59,8 @@ account reads, so set up both layers:
 ```sh
 flea vinted auth login
 flea vinted auth status
-flea --format json vinted category search SEARCH_TEXT
+flea --format json vinted category search SEARCH_TEXT \
+  --title LISTING_TITLE --description LISTING_DESCRIPTION
 flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted category compose CATEGORY_ID --full
 flea vinted draft show DRAFT_ID
@@ -81,18 +82,19 @@ composer ID for publication correlation when `identity.status` is
 `composer_matched`. Treat `upstream_only` and `unavailable` as explicit limits,
 not as permission to submit a listing-side ID to the composer.
 
-Publication category search uses portal-localized taxonomy labels. Include
-known audience context in the query, such as `miesten`, `naisten`, or `lasten`.
-Output reports the portal and request locale, resolves opaque IDs through the
-localized catalog, and preserves upstream aliases or suggestions. When direct
-results are empty or broad, flea ranks publishable leaves with live Vinted
-category facets. Inspect `marketplace_evidence`, honor `selection_required`, and
-choose the category matching the item instead of selecting the first result.
-Follow a leaf result's `next_actions` into `category compose`. The default
-response provides readiness, issues, selected values, brand validation, and
-correction actions in a bounded structure. Use `--full` when the next action
-requires complete fields and runtime option catalogs for brands, colors, package
-sizes, currencies, or category attributes.
+Publication category search uses portal-localized taxonomy labels. Supply the
+known listing title and description as recommendation context. Output reports
+the portal and request locale, resolves opaque IDs through the localized
+catalog, and preserves upstream aliases or suggestions. When direct results
+need ranking, flea discovers publishable leaves from live Vinted category
+facets. `marketplace_evidence.recommendations` contains a relative score and
+compact live-listing evidence for each category ID. Honor `selection_required`
+and compare the ranked candidates when evidence is weak or nearby categories
+remain plausible. Follow a leaf result's `next_actions` into `category compose`.
+The default response provides readiness, issues, selected values, brand
+validation, and correction actions in a bounded structure. Use `--full` when
+the next action requires complete fields and runtime option catalogs for brands,
+colors, package sizes, currencies, or category attributes.
 
 Brands and package sizes are category scoped. Colors are portal scoped,
 configuration is account scoped, and attributes are selection scoped. Composer

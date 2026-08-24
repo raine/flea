@@ -207,7 +207,8 @@ and the dedicated Chrome profile in their established private state locations. `
 limits the clear operation to one layer.
 
 ```sh
-flea --format json vinted category search SEARCH_TEXT
+flea --format json vinted category search SEARCH_TEXT \
+  --title LISTING_TITLE --description LISTING_DESCRIPTION
 flea vinted category compose CATEGORY_ID
 flea vinted category compose CATEGORY_ID --input listing.json
 flea vinted category compose CATEGORY_ID --full
@@ -230,11 +231,13 @@ flea vinted listing list
 ```
 
 Publication category search sends the keyword to Vinted's authenticated
-portal-localized category service. Its output identifies the active portal and
-request locale, resolves returned IDs through the localized catalog, and exposes
-aliases or suggestions supplied by Vinted. If a query has no matches, browse
-`category list` and search with a label from that catalog. Flea does not translate
-category queries or maintain a multilingual taxonomy.
+portal-localized category service. Supply the listing title and description to
+rank ambiguous results using current marketplace category facets. The output
+contains publishable leaves plus relative scores and compact live-listing
+evidence keyed by category ID. `selection_required` stays true because weak or
+nearby matches require agent judgment. Category IDs and ranking behavior come
+from scoped runtime discovery data. Flea does not translate category queries or
+maintain marketplace category mappings.
 
 Sellers can write accurate titles and natural descriptions in their own
 language. Vinted's buyer-facing web experience provides translation for

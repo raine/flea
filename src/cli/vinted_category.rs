@@ -45,12 +45,19 @@ pub enum VintedCategoryCommand {
     )]
     List,
     #[command(
-        about = "Search Vinted publication categories",
-        long_about = "Send a keyword to Vinted's authenticated, portal-localized publication category service. Output reports the active portal and request locale. If no category matches, browse the localized catalog or follow any Vinted-provided suggestions."
+        about = "Search and rank Vinted publication categories",
+        long_about = "Send a keyword to Vinted's authenticated, portal-localized publication category service. Output reports the active portal and request locale and keeps Vinted-provided suggestions. Optional listing title and description provide recommendation context. When direct results need ranking, output uses current marketplace discovery data to score publishable leaves and reports why selection remains required.",
+        after_help = "Example:\n  flea vinted category search 'Vibram FiveFingers' --title 'Men’s trail running shoes' --description 'Barefoot shoes with rugged soles'"
     )]
     Search {
         /// Portal-localized category search text.
         keyword: String,
+        /// Listing title used as recommendation context.
+        #[arg(long)]
+        title: Option<String>,
+        /// Listing description used as recommendation context.
+        #[arg(long)]
+        description: Option<String>,
     },
     #[command(
         about = "Compose and validate a Vinted publication form",
@@ -166,13 +173,19 @@ pub async fn execute(
         return Ok(CommandOutcome::new(data).with_next_actions(next_actions));
     }
 
-    let search_query = match &command {
-        VintedCategoryCommand::Search { keyword } => Some(keyword.clone()),
+    let search_context = match &command {
+        VintedCategoryCommand::Search {
+            keyword,
+            title,
+            description,
+        } => Some((keyword.clone(), title.clone(), description.clone())),
         _ => None,
     };
     let request = match command {
         VintedCategoryCommand::List => DiscoveryRequest::Catalogs,
-        VintedCategoryCommand::Search { keyword } => DiscoveryRequest::SearchCatalog { keyword },
+        VintedCategoryCommand::Search { keyword, .. } => {
+            DiscoveryRequest::SearchCatalog { keyword }
+        }
         VintedCategoryCommand::Compose { .. } => unreachable!("handled above"),
         VintedCategoryCommand::Attributes { input } => DiscoveryRequest::Attributes {
             selections: read_json(&input)?,
@@ -193,13 +206,18 @@ pub async fn execute(
     validate_request(&request)?;
     let credentials = session.credentials(portal).await?;
     let response = api.execute(&credentials, &request).await?;
-    if let Some(query) = search_query {
+    if let Some((query, title, description)) = search_context {
         let catalogs = api
             .execute(&credentials, &DiscoveryRequest::Catalogs)
             .await?;
         let mut categories = categories_for_search(&response, &catalogs);
         let direct_count = categories.len();
-        let needs_marketplace_evidence = needs_marketplace_evidence(direct_count);
+        let has_listing_context = [title.as_deref(), description.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|value| !value.trim().is_empty());
+        let needs_marketplace_evidence =
+            needs_marketplace_evidence(direct_count, has_listing_context);
         let mut marketplace_evidence = None;
         let mut warnings = Vec::new();
         if needs_marketplace_evidence {
@@ -207,7 +225,11 @@ pub async fn execute(
             let runtime_categories = categories_from_response(&catalogs);
             match category_evidence::discover(
                 portal,
-                &query,
+                category_evidence::RecommendationContext {
+                    keyword: &query,
+                    title: title.as_deref(),
+                    description: description.as_deref(),
+                },
                 &runtime_categories,
                 session,
                 search_api,
@@ -232,7 +254,7 @@ pub async fn execute(
         let count = categories.len();
         let guidance = if marketplace_evidence.is_some() {
             Some(format!(
-                "Vinted's localized category service returned no focused direct match on portal {portal} with locale {}. These publishable leaf categories are ranked by category counts from current Vinted listings matching this text; choose the category that matches the item.",
+                "Vinted's localized category service returned no focused direct match on portal {portal} with locale {}. These publishable leaf categories are ranked and scored from current Vinted listings matching the supplied search and listing context; selection is required.",
                 VINTED_FI_BINDING.iso_locale
             ))
         } else if count == 0 {
@@ -284,8 +306,8 @@ pub async fn execute(
     }
 }
 
-fn needs_marketplace_evidence(direct_count: usize) -> bool {
-    direct_count == 0 || direct_count > MAX_DIRECT_CATEGORY_RESULTS
+fn needs_marketplace_evidence(direct_count: usize, has_listing_context: bool) -> bool {
+    has_listing_context || direct_count == 0 || direct_count > MAX_DIRECT_CATEGORY_RESULTS
 }
 
 fn category_search_next_actions(
@@ -464,6 +486,8 @@ mod tests {
             PortalId::Fi,
             VintedCategoryCommand::Search {
                 keyword: "reppu".into(),
+                title: None,
+                description: None,
             },
             &session,
             &api,
@@ -504,6 +528,8 @@ mod tests {
             PortalId::Fi,
             VintedCategoryCommand::Search {
                 keyword: "backpack".into(),
+                title: None,
+                description: None,
             },
             &session,
             &api,
@@ -538,14 +564,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn zero_upstream_results_use_marketplace_category_facets() {
+    async fn listing_context_ranks_products_that_fit_nearby_categories() {
         let api = FixtureApi {
-            search: json!({"catalog_ids":[]}),
+            search: json!({"catalog_ids":[1453,2678,3001]}),
             catalogs: json!({"catalogs":[
                 {"id":100,"title":"Miehet","catalogs":[
                     {"id":110,"title":"Kengät","catalogs":[
                         {"id":1453,"title":"Juoksukengät","catalogs":[]},
-                        {"id":2678,"title":"Vaelluskengät","catalogs":[]}
+                        {"id":2678,"title":"Vaelluskengät","catalogs":[]},
+                        {"id":3001,"title":"Vapaa-ajan kengät","catalogs":[]}
                     ]}
                 ]}
             ]}),
@@ -564,8 +591,9 @@ mod tests {
                 (
                     Some("110".into()),
                     json!({"categories":[
-                        {"id":1453,"title":"Juoksukengät","item_count":40},
-                        {"id":2678,"title":"Vaelluskengät","item_count":60}
+                        {"id":1453,"title":"Juoksukengät","item_count":60},
+                        {"id":2678,"title":"Vaelluskengät","item_count":40},
+                        {"id":3001,"title":"Vapaa-ajan kengät","item_count":10}
                     ]}),
                 ),
             ]),
@@ -576,6 +604,8 @@ mod tests {
             PortalId::Fi,
             VintedCategoryCommand::Search {
                 keyword: "paljasjalkakengät".into(),
+                title: Some("Vibram FiveFingers miesten juoksukengät".into()),
+                description: Some("Kevyet paljasjalkakengät maastojuoksuun".into()),
             },
             &session,
             &api,
@@ -587,8 +617,9 @@ mod tests {
         let CommandData::VintedCategories(result) = outcome.data else {
             panic!("expected normalized category search output");
         };
-        assert_eq!(result.categories[0].id, 2678);
-        assert_eq!(result.categories[1].id, 1453);
+        assert_eq!(result.categories[0].id, 1453);
+        assert_eq!(result.categories[1].id, 2678);
+        assert_eq!(result.categories[2].id, 3001);
         assert!(
             result
                 .guidance
@@ -598,23 +629,48 @@ mod tests {
         );
         let evidence = result.marketplace_evidence.unwrap();
         assert_eq!(evidence.requests, 3);
+        assert!(evidence.selection_required);
+        assert_eq!(evidence.context_fields, ["keyword", "title", "description"]);
+        assert_eq!(evidence.recommendations[0].category_id, 1453);
+        assert_eq!(evidence.recommendations[0].score, 100);
+        assert_eq!(evidence.recommendations[1].score, 67);
+        assert!(
+            evidence.recommendations[1]
+                .evidence
+                .contains("40 matching listings")
+        );
         assert_eq!(evidence.counts[0].listings, 60);
-        assert_eq!(search_api.requests.lock().unwrap().len(), 3);
+        let requests = search_api.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests[0]
+                .context
+                .query
+                .contains("Vibram FiveFingers miesten juoksukengät")
+        );
+        assert!(requests[0].context.query.contains("maastojuoksuun"));
         assert_eq!(
             outcome.next_actions[0].command,
             "flea vinted --portal fi category list"
         );
         assert_eq!(
             outcome.next_actions[1].command,
-            "flea vinted --portal fi category compose 2678"
+            "flea vinted --portal fi category compose 1453"
         );
     }
 
     #[test]
     fn empty_and_broad_direct_results_use_marketplace_evidence() {
-        assert!(needs_marketplace_evidence(0));
-        assert!(!needs_marketplace_evidence(MAX_DIRECT_CATEGORY_RESULTS));
-        assert!(needs_marketplace_evidence(MAX_DIRECT_CATEGORY_RESULTS + 1));
+        assert!(needs_marketplace_evidence(0, false));
+        assert!(!needs_marketplace_evidence(
+            MAX_DIRECT_CATEGORY_RESULTS,
+            false
+        ));
+        assert!(needs_marketplace_evidence(
+            MAX_DIRECT_CATEGORY_RESULTS + 1,
+            false
+        ));
+        assert!(needs_marketplace_evidence(1, true));
     }
 
     #[test]

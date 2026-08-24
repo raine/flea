@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Rank ambiguous Vinted publication categories with supplied listing text and
+  compact scores derived from live marketplace category evidence
 - Normalize Vinted listing conditions against selection-scoped runtime composer
   options while preserving distinct upstream and composer identity namespaces
 - Replace the duplicate Vinted `auth` and `auth web` trees with one
