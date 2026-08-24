@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show required Vinted category attributes and executable option-selection
+  actions in the primary publication composer
 - Treat confirmed Vinted publications under review as pending successes with
   authoritative account state and duplicate-safe retry guidance
 - Link supplied Vinted brands outside initial composer suggestions directly to

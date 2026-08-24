@@ -15,7 +15,8 @@ use crate::{
             composer::{
                 PublicationCategoryCollection, PublicationCategorySuggestion,
                 VintedComposerReadiness, VintedPublicationComposer, categories_for_search,
-                category_suggestions_from_search, selection_command,
+                category_suggestions_from_search, publication_attribute_definitions,
+                publication_attribute_options, selection_command,
             },
             publication_discovery::{
                 DiscoveryRequest, DiscoveryScope, PublicationDiscoveryOutput,
@@ -263,30 +264,10 @@ fn attribute_next_actions(request: &DiscoveryRequest, response: &Value) -> Vec<N
     let DiscoveryRequest::Attributes { selections } = request else {
         return Vec::new();
     };
-    let Some(attributes) = response
-        .get("attributes")
-        .and_then(Value::as_array)
-        .or_else(|| {
-            response
-                .pointer("/data/attributes")
-                .and_then(Value::as_array)
-        })
-    else {
-        return Vec::new();
-    };
     let mut actions = Vec::new();
-    for attribute in attributes {
-        let Some(code) = attribute.get("code").and_then(Value::as_str) else {
-            continue;
-        };
-        let Some(values) = ["values", "options", "items"]
-            .iter()
-            .find_map(|key| attribute.get(*key).and_then(Value::as_array))
-        else {
-            continue;
-        };
-        for value in values
-            .iter()
+    for (code, definition) in publication_attribute_definitions(response) {
+        for value in publication_attribute_options(definition)
+            .into_iter()
             .filter_map(|option| option.get("id").or_else(|| option.get("value")))
         {
             let mut payload = selections.as_array().cloned().unwrap_or_default();
@@ -460,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn attribute_actions_carry_the_exact_selection_payload_forward() {
+    fn attribute_actions_carry_nested_options_and_exact_selections_forward() {
         let request = DiscoveryRequest::Attributes {
             selections: json!([{"code":"category","value":[4380]}]),
         };
@@ -468,7 +449,15 @@ mod tests {
             &request,
             &json!({"attributes":[{
                 "code":"condition",
-                "values":[{"id":6,"title":"Good"},{"id":7,"title":"New"}]
+                "configuration":{
+                    "title":"Condition",
+                    "required":true,
+                    "groups":[{
+                        "id":1,
+                        "title":"Condition",
+                        "options":[{"id":6,"title":"Good"},{"id":7,"title":"New"}]
+                    }]
+                }
             }]}),
         );
 

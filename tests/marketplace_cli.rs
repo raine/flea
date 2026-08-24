@@ -34,10 +34,22 @@ impl VintedPublicationDiscoveryApi for DiscoveryFixture {
                         "id":4380,"title":"Locks","catalogs":[]
                     }]
                 }]}),
-                DiscoveryRequest::Attributes { .. } => json!({"attributes":[{
-                    "code":"condition","title":"Condition",
-                    "required":true,"values":[{"id":6,"title":"Good"}]
-                }]}),
+                DiscoveryRequest::Attributes { .. } => json!({"attributes":[
+                    {
+                        "code":"condition",
+                        "configuration":{
+                            "title":"Condition","required":true,
+                            "options":[{"id":6,"title":"Good"}]
+                        }
+                    },
+                    {
+                        "code":"size",
+                        "configuration":{
+                            "title":"Size","required":true,
+                            "options":[{"id":42,"title":"42"}]
+                        }
+                    }
+                ]}),
                 DiscoveryRequest::Brands { keyword, .. } if keyword == "Vibram Fivefingers" => {
                     json!({"brands":[{"id":123456,"title":"Vibram Fivefingers"}]})
                 }
@@ -97,7 +109,22 @@ fn vinted_publication_discovery_guides_the_category_and_attribute_chain() {
         compose["data"]["attribute_selection_payload"],
         json!([{"code":"category","value":[4380]}])
     );
-    assert!(compose["data"]["form"]["options"].is_array());
+    for (field, option) in [("attribute.condition", 6), ("attribute.size", 42)] {
+        assert!(
+            compose["data"]["form"]["fields"]
+                .as_array()
+                .is_some_and(|fields| fields.iter().any(|candidate| {
+                    candidate["key"] == field && candidate["requirement"] == "required"
+                }))
+        );
+        assert!(
+            compose["data"]["form"]["options"]
+                .as_array()
+                .is_some_and(|options| options.iter().any(|candidate| {
+                    candidate["field"] == field && candidate["value"] == option
+                }))
+        );
+    }
     assert!(
         compose["data"]["issue_actions"]
             .as_array()
@@ -105,7 +132,9 @@ fn vinted_publication_discovery_guides_the_category_and_attribute_chain() {
                 actions.iter().any(|action| {
                     action["field"] == "attribute.condition"
                         && action["command"].as_str().is_some_and(|command| {
-                            command.contains(r#"[{"code":"category","value":[4380]}]"#)
+                            command.contains(
+                                r#"[{"code":"category","value":[4380]},{"code":"condition","value":[6]}]"#,
+                            )
                         })
                 })
             })

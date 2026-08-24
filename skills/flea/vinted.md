@@ -86,22 +86,18 @@ omits unrelated fields and option catalogs. Omit `--readiness` when discovering
 valid brands, colors, package sizes, currencies, or category attributes.
 
 Brands and package sizes are category scoped. Colors are portal scoped,
-configuration is account scoped, and attributes are selection scoped. Start
-layered attributes from the composer category option and carry selected parents
-forward:
+configuration is account scoped, and attributes are selection scoped. Composer
+`form.fields` includes the first layer of required category attributes, while
+`form.options` supplies their runtime IDs. Follow the matching `issue_actions`
+or `next_actions` command to select an option and discover dependent layers.
+These commands carry the category and selected parent values without requiring
+a hand-built selection array. Attribute output preserves `selection_payload`;
+continue following `next_actions` through additional layers.
 
-```sh
-flea --format json vinted category compose "$CATEGORY_ID" \
-  | jq '[.data.form.options[] | select(.field == "category") | .raw]' \
-  > selections.json
-flea vinted category attributes --input selections.json
-```
-
-Attribute output preserves `selection_payload`; follow `next_actions` through
-layers. A supplied brand name outside the initial suggestions produces a
-focused category-brand action. Use its opaque ID and canonical name together in
-the next composer input. Use focused discovery when other composer issue
-actions request it.
+A supplied brand name outside the initial suggestions produces a focused
+category-brand action. Use its opaque ID and canonical name together in the next
+composer input. Use focused discovery when other composer issue actions request
+it.
 
 Write listing text naturally in the seller's language. Vinted's buyer-facing
 experience translates supported member-authored content and offers the original.

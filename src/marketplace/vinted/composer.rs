@@ -760,23 +760,13 @@ fn add_optional_listing_fields(form: &mut PublicationForm) {
 }
 
 fn add_dynamic_attributes(form: &mut PublicationForm, response: &Value) {
-    let mut definitions = Vec::new();
-    collect_attribute_definitions(response, &mut definitions);
-    for definition in definitions {
-        let Some(code) = definition.get("code").and_then(Value::as_str) else {
-            continue;
-        };
+    for (code, definition) in publication_attribute_definitions(response) {
         if code == "category" {
             continue;
         }
         let key = format!("attribute.{code}");
-        let label = object_label(definition.as_object().expect("object"))
-            .unwrap_or_else(|| code.to_owned());
-        let required = bool_at(
-            definition.as_object().expect("object"),
-            &["required", "is_required"],
-        )
-        .unwrap_or(false);
+        let label = object_label(definition).unwrap_or_else(|| code.to_owned());
+        let required = bool_at(definition, &["required", "is_required"]).unwrap_or(false);
         let requirement = if required {
             Requirement::Required
         } else {
@@ -790,45 +780,80 @@ fn add_dynamic_attributes(form: &mut PublicationForm, response: &Value) {
             requirement,
             "attributes",
         );
-        if let Some(options) = option_array(definition.as_object().expect("object")) {
-            for option in options {
-                let Some(object) = option.as_object() else {
-                    continue;
-                };
-                let (Some(id), Some(label)) = (numeric_id(object), object_label(object)) else {
-                    continue;
-                };
-                form.options.push(FieldOption {
-                    field: key.clone(),
-                    value: json!(id),
-                    label,
-                    raw: Some(option.clone()),
-                });
-            }
+        for option in publication_attribute_options(definition) {
+            let object = option.as_object().expect("attribute option object");
+            let (Some(id), Some(label)) = (numeric_id(object), object_label(object)) else {
+                continue;
+            };
+            form.options.push(FieldOption {
+                field: key.clone(),
+                value: json!(id),
+                label,
+                raw: Some(option.clone()),
+            });
         }
     }
 }
 
-fn collect_attribute_definitions<'a>(value: &'a Value, output: &mut Vec<&'a Value>) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                collect_attribute_definitions(value, output);
-            }
-        }
-        Value::Object(object) => {
-            if object.get("code").and_then(Value::as_str).is_some()
-                && option_array(object).is_some()
-            {
-                output.push(value);
-            } else {
-                for value in object.values() {
-                    collect_attribute_definitions(value, output);
+pub(crate) fn publication_attribute_definitions(value: &Value) -> Vec<(&str, &Map<String, Value>)> {
+    fn collect<'a>(value: &'a Value, output: &mut Vec<(&'a str, &'a Map<String, Value>)>) {
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    collect(value, output);
                 }
             }
+            Value::Object(object) => {
+                if let Some(code) = object.get("code").and_then(Value::as_str) {
+                    let definition = object
+                        .get("configuration")
+                        .and_then(Value::as_object)
+                        .unwrap_or(object);
+                    output.push((code, definition));
+                } else {
+                    for value in object.values() {
+                        collect(value, output);
+                    }
+                }
+            }
+            _ => {}
         }
-        _ => {}
     }
+
+    let mut definitions = Vec::new();
+    collect(value, &mut definitions);
+    definitions
+}
+
+pub(crate) fn publication_attribute_options(definition: &Map<String, Value>) -> Vec<&Value> {
+    fn collect_options<'a>(values: &'a [Value], output: &mut Vec<&'a Value>) {
+        for value in values {
+            let Some(object) = value.as_object() else {
+                continue;
+            };
+            if numeric_id(object).is_some() && object_label(object).is_some() {
+                output.push(value);
+            }
+            if let Some(children) = object.get("options").and_then(Value::as_array) {
+                collect_options(children, output);
+            }
+        }
+    }
+
+    let mut options = Vec::new();
+    for key in ["values", "options", "items"] {
+        if let Some(values) = definition.get(key).and_then(Value::as_array) {
+            collect_options(values, &mut options);
+        }
+    }
+    if let Some(groups) = definition.get("groups").and_then(Value::as_array) {
+        for group in groups {
+            if let Some(values) = group.get("options").and_then(Value::as_array) {
+                collect_options(values, &mut options);
+            }
+        }
+    }
+    options
 }
 
 fn add_named_options<F>(options: &mut Vec<FieldOption>, field: &str, response: &Value, make: F)
@@ -1013,12 +1038,6 @@ fn child_values(object: &Map<String, Value>) -> Vec<&Value> {
         .unwrap_or_default()
 }
 
-fn option_array(object: &Map<String, Value>) -> Option<&Vec<Value>> {
-    ["values", "options", "items"]
-        .iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_array))
-}
-
 fn explicit_path(object: &Map<String, Value>) -> Option<Vec<String>> {
     for key in ["path", "full_path", "breadcrumbs"] {
         match object.get(key) {
@@ -1100,7 +1119,44 @@ fn composer_issue_actions(
     let mut actions = form
         .issues
         .iter()
-        .map(|issue| {
+        .flat_map(|issue| {
+            if let Some(code) = issue.field.strip_prefix("attribute.") {
+                let options = form
+                    .options
+                    .iter()
+                    .filter(|option| option.field == issue.field)
+                    .collect::<Vec<_>>();
+                if !options.is_empty() {
+                    return options
+                        .into_iter()
+                        .map(|option| {
+                            let selections = with_attribute_selection(
+                                attribute_selection_payload,
+                                code,
+                                &option.value,
+                            );
+                            ComposerIssueAction {
+                                field: issue.field.clone(),
+                                code: issue.code.clone(),
+                                instruction: format!(
+                                    "Choose {} (ID {}) and continue layered attribute discovery.",
+                                    option.label, option.value
+                                ),
+                                command: selection_command(&selections),
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                }
+                return vec![ComposerIssueAction {
+                    field: issue.field.clone(),
+                    code: issue.code.clone(),
+                    instruction:
+                        "Continue layered attribute discovery using the exact selections already made."
+                            .into(),
+                    command: selection_command(attribute_selection_payload),
+                }];
+            }
+
             let (instruction, command) = match issue.field.as_str() {
                 "brand" => brand_discovery_action(category_id, supplied_brand.as_ref()),
                 "color" => (
@@ -1115,21 +1171,17 @@ fn composer_issue_actions(
                     "Correct the value using the account publication configuration.",
                     "flea vinted category configuration".into(),
                 ),
-                field if field.starts_with("attribute.") => (
-                    "Choose the next attribute value using the exact selections already made.",
-                    selection_command(attribute_selection_payload),
-                ),
                 _ => (
                     "Set this seller-provided field in ListingInput and run the composer again.",
                     format!("flea vinted category compose {category_id} --input listing.json"),
                 ),
             };
-            ComposerIssueAction {
+            vec![ComposerIssueAction {
                 field: issue.field.clone(),
                 code: issue.code.clone(),
                 instruction: instruction.into(),
                 command,
-            }
+            }]
         })
         .collect::<Vec<_>>();
 
@@ -1198,6 +1250,13 @@ fn initial_options_contain_brand_name(response: &Value, name: &str) -> bool {
                 .and_then(object_label)
                 .is_some_and(|candidate| candidate == name)
         })
+}
+
+fn with_attribute_selection(selections: &Value, code: &str, value: &Value) -> Value {
+    let mut selections = selections.as_array().cloned().unwrap_or_default();
+    selections.retain(|selection| selection.get("code") != Some(&json!(code)));
+    selections.push(json!({"code": code, "value": [value]}));
+    Value::Array(selections)
 }
 
 pub(crate) fn selection_command(selections: &Value) -> String {
@@ -1308,6 +1367,89 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn composer_surfaces_required_running_shoe_size_and_condition() {
+        let composer = compose_from_documents(
+            PublicationCategory {
+                id: 1234,
+                title: "Men's running shoes".into(),
+                path: vec!["Men".into(), "Shoes".into(), "Running shoes".into()],
+                leaf: true,
+            },
+            None,
+            &json!({"attributes":[
+                {
+                    "code":"size",
+                    "configuration":{
+                        "title":"Size",
+                        "required":true,
+                        "selection_type":"single",
+                        "options":[
+                            {"id":42,"title":"42","has_children":false},
+                            {"id":43,"title":"43","has_children":false}
+                        ]
+                    }
+                },
+                {
+                    "code":"condition",
+                    "configuration":{
+                        "title":"Condition",
+                        "required":true,
+                        "selection_type":"single",
+                        "groups":[{
+                            "id":1,
+                            "title":"Condition",
+                            "options":[
+                                {"id":6,"title":"Good","has_children":false},
+                                {"id":7,"title":"Very good","has_children":false}
+                            ]
+                        }]
+                    }
+                }
+            ]}),
+            (&json!({"brands":[]}), None),
+            &json!({"colors":[]}),
+            &json!({"currencies":["EUR"]}),
+            &json!({"package_sizes":[]}),
+        )
+        .unwrap();
+
+        for key in ["attribute.size", "attribute.condition"] {
+            let field = composer
+                .form
+                .fields
+                .iter()
+                .find(|field| field.key == key)
+                .unwrap();
+            assert_eq!(field.requirement, Requirement::Required);
+            assert_eq!(field.option_count, 2);
+        }
+        assert!(
+            composer
+                .form
+                .options
+                .iter()
+                .any(|option| { option.field == "attribute.size" && option.value == json!(42) })
+        );
+        assert!(
+            composer.form.options.iter().any(|option| {
+                option.field == "attribute.condition" && option.value == json!(6)
+            })
+        );
+        assert!(composer.issue_actions.iter().any(|action| {
+            action.field == "attribute.size"
+                && action.command.contains(
+                    r#"[{"code":"category","value":[1234]},{"code":"size","value":[42]}]"#,
+                )
+        }));
+        assert!(composer.issue_actions.iter().any(|action| {
+            action.field == "attribute.condition"
+                && action
+                    .command
+                    .contains(r#"{"code":"condition","value":[6]}"#)
+        }));
     }
 
     #[test]
