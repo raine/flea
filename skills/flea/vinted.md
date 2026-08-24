@@ -64,7 +64,13 @@ flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
 flea vinted publish --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
+flea vinted listing list
 ```
+
+`listing list` enumerates active and draft-associated items for the authenticated
+account without relying on search indexing. Use it to verify that a
+review-pending publication exists while Vinted hides it from public search,
+then inspect the returned item ID with `listing show`.
 
 Publication category search uses portal-localized taxonomy labels. Output
 reports the portal and request locale, resolves opaque IDs through the localized

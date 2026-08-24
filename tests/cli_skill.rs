@@ -84,6 +84,10 @@ fn vinted_skill_preserves_complete_operating_guidance() {
         "flea vinted category compose CATEGORY_ID",
         "flea vinted draft publish DRAFT_ID",
         "flea vinted listing show ITEM_ID",
+        "flea vinted listing list",
+        "active and draft-associated items",
+        "without relying on search indexing",
+        "review-pending publication",
         "`uploaded_photo_ids`",
         "`assigned_photo_ids` for compatibility",
     ] {
