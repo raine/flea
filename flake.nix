@@ -23,12 +23,7 @@
 
             src = ./.;
 
-            cargoLock = {
-              lockFile = ./Cargo.lock;
-              # Download crate archives directly without the crates.io API redirect.
-              extraRegistries."https://github.com/rust-lang/crates.io-index" =
-                "https://static.crates.io/crates";
-            };
+            cargoLock.lockFile = ./Cargo.lock;
 
             doCheck = false;
 

@@ -2,7 +2,23 @@
 
 ## Unreleased
 
-- Fix Nix builds failing with HTTP 403 errors when downloading dependencies
+- Publish and edit Vinted listings with Chrome alone, without installing
+  agent-browser
+- Use an existing Chrome session with `--browser-url`, including Chrome's
+  approval-based remote debugging; macOS and Linux reuse approved connections
+  across commands until you run `flea browser disconnect`
+- Open Flea's dedicated Chrome profile for manual browsing with `flea browser`
+- Update the title, description, and price of your Vinted listings without
+  replacing their photos or other listing details
+- Improve listing-update verification while Vinted processes changes, and show
+  condition, size, and category details more reliably
+- Find Vinted publication categories more reliably, with category-tree browsing
+  when search does not find the right match
+- Make guided Vinted listing choices clearer, keeping category matches focused
+  and excluding non-selectable size and condition headings
+- Inspect individual listing fields with `flea vinted category compose --field`
+  and save ready-to-publish proposals with `flea vinted sell --output`
+- Fix Nix builds failing when downloading dependencies
 
 ## v0.1.3 (2026-09-08)
 
