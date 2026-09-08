@@ -237,14 +237,19 @@ flea vinted listing update ITEM_ID --input changes.json
 flea vinted listing list
 ```
 
-Publication category search sends the keyword to Vinted's authenticated
-portal-localized category service. Supply the listing title and description to
-rank ambiguous results using current marketplace category facets. The output
-contains publishable leaves plus relative scores and compact live-listing
-evidence keyed by category ID. `selection_required` stays true because weak or
-nearby matches require agent judgment. Category IDs and ranking behavior come
-from scoped runtime discovery data. Flea does not translate category queries or
-maintain marketplace category mappings.
+Publication category search uses the current authenticated publication catalog
+and matches localized words across complete category paths. Publication keyword
+search and marketplace ranking are optional hints: failures cannot erase valid
+catalog matches. Supply title and description as recommendation context, not as
+proof of the correct category. Results distinguish browse targets from leaves
+and require intentional selection, even for a single candidate.
+
+Use `flea vinted category list --roots` and `category list --parent ID` to browse
+when search is empty, broad, or unavailable. Search supports `--parent ID`, and
+compact browsing and search support `--limit` and `--offset`. The unqualified
+`category list` preserves the full raw catalog export. Flea does not translate
+queries: an agent can map seller language to observed labels, then narrow actual
+branches without guessing IDs or dropping material constraints.
 
 Sellers can write accurate titles and natural descriptions in their own
 language. Vinted's buyer-facing web experience provides translation for
@@ -279,12 +284,13 @@ exact `vinted listing show ITEM_ID` action for authoritative follow-up.
 
 `vinted sell` is the agent-oriented guided workflow. It accepts semantic seller
 facts and image paths, performs scoped runtime discovery, and makes no remote
-mutation. Exact semantic matches produce a validated `proposed_mutation` whose
-`listing_input` can be saved and passed to the existing `publish` command.
-Missing or ambiguous values produce structured choices with opaque runtime IDs
-and resumable `--select FIELD=ID` actions. Category evidence from marketplace
-facets always requires an explicit selection. Flea does not fuzzy-match or infer
-marketplace values.
+mutation. Select a current leaf with `--select category=ID`; search-derived
+categories are never selected automatically. Complete, unambiguous facts then
+produce a validated `proposed_mutation` whose `listing_input` can be saved and
+passed to the existing `publish` command. Missing or ambiguous values produce
+structured choices with opaque runtime IDs and resumable `--select FIELD=ID`
+actions. Use a durable facts file for resumable work rather than consumed stdin.
+Flea does not fuzzy-match or infer marketplace values.
 
 A semantic input can use runtime-localized labels without knowing their IDs:
 

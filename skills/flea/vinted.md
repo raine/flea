@@ -78,12 +78,15 @@ flea vinted listing list
 Prefer `vinted sell` when starting from seller facts rather than opaque IDs. Its
 semantic JSON accepts title, description, price, category phrase, size,
 condition, brand, colors, package size, additional `attributes`, and `images`.
-It performs scoped runtime discovery without mutating remote state. Exact label
-matches produce a validated `proposed_mutation`; save its `listing_input` and
-run the returned existing publish command. Ambiguities contain runtime choices
-and resumable `--select FIELD=ID` commands. Follow those actions instead of
-fuzzy matching, selecting the first category, or inventing IDs. Marketplace
-facet category evidence always requires explicit selection.
+It performs scoped runtime discovery without mutating remote state. Select a
+current category leaf explicitly with `--select category=ID`, even when search
+returns only one candidate. After category selection, complete unambiguous facts
+produce a validated `proposed_mutation`; save its `listing_input` and run the
+returned existing publish command. Missing or ambiguous values contain runtime
+choices and resumable `--select FIELD=ID` commands. Prefer a durable facts file
+for this multi-step workflow: consumed stdin cannot be replayed. Follow the
+returned actions instead of fuzzy matching, selecting the first category, or
+inventing IDs.
 
 `listing list` enumerates active and draft-associated items for the authenticated
 account without relying on search indexing. Use it to verify that a
@@ -106,19 +109,51 @@ another update. After an accepted update, Flea briefly polls account reads while
 Vinted processes the item; it never repeats the write. If verification still
 fails, follow the returned `listing show` action rather than retrying the update.
 
-Publication category search uses portal-localized taxonomy labels. Supply the
-known listing title and description as recommendation context. Output reports
-the portal and request locale, resolves opaque IDs through the localized
-catalog, and preserves upstream aliases or suggestions. When direct results
-need ranking, flea discovers publishable leaves from live Vinted category
-facets. `marketplace_evidence.recommendations` contains a relative score and
-compact live-listing evidence for each category ID. Honor `selection_required`
-and compare the ranked candidates when evidence is weak or nearby categories
-remain plausible. Follow a leaf result's `next_actions` into `category compose`.
-The default response provides readiness, issues, selected values, brand
-validation, and correction actions in a bounded structure. Use `--full` when
-the next action requires complete fields and runtime option catalogs for brands,
-colors, package sizes, currencies, or category attributes.
+### Find a publication category
+
+The current publication catalog is authoritative. Category search matches
+portal-localized taxonomy labels across complete category paths; optional publication
+search and marketplace recommendations add hints, not selection authority.
+Supply known title and description as recommendation context. Inspect full
+paths, leaf flags, provenance, warnings, and truncation. Honor `selection_required`.
+When available, `marketplace_evidence.recommendations` contains relative listing
+support, not classification confidence, and zero matching listings do not
+exclude a valid category.
+
+If results are empty, broad, or a hint service fails, browse the catalog:
+
+```sh
+flea vinted category list --roots
+flea vinted category list --parent PARENT_ID
+flea vinted category search 'OBSERVED ANCESTOR AND SHOE TYPE' --parent PARENT_ID
+```
+
+Compact browsing needs no keyword or marketplace search. Follow pagination
+actions for truncated results. `category list` without browsing flags remains
+the full raw catalog export; do not load that entire tree into agent context as
+the normal fallback. An HTTP 404 from optional ranking is not proof that no
+category exists and is not a reason to keep retrying that service.
+
+Interpret seller language using observed taxonomy labels. For example, Finnish
+`lasten kengät` or English `children's shoes` can lead an agent to the observed
+`Lapset` branch, but the CLI does not translate or equate `lasten` with `Lapset`.
+Search `Lapset kengät`, then narrow the actual girls/boys branch and shoe type.
+Preserve child/baby/adult and type constraints when rephrasing. Ask for missing
+material facts rather than choosing a branch by popularity, color stereotypes,
+or guessed IDs. Do not invent a generic unisex branch when the tree has none.
+Keep the seller's listing text in their chosen language.
+
+Nonleaf results are browse targets, never publication choices. Select a current
+leaf only when its complete path fits established seller facts, then use the
+returned `--select category=ID` continuation or `category compose ID`. A single
+candidate still requires intentional selection. Category selection alone does
+not mean the listing is ready or authorized for publication.
+
+Composer returns readiness, issues, selected values, brand validation, and
+correction actions. Use `--full` when the next action requires runtime option
+catalogs. Discover size, condition, and other attributes for the chosen category;
+never assume an EU shoe size is its opaque option ID or reuse IDs from another
+branch.
 
 Brands and package sizes are category scoped. Colors are portal scoped,
 configuration is account scoped, and attributes are selection scoped. Put

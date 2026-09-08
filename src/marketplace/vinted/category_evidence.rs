@@ -71,7 +71,8 @@ pub async fn discover(
         let Some(value) = value else {
             continue;
         };
-        let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        truncate_utf8(&mut normalized, 256);
         if !normalized.is_empty()
             && !normalized.eq_ignore_ascii_case(&query)
             && !fallback_queries
@@ -92,6 +93,7 @@ pub async fn discover(
     let mut visited = BTreeSet::new();
     let mut leaf_hits = BTreeMap::<u64, i64>::new();
     let mut requests = 0;
+    let mut coverage_limited = false;
 
     while requests < MAX_FACET_REQUESTS {
         let Some(parent_id) = frontier.pop_front() else {
@@ -123,6 +125,8 @@ pub async fn discover(
                 "Vinted category facets returned an incompatible result",
             ));
         };
+        coverage_limited |=
+            collection.truncated || collection.filters.iter().any(|filter| filter.truncated);
         let mut options = collection
             .filters
             .into_iter()
@@ -186,11 +190,13 @@ pub async fn discover(
                     .or_insert(hits);
             } else if hits >= branch_threshold && queued.insert(id) {
                 frontier.push_back(Some(id));
+            } else if hits < branch_threshold {
+                coverage_limited = true;
             }
         }
     }
 
-    let truncated = !frontier.is_empty();
+    let truncated = coverage_limited || !frontier.is_empty() || leaf_hits.len() > MAX_CANDIDATES;
     let mut ranked = leaf_hits
         .into_iter()
         .filter_map(|(id, listings)| by_id.get(&id).cloned().map(|category| (category, listings)))

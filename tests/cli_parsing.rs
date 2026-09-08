@@ -555,3 +555,44 @@ fn listing_tree_exposes_update_variant() {
     };
     assert!(matches!(listing.command, ListingCommand::Update { .. }));
 }
+
+#[test]
+fn vinted_category_compact_browsing_and_search_pagination_parse() {
+    for tail in [
+        vec!["list"],
+        vec!["list", "--roots", "--limit", "1", "--offset", "2"],
+        vec!["list", "--parent", "10", "--limit", "100"],
+        vec![
+            "search",
+            "Lapset kengät",
+            "--parent",
+            "10",
+            "--limit",
+            "5",
+            "--offset",
+            "5",
+        ],
+    ] {
+        let mut args = vec!["flea", "vinted", "category"];
+        args.extend(tail);
+        Cli::try_parse_from(args).unwrap();
+    }
+}
+
+#[test]
+fn vinted_category_rejects_raw_pagination_conflicts_and_invalid_bounds() {
+    for tail in [
+        vec!["list", "--limit", "20"],
+        vec!["list", "--offset", "0"],
+        vec!["list", "--roots", "--parent", "10"],
+        vec!["list", "--roots", "--limit", "0"],
+        vec!["list", "--parent", "10", "--limit", "101"],
+        vec!["search", "shoes", "--limit", "0"],
+        vec!["search", "shoes", "--limit", "101"],
+        vec!["search", "shoes", "--offset", "-1"],
+    ] {
+        let mut args = vec!["flea", "vinted", "category"];
+        args.extend(tail);
+        assert!(Cli::try_parse_from(args.clone()).is_err(), "{args:?}");
+    }
+}

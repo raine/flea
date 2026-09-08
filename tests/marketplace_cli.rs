@@ -3,8 +3,8 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use flea::{
     AppError, PortalId,
     dependencies::{
-        ApplicationDependencies, DiscoveryRequest, VintedCredentialRecord,
-        VintedPublicationDiscoveryApi,
+        ApplicationDependencies, CatalogueRequest, DiscoveryRequest, VintedCredentialRecord,
+        VintedPublicationDiscoveryApi, VintedSearchApi,
     },
 };
 use serde_json::{Value, json};
@@ -99,6 +99,18 @@ impl VintedPublicationDiscoveryApi for DiscoveryFixture {
     }
 }
 
+struct UnavailableSearchFixture;
+
+impl VintedSearchApi for UnavailableSearchFixture {
+    fn execute<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        _request: &'a CatalogueRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async { Err(AppError::unexpected("Fixture marketplace unavailable")) })
+    }
+}
+
 fn discovery_dependencies() -> ApplicationDependencies {
     ApplicationDependencies::production()
         .with_vinted_credentials_provider(|_| {
@@ -115,6 +127,7 @@ fn discovery_dependencies() -> ApplicationDependencies {
             ))
         })
         .with_vinted_publication_discovery_api(Arc::new(DiscoveryFixture))
+        .with_vinted_search_api(Arc::new(UnavailableSearchFixture))
 }
 
 fn run_discovery_result(args: &[&str]) -> flea::RunResult {
@@ -224,7 +237,14 @@ fn guided_sell_resolves_exact_runtime_values_into_a_non_mutating_proposal() {
     )
     .unwrap();
 
-    let output = run_discovery_json(&["vinted", "sell", "--input", file.path().to_str().unwrap()]);
+    let output = run_discovery_json(&[
+        "vinted",
+        "sell",
+        "--input",
+        file.path().to_str().unwrap(),
+        "--select",
+        "category=4380",
+    ]);
 
     assert_eq!(output["data"]["status"], "ready");
     assert_eq!(output["data"]["mutated"], false);
@@ -275,7 +295,7 @@ fn guided_sell_requires_explicit_category_selection_for_multiple_runtime_leaves(
             .as_array()
             .unwrap()
             .iter()
-            .all(|action| {
+            .any(|action| {
                 action["command"]
                     .as_str()
                     .unwrap()
@@ -299,7 +319,14 @@ fn guided_sell_returns_scoped_resumable_choices_instead_of_guessing() {
     )
     .unwrap();
 
-    let output = run_discovery_json(&["vinted", "sell", "--input", file.path().to_str().unwrap()]);
+    let output = run_discovery_json(&[
+        "vinted",
+        "sell",
+        "--input",
+        file.path().to_str().unwrap(),
+        "--select",
+        "category=4380",
+    ]);
 
     assert_eq!(output["data"]["status"], "needs_input");
     assert!(output["data"].get("proposed_mutation").is_none());
@@ -717,5 +744,71 @@ fn unsupported_commands_return_structured_marketplace_errors() {
     assert_eq!(
         invalid_item["next_actions"][0]["command"],
         "flea vinted --portal fi search"
+    );
+}
+
+#[test]
+fn guided_sell_singleton_hint_requires_selection_and_retains_warning_and_full_path() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(
+        file.path(),
+        serde_json::to_vec(&json!({
+            "title":"Children shoes", "category":"unmatched phrase"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = run_discovery_json(&["vinted", "sell", "--input", file.path().to_str().unwrap()]);
+    assert_eq!(output["data"]["status"], "needs_input");
+    assert_eq!(output["data"]["mutated"], false);
+    assert_eq!(output["data"]["safe_to_retry"], true);
+    assert!(output["data"].get("proposed_mutation").is_none());
+    assert_eq!(
+        output["data"]["ambiguities"][0]["choices"][0]["label"],
+        "Cycling > Locks"
+    );
+    assert_eq!(
+        output["data"]["category_discovery"]["selection_required"],
+        true
+    );
+    assert_eq!(output["data"]["category_discovery"]["returned"], 1);
+    assert_eq!(
+        output["data"]["category_discovery"]["stages"]["marketplace"],
+        "unavailable"
+    );
+    assert!(!output["warnings"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn guided_sell_rejects_absent_and_nonleaf_selections() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), b"{}").unwrap();
+    for selection in ["category=10", "category=99999"] {
+        let output = run_discovery_result(&[
+            "vinted",
+            "sell",
+            "--input",
+            file.path().to_str().unwrap(),
+            "--select",
+            selection,
+        ]);
+        assert_ne!(output.exit_code, 0);
+        let document: Value = serde_json::from_str(&output.document).unwrap();
+        assert_eq!(
+            document["error"]["code"],
+            "vinted.guided_sell.category_unavailable"
+        );
+    }
+}
+
+#[test]
+fn guided_sell_missing_category_offers_compact_roots() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(file.path(), b"{}").unwrap();
+    let output = run_discovery_json(&["vinted", "sell", "--input", file.path().to_str().unwrap()]);
+    assert_eq!(output["data"]["status"], "needs_input");
+    assert_eq!(
+        output["next_actions"][0]["command"],
+        "flea vinted --portal fi category list --roots"
     );
 }

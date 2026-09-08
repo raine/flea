@@ -15,7 +15,6 @@ use crate::{
         PortalId,
         vinted::{
             brand::{BrandValidation, decide_brand, selected_brand},
-            category_evidence::MarketplaceCategoryEvidence,
             publication::{ListingInput, validate_input},
             publication_discovery::{
                 DiscoveryRequest, DiscoveryScope, VintedPublicationDiscoveryApi,
@@ -37,22 +36,6 @@ pub struct PublicationCategory {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PublicationCategorySuggestion {
     pub keyword: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct PublicationCategoryCollection {
-    pub scope: DiscoveryScope,
-    pub portal: PortalId,
-    pub request_locale: String,
-    pub query: String,
-    pub categories: Vec<PublicationCategory>,
-    pub count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub guidance: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub suggestions: Vec<PublicationCategorySuggestion>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub marketplace_evidence: Option<MarketplaceCategoryEvidence>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -173,7 +156,7 @@ impl<'a> VintedPublicationComposer<'a> {
             .api
             .execute(&credentials, &DiscoveryRequest::Catalogs)
             .await?;
-        let category = categories_from_response(&catalogs)
+        let category = categories_from_response(&catalogs)?
             .into_iter()
             .find(|category| category.id == category_id)
             .ok_or_else(|| {
@@ -298,22 +281,18 @@ fn attribute_selections(category_id: u64, supplied: Option<&Value>) -> Value {
     Value::Array(selections)
 }
 
-pub fn categories_from_response(response: &Value) -> Vec<PublicationCategory> {
-    let mut categories = Vec::new();
-    collect_categories(response, &[], &mut categories);
-    categories.sort_by_key(|category| category.id);
-    categories.dedup_by_key(|category| category.id);
-    categories
+pub fn categories_from_response(response: &Value) -> Result<Vec<PublicationCategory>, AppError> {
+    Ok(super::categories::CatalogTree::from_response(response)?.publication_categories())
 }
 
+#[cfg(test)]
 pub fn categories_for_search(search: &Value, catalogs: &Value) -> Vec<PublicationCategory> {
     let ids = category_ids_from_search(search);
-    let mut categories = categories_from_response(catalogs);
-    if ids.is_empty() {
-        return Vec::new();
-    }
-    categories.retain(|category| ids.contains(&category.id));
-    categories
+    categories_from_response(catalogs)
+        .unwrap()
+        .into_iter()
+        .filter(|category| ids.contains(&category.id))
+        .collect()
 }
 
 pub fn category_suggestions_from_search(search: &Value) -> Vec<PublicationCategorySuggestion> {
@@ -326,7 +305,7 @@ pub fn category_suggestions_from_search(search: &Value) -> Vec<PublicationCatego
         .collect()
 }
 
-fn category_ids_from_search(value: &Value) -> BTreeSet<u64> {
+pub(super) fn category_ids_from_search(value: &Value) -> BTreeSet<u64> {
     let mut ids = BTreeSet::new();
     collect_search_ids(value, &mut ids);
     ids
@@ -433,44 +412,6 @@ fn is_suggestion_key(key: &str) -> bool {
             | "suggested_query"
             | "suggested_queries"
     )
-}
-
-fn collect_categories(value: &Value, parents: &[String], output: &mut Vec<PublicationCategory>) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                collect_categories(value, parents, output);
-            }
-        }
-        Value::Object(object) => {
-            let id = numeric_id(object);
-            let title = object_label(object);
-            let children = child_values(object);
-            if let (Some(id), Some(title)) = (id, title) {
-                let path = explicit_path(object).unwrap_or_else(|| {
-                    let mut path = parents.to_vec();
-                    path.push(title.clone());
-                    path
-                });
-                let leaf = bool_at(object, &["leaf", "is_leaf", "is_leaf_catalog"])
-                    .unwrap_or(children.is_empty());
-                output.push(PublicationCategory {
-                    id,
-                    title: title.clone(),
-                    path: path.clone(),
-                    leaf,
-                });
-                for child in children {
-                    collect_categories(child, &path, output);
-                }
-            } else {
-                for child in object.values() {
-                    collect_categories(child, parents, output);
-                }
-            }
-        }
-        _ => {}
-    }
 }
 
 struct ComposerDocuments<'a> {
@@ -1147,45 +1088,6 @@ pub(crate) fn object_label(object: &Map<String, Value>) -> Option<String> {
         })
 }
 
-fn child_values(object: &Map<String, Value>) -> Vec<&Value> {
-    ["catalogs", "children", "subcategories", "subcatalogs"]
-        .iter()
-        .find_map(|key| object.get(*key).and_then(Value::as_array))
-        .map(|values| values.iter().collect())
-        .unwrap_or_default()
-}
-
-fn explicit_path(object: &Map<String, Value>) -> Option<Vec<String>> {
-    for key in ["path", "full_path", "breadcrumbs"] {
-        match object.get(key) {
-            Some(Value::String(path)) => {
-                return Some(
-                    path.split(['>', '/'])
-                        .map(str::trim)
-                        .filter(|part| !part.is_empty())
-                        .map(str::to_owned)
-                        .collect(),
-                );
-            }
-            Some(Value::Array(parts)) => {
-                let path = parts
-                    .iter()
-                    .filter_map(|part| {
-                        part.as_str()
-                            .map(str::to_owned)
-                            .or_else(|| part.as_object().and_then(object_label))
-                    })
-                    .collect::<Vec<_>>();
-                if !path.is_empty() {
-                    return Some(path);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
 fn bool_at(object: &Map<String, Value>, keys: &[&str]) -> Option<bool> {
     keys.iter()
         .find_map(|key| object.get(*key).and_then(Value::as_bool))
@@ -1402,7 +1304,7 @@ mod tests {
             &json!({"catalogs":[{"id":10,"title":"Cycling","catalogs":[{"id":4380,"title":"Locks","catalogs":[]}]}]}),
         );
         assert_eq!(
-            result[1],
+            result.unwrap()[1],
             PublicationCategory {
                 id: 4380,
                 title: "Locks".into(),

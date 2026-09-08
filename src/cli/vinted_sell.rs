@@ -4,6 +4,7 @@ use clap::Args;
 
 use crate::{
     cli::outcome::{CommandData, CommandOutcome},
+    domain::envelope::Warning,
     error::AppError,
     marketplace::{
         PortalId,
@@ -41,10 +42,19 @@ pub async fn execute(
         images: args.image,
         selections: GuidedSelections::parse(&args.select)?,
     };
-    let (result, next_actions) = GuidedVintedSell::new(session, discovery_api, search_api)
-        .prepare(portal, facts, &request)
-        .await?;
-    Ok(CommandOutcome::new(CommandData::VintedGuidedSell(result)).with_next_actions(next_actions))
+    let (result, next_actions, mut warnings) =
+        GuidedVintedSell::new(session, discovery_api, search_api)
+            .prepare(portal, facts, &request)
+            .await?;
+    if request.input_path.as_os_str() == "-" {
+        warnings.push(Warning {
+            code: "vinted.guided_sell.stdin_not_replayable".into(),
+            message: "Stdin has been consumed. Before resuming, save the original facts to a durable JSON file and replace <saved-facts.json> in the suggested commands with its path.".into(),
+        });
+    }
+    Ok(CommandOutcome::new(CommandData::VintedGuidedSell(result))
+        .with_next_actions(next_actions)
+        .with_warnings(warnings))
 }
 
 fn read_facts(path: &PathBuf) -> Result<GuidedSellFacts, AppError> {

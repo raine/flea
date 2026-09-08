@@ -5,16 +5,16 @@ use serde_json::{Map, Value, json};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::{
-    domain::{envelope::NextAction, field::FieldOption},
+    domain::{
+        envelope::{NextAction, Warning},
+        field::FieldOption,
+    },
     error::AppError,
     marketplace::{
         PortalId,
         vinted::{
-            category_evidence,
-            composer::{
-                PublicationCategory, VintedPublicationComposer, categories_for_search,
-                categories_from_response,
-            },
+            categories::{self, CatalogTree, CategoryDiscovery, SearchOptions},
+            composer::{PublicationCategory, VintedPublicationComposer},
             publication::ListingInput,
             publication_discovery::{DiscoveryRequest, VintedPublicationDiscoveryApi},
             search::{VintedSearchApi, VintedSearchSession},
@@ -22,7 +22,6 @@ use crate::{
     },
 };
 
-const MAX_DIRECT_CATEGORY_RESULTS: usize = 8;
 const MAX_ATTRIBUTE_LAYERS: usize = 16;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -154,6 +153,8 @@ pub struct GuidedSellOutput {
     pub safe_to_retry: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<PublicationCategory>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_discovery: Option<Value>,
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub resolved_values: Map<String, Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -212,70 +213,56 @@ impl<'a> GuidedVintedSell<'a> {
         portal: PortalId,
         facts: GuidedSellFacts,
         request: &GuidedSellRequest,
-    ) -> Result<(GuidedSellOutput, Vec<NextAction>), AppError> {
+    ) -> Result<(GuidedSellOutput, Vec<NextAction>, Vec<Warning>), AppError> {
+        let query = facts.category.as_deref().unwrap_or("");
+        let options = SearchOptions {
+            query,
+            title: facts.title.as_deref(),
+            description: facts.description.as_deref(),
+            parent_id: None,
+            limit: categories::DEFAULT_LIMIT,
+            offset: 0,
+        };
+        if request.selections.one("category").is_none() {
+            if facts.category.is_none() {
+                let (output, _) = needs_fact(
+                    "category",
+                    "category_required",
+                    "Browse current categories and add a truthful category phrase or explicitly select a current leaf.",
+                );
+                return Ok((output, vec![browse_roots(portal)], Vec::new()));
+            }
+            options.validate()?;
+        }
         let credentials = self.session.credentials(portal).await?;
         let catalogs = self
             .discovery_api
             .execute(&credentials, &DiscoveryRequest::Catalogs)
             .await?;
-        let runtime_categories = categories_from_response(&catalogs);
+        let tree = CatalogTree::from_response(&catalogs)?;
         let category = if let Some(category_id) = request.selections.one("category") {
-            runtime_categories
-                .iter()
-                .find(|category| category.id == category_id && category.leaf)
-                .cloned()
+            tree.get(category_id)
+                .filter(|node| node.category.leaf)
+                .map(|node| node.category.clone())
                 .ok_or_else(|| {
-                    AppError::validation(
+                    let mut error = AppError::validation(
                         "vinted.guided_sell.category_unavailable",
                         "The selected category is absent from the current runtime leaf catalog",
-                    )
+                    );
+                    error.next_actions.push(browse_roots(portal));
+                    error
                 })?
         } else {
-            let Some(query) = facts
-                .category
-                .as_deref()
-                .filter(|query| !query.trim().is_empty())
-            else {
-                return Ok(needs_fact(
-                    "category",
-                    "category_required",
-                    "Add a truthful portal-localized category search phrase to the input.",
-                ));
-            };
-            let search = self
-                .discovery_api
-                .execute(
-                    &credentials,
-                    &DiscoveryRequest::SearchCatalog {
-                        keyword: query.to_owned(),
-                    },
-                )
-                .await?;
-            let mut candidates = categories_for_search(&search, &catalogs)
-                .into_iter()
-                .filter(|category| category.leaf)
-                .collect::<Vec<_>>();
-            let direct_count = candidates.len();
-            let evidence_required = direct_count == 0 || direct_count > MAX_DIRECT_CATEGORY_RESULTS;
-            if evidence_required {
-                candidates = category_evidence::discover(
-                    portal,
-                    category_evidence::RecommendationContext {
-                        keyword: query,
-                        title: facts.title.as_deref(),
-                        description: facts.description.as_deref(),
-                    },
-                    &runtime_categories,
-                    self.session,
-                    self.search_api,
-                )
-                .await?
-                .categories;
-            }
-            if evidence_required || candidates.len() != 1 {
-                return Ok(category_ambiguity(query, &candidates, request));
-            }
-            candidates.remove(0)
+            let discovery = categories::discover_in_tree(
+                portal,
+                options,
+                &tree,
+                self.session,
+                self.discovery_api,
+                self.search_api,
+            )
+            .await?;
+            return Ok(category_ambiguity(portal, &facts, discovery, request));
         };
 
         let mut images = facts.images.clone();
@@ -400,11 +387,13 @@ impl<'a> GuidedVintedSell<'a> {
                     mutated: false,
                     safe_to_retry: true,
                     category: Some(category),
+                    category_discovery: None,
                     resolved_values: composed.form.values,
                     ambiguities,
                     proposed_mutation: None,
                 },
                 next_actions,
+                Vec::new(),
             ));
         }
 
@@ -424,11 +413,13 @@ impl<'a> GuidedVintedSell<'a> {
                 mutated: false,
                 safe_to_retry: true,
                 category: Some(category),
+                category_discovery: None,
                 resolved_values: composed.form.values,
                 ambiguities: Vec::new(),
                 proposed_mutation: Some(mutation),
             },
             vec![NextAction { command }],
+            Vec::new(),
         ))
     }
 }
@@ -440,6 +431,7 @@ fn needs_fact(field: &str, code: &str, instruction: &str) -> (GuidedSellOutput, 
             mutated: false,
             safe_to_retry: true,
             category: None,
+            category_discovery: None,
             resolved_values: Map::new(),
             ambiguities: vec![GuidedAmbiguity {
                 field: field.into(),
@@ -454,57 +446,105 @@ fn needs_fact(field: &str, code: &str, instruction: &str) -> (GuidedSellOutput, 
     )
 }
 
+fn browse_roots(portal: PortalId) -> NextAction {
+    NextAction {
+        command: format!("flea vinted --portal {portal} category list --roots"),
+    }
+}
+
 fn category_ambiguity(
-    query: &str,
-    categories: &[PublicationCategory],
+    portal: PortalId,
+    facts: &GuidedSellFacts,
+    discovery: CategoryDiscovery,
     request: &GuidedSellRequest,
-) -> (GuidedSellOutput, Vec<NextAction>) {
-    let choices = categories
+) -> (GuidedSellOutput, Vec<NextAction>, Vec<Warning>) {
+    let choices = discovery
+        .page
+        .categories
         .iter()
-        .map(|category| {
-            let mut label = category.path.join(" > ");
-            if !label.is_empty() {
-                label.push_str(" > ");
-            }
-            label.push_str(&category.title);
+        .map(|candidate| {
+            let category = &candidate.node.category;
             GuidedChoice {
                 id: category.id,
-                label,
-                command: resume_command(
-                    request,
-                    &request.selections.with_choice("category", category.id),
-                ),
+                label: category.path.join(" > "),
+                command: if category.leaf {
+                    resume_command(
+                        request,
+                        &request.selections.with_choice("category", category.id),
+                    )
+                } else {
+                    format!(
+                        "flea vinted --portal {portal} category list --parent {}",
+                        category.id
+                    )
+                },
             }
         })
         .collect::<Vec<_>>();
     let ambiguity = GuidedAmbiguity {
         field: "category".into(),
-        code: if choices.is_empty() {
-            "no_match".into()
-        } else {
-            "ambiguous".into()
-        },
-        instruction: if choices.is_empty() {
-            "Use a more specific portal-localized category phrase based on the runtime catalog."
-                .into()
-        } else {
-            "Choose the runtime leaf category that truthfully classifies the item.".into()
-        },
-        semantic_value: Some(query.to_owned()),
+        code: if choices.is_empty() { "no_match" } else { "selection_required" }.into(),
+        instruction: "Explicitly select a current leaf that truthfully classifies the item. Branch choices browse children, not select a category. Search results are candidates, not semantic confirmation.".into(),
+        semantic_value: facts.category.clone(),
         choices,
     };
-    let actions = ambiguity_actions(std::slice::from_ref(&ambiguity));
+    let mut actions = ambiguity_actions(std::slice::from_ref(&ambiguity));
+    actions.push(browse_roots(portal));
+    if discovery.page.truncated {
+        let mut command = format!(
+            "flea vinted --portal {portal} category search --limit {} --offset {}",
+            discovery.page.limit,
+            discovery.page.offset + discovery.page.returned,
+        );
+        for (flag, value) in [
+            ("--title", &facts.title),
+            ("--description", &facts.description),
+        ] {
+            if let Some(value) = value {
+                command.push_str(&format!(" {flag}={}", shell_word(value)));
+            }
+        }
+        command.push_str(&format!(
+            " -- {}",
+            shell_word(facts.category.as_deref().unwrap_or(""))
+        ));
+        actions.push(NextAction { command });
+    }
+    let metadata = json!({
+        "selection_required": true,
+        "total": discovery.page.total,
+        "returned": discovery.page.returned,
+        "limit": discovery.page.limit,
+        "offset": discovery.page.offset,
+        "truncated": discovery.page.truncated,
+        "stages": discovery.stages,
+        "marketplace_evidence": discovery.marketplace_evidence.as_ref().map(|evidence| json!({
+            "source": evidence.source,
+            "requests": evidence.requests,
+            "truncated": evidence.truncated,
+            "context_fields": evidence.context_fields,
+            "interpretation": "Relative listing-count support only, not classification confidence or complete category coverage",
+        })),
+        "suggestions": discovery.suggestions,
+        "match_sources": discovery.page.categories.iter().map(|candidate| json!({
+            "id": candidate.node.category.id,
+            "leaf": candidate.node.category.leaf,
+            "sources": candidate.match_sources,
+        })).collect::<Vec<_>>(),
+    });
     (
         GuidedSellOutput {
             status: GuidedSellStatus::NeedsInput,
             mutated: false,
             safe_to_retry: true,
             category: None,
+            category_discovery: Some(metadata),
             resolved_values: Map::new(),
             ambiguities: vec![ambiguity],
             proposed_mutation: None,
         },
         actions,
+        discovery.warnings,
     )
 }
 
@@ -826,7 +866,11 @@ fn ambiguity_actions(ambiguities: &[GuidedAmbiguity]) -> Vec<NextAction> {
 fn resume_command(request: &GuidedSellRequest, selections: &GuidedSelections) -> String {
     let mut command = format!(
         "flea vinted sell --input {}",
-        shell_word(&request.input_path.to_string_lossy())
+        shell_word(&if request.input_path.as_os_str() == "-" {
+            "<saved-facts.json>".into()
+        } else {
+            request.input_path.to_string_lossy()
+        })
     );
     for image in &request.images {
         command.push_str(" --image ");
@@ -880,6 +924,66 @@ mod tests {
             resolve_options("attribute.size", Some(&["42".into()]), None, &references),
             Resolution::Ambiguous { .. }
         ));
+    }
+
+    #[test]
+    fn category_choices_are_bounded_and_branches_browse_with_contextual_pagination() {
+        use crate::marketplace::vinted::categories::{DiscoveryStages, StageStatus};
+        let roots = (1..32)
+            .map(|id| json!({"id":id,"title":format!("Root {id:02}"),"catalogs":if id == 1 {vec![json!({"id":100,"title":"Child","catalogs":[]})]} else {vec![]}}))
+            .collect::<Vec<_>>();
+        let tree = CatalogTree::from_response(&json!({"catalogs":roots})).unwrap();
+        let page = tree.browse(None, 20, 0).unwrap();
+        let discovery = CategoryDiscovery {
+            page,
+            suggestions: Vec::new(),
+            marketplace_evidence: None,
+            stages: DiscoveryStages {
+                local_catalog: StageStatus::Complete,
+                publication_search: StageStatus::Empty,
+                marketplace: StageStatus::NotRequested,
+            },
+            warnings: Vec::new(),
+            selection_required: true,
+        };
+        let facts: GuidedSellFacts = serde_json::from_value(
+            json!({"category":"Root","title":"Seller's title","description":"Original text"}),
+        )
+        .unwrap();
+        let request = GuidedSellRequest {
+            input_path: "facts.json".into(),
+            images: vec![],
+            selections: GuidedSelections::default(),
+        };
+        let (output, actions, warnings) =
+            category_ambiguity(PortalId::Fi, &facts, discovery, &request);
+        assert!(warnings.is_empty());
+        assert_eq!(output.ambiguities[0].choices.len(), 20);
+        assert_eq!(output.ambiguities[0].choices[0].label, "Root 01");
+        assert_eq!(
+            output.ambiguities[0].choices[0].command,
+            "flea vinted --portal fi category list --parent 1"
+        );
+        assert_eq!(output.category_discovery.as_ref().unwrap()["total"], 31);
+        let continuation = &actions.last().unwrap().command;
+        assert!(continuation.contains("--limit 20 --offset 20"));
+        assert!(continuation.contains(&format!("--title={}", shell_word("Seller's title"))));
+        assert!(continuation.contains("--description='Original text'"));
+        assert!(output.proposed_mutation.is_none());
+    }
+
+    #[test]
+    fn consumed_stdin_is_never_replayed_in_resume_commands() {
+        let request = GuidedSellRequest {
+            input_path: "-".into(),
+            images: vec!["front.jpg".into(), "back.jpg".into()],
+            selections: GuidedSelections::parse(&["brand=12".into()]).unwrap(),
+        };
+        let command = resume_command(&request, &request.selections.with_choice("category", 42));
+        assert!(command.contains("--input '<saved-facts.json>'"));
+        assert!(!command.contains("--input '-'"));
+        assert!(command.contains("--image 'front.jpg' --image 'back.jpg'"));
+        assert!(command.contains("--select 'brand=12' --select 'category=42'"));
     }
 
     #[test]

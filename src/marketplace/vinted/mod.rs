@@ -1,6 +1,7 @@
 pub(crate) mod auth;
 pub(crate) mod binding;
 pub(crate) mod brand;
+pub(crate) mod categories;
 pub(crate) mod category_evidence;
 pub(crate) mod composer;
 pub(crate) mod draft;
