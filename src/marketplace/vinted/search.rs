@@ -342,7 +342,7 @@ impl<'a> VintedSearch<'a> {
         let enriching = enrichment_options.include_seller
             || enrichment_options.include_shipping
             || enrichment_options.seller_country.is_some()
-            || enrichment_options.shipping_to.is_some();
+            || enrichment_options.max_shipping.is_some();
         if input.raw && enriching {
             return Err(AppError::usage(
                 "--raw cannot be combined with enrichment or client-side filters",
@@ -623,7 +623,7 @@ fn continuation(
     for (flag, value) in [
         ("price-from", &context.price_from),
         ("price-to", &context.price_to),
-        ("shipping-to", &options.shipping_to),
+        ("max-shipping", &options.max_shipping),
     ] {
         if let Some(value) = value {
             parts.push(format!("--{flag} {value}"));
@@ -1629,7 +1629,7 @@ mod tests {
         ctx.query = "-seller's jacket".to_owned();
         let options = enrichment::Options {
             seller_country: Some("Finland".to_owned()),
-            shipping_to: Some("3.50".parse().unwrap()),
+            max_shipping: Some("3.50".parse().unwrap()),
             include_seller: true,
             include_shipping: true,
         };
@@ -1639,7 +1639,7 @@ mod tests {
             "--sort newest",
             "--price-from 10.50",
             "--price-to 50",
-            "--shipping-to 3.50",
+            "--max-shipping 3.50",
             "--seller-country 'Finland'",
             "--attribute 'brand=53,88'",
             "--include-seller",
@@ -1662,7 +1662,7 @@ mod tests {
                 SearchRequest {
                     raw: true,
                     enrichment: enrichment::Options {
-                        shipping_to: Some("0".parse().unwrap()),
+                        max_shipping: Some("0".parse().unwrap()),
                         ..Default::default()
                     },
                     ..Default::default()

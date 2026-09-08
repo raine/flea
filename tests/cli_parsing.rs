@@ -807,7 +807,7 @@ fn vinted_shopper_filters_parse_and_conflict_with_raw() {
         "jacket",
         "--seller-country",
         "FI",
-        "--shipping-to",
+        "--max-shipping",
         "0",
         "--include-seller",
         "--include-shipping",
@@ -820,11 +820,11 @@ fn vinted_shopper_filters_parse_and_conflict_with_raw() {
         panic!("expected search")
     };
     assert_eq!(args.seller_country.as_deref(), Some("FI"));
-    assert_eq!(args.shipping_to.unwrap().as_str(), "0");
+    assert_eq!(args.max_shipping.unwrap().as_str(), "0");
     assert!(args.include_seller && args.include_shipping);
     for options in [
         vec!["--seller-country", "FI"],
-        vec!["--shipping-to", "0"],
+        vec!["--max-shipping", "0"],
         vec!["--include-seller"],
         vec!["--include-shipping"],
     ] {
@@ -838,7 +838,7 @@ fn vinted_shopper_filters_parse_and_conflict_with_raw() {
                 "flea",
                 "vinted",
                 "search",
-                &format!("--shipping-to={amount}")
+                &format!("--max-shipping={amount}")
             ])
             .is_err()
         );

@@ -197,7 +197,7 @@ fn help_tables_include_agent_oriented_summaries() {
         "--attribute",
         "--include-facets",
         "--seller-country",
-        "--shipping-to",
+        "--max-shipping",
         "--include-seller",
         "--include-shipping",
         "--raw",

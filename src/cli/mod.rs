@@ -271,8 +271,8 @@ pub enum VintedCommand {
     Capabilities,
     #[command(
         about = "Search Vinted listings (authentication required)",
-        long_about = "Search or browse Vinted listings with catalog, dynamic attributes, decimal prices, ordering, pagination, and optional contextual facets. Authentication is required. Seller-country and shipping-to filters enrich and filter one upstream page, not the whole marketplace. At most 20 items are enriched, sequentially, within 30 seconds (3 seconds per request). Unknown values do not match. Shipping quotes are contextual, not guaranteed checkout prices. Run `flea vinted auth login --api` first.",
-        after_long_help = "Examples:\n  flea vinted search takki --price-from 10.50 --sort newest\n  flea vinted search --catalog 123 --brand 53,88 --status 1 --include-facets\n  flea vinted search mekko --attribute fixture_code=10,20\n  flea --format json vinted search jacket --seller-country FI --shipping-to 3 --limit 10"
+        long_about = "Search or browse Vinted listings with catalog, dynamic attributes, decimal prices, ordering, pagination, and optional contextual facets. Authentication is required. Seller-country and max-shipping filters enrich and filter one upstream page, not the whole marketplace. At most 20 items are enriched, sequentially, within 30 seconds (3 seconds per request). Unknown values do not match. Shipping quotes are contextual, not guaranteed checkout prices. Run `flea vinted auth login --api` first.",
+        after_long_help = "Examples:\n  flea vinted search takki --price-from 10.50 --sort newest\n  flea vinted search --catalog 123 --brand 53,88 --status 1 --include-facets\n  flea vinted search mekko --attribute fixture_code=10,20\n  flea --format json vinted search jacket --seller-country FI --max-shipping 3 --limit 10"
     )]
     Search(Box<vinted_search::VintedSearchArgs>),
     #[command(

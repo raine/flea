@@ -12,7 +12,7 @@ use crate::{
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Options {
     pub seller_country: Option<String>,
-    pub shipping_to: Option<DecimalAmount>,
+    pub max_shipping: Option<DecimalAmount>,
     pub include_seller: bool,
     pub include_shipping: bool,
 }
@@ -60,7 +60,7 @@ async fn enrich_with_limits(
     limits: Limits,
 ) {
     let seller_requested = options.include_seller || options.seller_country.is_some();
-    let shipping_requested = options.include_shipping || options.shipping_to.is_some();
+    let shipping_requested = options.include_shipping || options.max_shipping.is_some();
     if !seller_requested && !shipping_requested {
         return;
     }
@@ -103,7 +103,7 @@ async fn enrich_with_limits(
         let seller = &stages[0];
         let shipping = &stages[1];
         let country_filter = country_filter(seller, options.seller_country.is_some());
-        let postage_filter = shipping_filter(shipping, options.shipping_to.as_ref());
+        let postage_filter = shipping_filter(shipping, options.max_shipping.as_ref());
         let keep = [&country_filter, &postage_filter]
             .iter()
             .all(|filter| matches!(filter["status"].as_str(), Some("matched" | "not_requested")));
@@ -115,7 +115,7 @@ async fn enrich_with_limits(
             "listing_id": listing.listing_id,
             "seller": diagnostic_status(seller),
             "shipping": diagnostic_status(shipping),
-            "filters": {"seller_country": country_filter, "shipping_to": postage_filter},
+            "filters": {"seller_country": country_filter, "max_shipping": postage_filter},
             "included": keep,
         }));
         let vinted = listing.vinted.get_or_insert_with(|| json!({}));
@@ -155,7 +155,7 @@ async fn enrich_with_limits(
         },
         "filters": {
             "seller_country": options.seller_country.as_ref().map(|_| "FI"),
-            "shipping_to": options.shipping_to.as_ref().map(ToString::to_string),
+            "max_shipping": options.max_shipping.as_ref().map(ToString::to_string),
             "currency": "EUR",
         },
         "items": statuses,
@@ -721,7 +721,7 @@ mod tests {
         let original_page = result.pagination.clone();
         let options = Options {
             seller_country: Some("FI".into()),
-            shipping_to: Some("0".parse().unwrap()),
+            max_shipping: Some("0".parse().unwrap()),
             ..Options::default()
         };
         enrich(&api, &credentials(), &mut result, &options).await;
@@ -763,7 +763,7 @@ mod tests {
             let mut result = collection(3);
             let options = Options {
                 include_shipping: true,
-                shipping_to: filter.then(|| "5".parse().unwrap()),
+                max_shipping: filter.then(|| "5".parse().unwrap()),
                 ..Options::default()
             };
             enrich(&api, &credentials(), &mut result, &options).await;
@@ -792,7 +792,7 @@ mod tests {
                 &Options {
                     include_seller: true,
                     include_shipping: true,
-                    shipping_to: filtered.then(|| "5".parse().unwrap()),
+                    max_shipping: filtered.then(|| "5".parse().unwrap()),
                     ..Options::default()
                 },
             )
@@ -856,7 +856,7 @@ mod tests {
             &mut result,
             &Options {
                 seller_country: Some("fi".into()),
-                shipping_to: Some("5".parse().unwrap()),
+                max_shipping: Some("5".parse().unwrap()),
                 ..Options::default()
             },
         )
@@ -877,18 +877,18 @@ mod tests {
         assert_eq!(summary["coverage"]["complete"], false);
         assert_eq!(summary["coverage"]["fully_processed_items"], 7);
         assert_eq!(summary["filters"]["seller_country"], "FI");
-        assert_eq!(summary["filters"]["shipping_to"], "5");
+        assert_eq!(summary["filters"]["max_shipping"], "5");
         assert_eq!(summary["items"][1]["seller"]["reason"], "location_hidden");
         assert_eq!(
             summary["items"][2]["shipping"]["reason"],
             "missing_or_invalid_quote"
         );
         assert_eq!(
-            summary["items"][3]["filters"]["shipping_to"]["reason"],
+            summary["items"][3]["filters"]["max_shipping"]["reason"],
             "shipping_above_maximum"
         );
         assert_eq!(
-            summary["items"][4]["filters"]["shipping_to"]["reason"],
+            summary["items"][4]["filters"]["max_shipping"]["reason"],
             "currency_not_eur"
         );
         assert_eq!(summary["items"][5]["shipping"]["status"], "pickup_only");

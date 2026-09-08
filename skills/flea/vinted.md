@@ -64,8 +64,8 @@ location. Never infer it from presentation text.
 
 ```sh
 flea --format json vinted search jacket --seller-country FI --limit 10
-flea --format json vinted search jacket --shipping-to 3 --include-seller --limit 10
-flea --format json vinted search jacket --seller-country Finland --shipping-to 0
+flea --format json vinted search jacket --max-shipping 3 --include-seller --limit 10
+flea --format json vinted search jacket --seller-country Finland --max-shipping 0
 flea --format json vinted search jacket --include-seller --include-shipping --limit 5
 ```
 
@@ -76,7 +76,7 @@ country codes. Hidden locations remain unknown. This seller profile data is
 not a catalog filter or guaranteed item location. Seller country is a preference,
 not a guaranteed shipping origin or evidence of lower postage.
 
-`--shipping-to` is a maximum reported shipping quote in EUR, not item price.
+`--max-shipping` is a maximum reported shipping quote in EUR, not item price.
 Both filters automatically fetch their required data. They run client-side on
 **one upstream page**, not across the marketplace. Unknown, failed, unprocessed,
 pickup-only, and non-EUR quotes cannot match the postage filter. A reported zero
