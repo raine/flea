@@ -111,20 +111,6 @@ Check the connection with `flea vinted auth status --browser`.
 
 Then run `flea skill install` to refresh your agent's skill.
 
-## Prefer the terminal?
-
-You can also use Flea directly:
-
-```sh
-flea tori search "tuoli" --area Helsinki,Espoo,Vantaa
-flea vinted search "Marimekko" --price-to 80 --sort newest
-flea --format json vinted search jacket --seller-country FI --max-shipping 3 --limit 10
-```
-
-Output is structured for agents and scripts. Add `--format json` for JSON.
-Use `--help` on any command for options, or read the bundled marketplace guides
-with `flea skill tori` and `flea skill vinted`.
-
 ## Your photos and account
 
 - Flea removes embedded photo metadata, including GPS location, before upload.
