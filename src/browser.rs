@@ -55,10 +55,26 @@ fn connect_remote(endpoint: &Url) -> Result<Cdp, AppError> {
                     .build()
                     .map_err(|_| remote_connection_error())?;
                 let mut response = client
-                    .get(endpoint)
+                    .get(endpoint.clone())
                     .send()
                     .await
-                    .and_then(reqwest::Response::error_for_status)
+                    .map_err(|_| remote_connection_error())?;
+                if response.status() == reqwest::StatusCode::NOT_FOUND {
+                    // Chrome's approval-only server disables JSON discovery.
+                    let scheme = if endpoint.scheme() == "https" {
+                        "wss"
+                    } else {
+                        "ws"
+                    };
+                    endpoint
+                        .set_scheme(scheme)
+                        .map_err(|_| remote_connection_error())?;
+                    let prefix = endpoint.path().trim_end_matches("/json/version");
+                    endpoint.set_path(&format!("{prefix}/devtools/browser"));
+                    return Ok(endpoint.to_string());
+                }
+                response = response
+                    .error_for_status()
                     .map_err(|_| remote_connection_error())?;
                 let mut body = Vec::new();
                 while let Some(chunk) = response
@@ -93,7 +109,8 @@ fn connect_remote(endpoint: &Url) -> Result<Cdp, AppError> {
     let addresses = (host.trim_matches(['[', ']']), port)
         .to_socket_addrs()
         .map_err(|_| remote_connection_error())?;
-    let deadline = Instant::now() + START_TIMEOUT;
+    // The WebSocket upgrade can wait for the user to approve access in Chrome.
+    let deadline = Instant::now() + COMMAND_TIMEOUT;
     for address in addresses {
         let remaining = deadline
             .checked_duration_since(Instant::now())
@@ -104,13 +121,14 @@ fn connect_remote(endpoint: &Url) -> Result<Cdp, AppError> {
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_MESSAGE_BYTES))
             .max_frame_size(Some(MAX_MESSAGE_BYTES));
-        if let Ok((socket, _)) = client_with_config(
+        let (socket, _) = client_with_config(
             url.as_str(),
             DeadlineStream { stream, deadline },
             Some(config),
-        ) {
-            return Ok(Cdp { socket, next_id: 0 });
-        }
+        ).map_err(|_| browser_error(
+            "Chrome did not accept the browser connection; if debugging was enabled in chrome://inspect/#remote-debugging, approve the connection in Chrome within 60 seconds",
+        ))?;
+        return Ok(Cdp { socket, next_id: 0 });
     }
     Err(remote_connection_error())
 }
@@ -684,6 +702,16 @@ pub(crate) mod tests {
 
     #[test]
     fn remote_browser_discovers_endpoint_and_attaches() {
+        remote_browser_fixture(false);
+    }
+
+    #[test]
+    fn remote_browser_supports_chrome_approval_mode() {
+        remote_browser_fixture(true);
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn remote_browser_fixture(approval: bool) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
         let join = thread::spawn(move || {
@@ -702,22 +730,45 @@ pub(crate) mod tests {
                     .unwrap()
                     .starts_with("GET /json/version HTTP/1.1")
             );
-            let body =
+            if approval {
+                write!(
+                    stream,
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            } else {
+                let body =
                 json!({"webSocketDebuggerUrl": format!("ws://{address}/devtools/browser/remote")})
                     .to_string();
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            )
-            .unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
             drop(stream);
             let (stream, _) = listener.accept().unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            let mut socket = tungstenite::accept(stream).unwrap();
+            let mut socket = tungstenite::accept_hdr(
+                stream,
+                |request: &tungstenite::handshake::server::Request, response| {
+                    assert_eq!(
+                        request.uri().path(),
+                        if approval {
+                            "/devtools/browser"
+                        } else {
+                            "/devtools/browser/remote"
+                        }
+                    );
+                    assert!(!request.headers().contains_key("origin"));
+                    Ok(response)
+                },
+            )
+            .unwrap();
             let call = request(&mut socket, "Target.getTargets");
             reply(
                 &mut socket,

@@ -198,7 +198,10 @@ flea --browser-url http://127.0.0.1:9222 vinted auth status --browser
 
 This global option applies to browser-backed Vinted authentication, publication,
 and listing edits. Flea discovers the WebSocket endpoint through `/json/version`
-and uses that browser instead of creating, locking, or launching its managed
+or connects directly when debugging is enabled through
+`chrome://inspect/#remote-debugging`. In that mode, approve the connection in
+Chrome within 60 seconds. Flea uses that browser instead of creating, locking,
+or launching its managed
 profile. The advertised `ws://` address must be reachable. Connection failures
 never fall back to the managed browser. Pass the option on every invocation,
 including suggested follow-up commands. Browser logout clears Vinted data in
