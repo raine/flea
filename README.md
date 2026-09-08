@@ -53,21 +53,10 @@ For installer or Cargo installations:
 flea update
 ```
 
-This installs the latest GitHub release for macOS or Linux (amd64 or arm64),
-verifies its SHA-256 checksum, and atomically replaces the running executable.
-It requires `tar` and write access to the executable directory; it does not
-invoke sudo. Symlinks are resolved to the actual executable. Cargo and local
-source builds are replaced with the published release, even if their version
-is newer. An identical version is left unchanged.
+Homebrew: `brew upgrade raine/flea/flea`. Nix: update through your profile or
+configuration.
 
-Homebrew users should run `brew upgrade raine/flea/flea`; Nix users should update
-through their Nix profile or configuration. Flea refuses to overwrite those
-managed installations. No background update checks are performed.
-
-Progress goes to stderr, with a plain success message by default. Use
-`flea update --format json` for a structured result. Authentication and installed
-agent skills are unchanged; run `flea skill install` after updating to refresh
-the bundled skill.
+After updating, run `flea skill install` to refresh your agent's skill.
 
 ## Get started
 
