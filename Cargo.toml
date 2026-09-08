@@ -44,6 +44,10 @@ path = "tests/vinted_listing_fixtures.rs"
 name = "vinted_listing_live_smoke"
 path = "tests/vinted_listing_live_smoke.rs"
 
+[[test]]
+name = "vinted_sell_export"
+path = "tests/vinted_sell_export.rs"
+
 [dependencies]
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }

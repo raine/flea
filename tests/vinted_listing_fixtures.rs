@@ -18,12 +18,14 @@ use flea::{
 use serde_json::Value;
 
 struct FixtureApi {
+    edit: Value,
     calls: Mutex<Vec<String>>,
 }
 
 impl FixtureApi {
     fn new() -> Self {
         Self {
+            edit: fixture("published-edit"),
             calls: Mutex::new(Vec::new()),
         }
     }
@@ -54,7 +56,7 @@ impl VintedListingApi for FixtureApi {
         item_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
         self.calls.lock().unwrap().push(format!("edit:{item_id}"));
-        let result = Ok(fixture("published-edit"));
+        let result = Ok(self.edit.clone());
         Box::pin(async move { result })
     }
 
@@ -86,6 +88,13 @@ impl VintedPublicationDiscoveryApi for FixtureDiscoveryApi {
         _credentials: &'a VintedCredentialRecord,
         request: &'a DiscoveryRequest,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        if matches!(request, DiscoveryRequest::Catalogs) {
+            return Box::pin(async {
+                Ok(serde_json::json!({"catalogs": [
+                    {"id": 3412, "title": "Bicycle locks", "catalogs": []}
+                ]}))
+            });
+        }
         let DiscoveryRequest::Attributes { selections } = request else {
             panic!("unexpected discovery request")
         };
@@ -245,6 +254,96 @@ fn credentials() -> VintedCredentialRecord {
     )
 }
 
+struct ReadbackDiscovery {
+    catalogs: Value,
+    attributes: Value,
+}
+
+impl VintedPublicationDiscoveryApi for ReadbackDiscovery {
+    fn execute<'a>(
+        &'a self,
+        _: &'a VintedCredentialRecord,
+        request: &'a DiscoveryRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        let response = match request {
+            DiscoveryRequest::Catalogs => self.catalogs.clone(),
+            DiscoveryRequest::Attributes { selections } => {
+                assert_eq!(
+                    selections,
+                    &serde_json::json!([{"code": "category", "value": [3412]}])
+                );
+                self.attributes.clone()
+            }
+            _ => panic!("unexpected discovery"),
+        };
+        Box::pin(async move { Ok(response) })
+    }
+}
+
+#[tokio::test]
+async fn size_labels_and_category_paths_require_unambiguous_runtime_evidence() {
+    let mut api = FixtureApi::new();
+    api.edit["item"]["item_attributes"] = serde_json::json!([{"code": "size", "ids": [591]}]);
+    api.edit["item"]["size_id"] = serde_json::json!(12);
+    api.edit["item"]["is_unisex"] = serde_json::json!(true);
+    let session = |_| Ok(credentials());
+    for (catalogs, options, expected_name, expected_path) in [
+        (
+            serde_json::json!({"catalogs": [{"id": 1, "title": "Parent", "catalogs": [
+            {"id": 3412, "title": "Observed category"}]}]}),
+            serde_json::json!([{"id": 591, "title": "22"}]),
+            Some("22"),
+            Some(vec!["Parent".to_owned(), "Observed category".to_owned()]),
+        ),
+        (
+            serde_json::json!({"catalogs": [{"id": 2, "title": "Other"}]}),
+            serde_json::json!([{"id": 12, "title": "Wrong namespace"}]),
+            None,
+            None,
+        ),
+        (
+            serde_json::json!({"catalogs": []}),
+            serde_json::json!([{"id": 591, "title": "22"}, {"id": 591, "title": "23"}]),
+            None,
+            None,
+        ),
+    ] {
+        let discovery = ReadbackDiscovery {
+            catalogs,
+            attributes: serde_json::json!({"attributes": [
+                {"code": "size", "configuration": {"groups": [{"options": options}]}}
+            ]}),
+        };
+        let VintedListingResult::Detail(detail) = VintedListings::new(&session, &api)
+            .with_discovery(&discovery)
+            .execute(
+                PortalId::Fi,
+                VintedListingRequest::Show {
+                    item_id: "9001".to_owned(),
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected detail")
+        };
+        let size = detail.size.unwrap();
+        assert_eq!(size.upstream_id.as_deref(), Some("12"));
+        assert_eq!(size.composer_id.as_deref(), Some("591"));
+        assert_eq!(size.name.as_deref(), expected_name);
+        assert_eq!(detail.is_unisex, Some(true));
+        assert_eq!(detail.category_path, expected_path);
+        assert_eq!(
+            detail.category.unwrap().name.as_deref(),
+            Some(if expected_path.is_some() {
+                "Observed category"
+            } else {
+                "Bicycle locks"
+            })
+        );
+    }
+}
+
 #[tokio::test]
 async fn publication_condition_round_trips_through_listing_inspection() {
     let publication_item_id = "9001";
@@ -291,6 +390,9 @@ async fn publication_condition_round_trips_through_listing_inspection() {
         detail.brand.as_ref().unwrap().name.as_deref(),
         Some("Kryptonite")
     );
+    assert_eq!(detail.is_unisex, Some(false));
+    assert_eq!(detail.size, None);
+    assert_eq!(detail.category_path, Some(vec!["Bicycle locks".to_owned()]));
     assert_eq!(detail.colors.len(), 2);
     assert_eq!(
         detail.shipping.as_ref().unwrap().package_size_id.as_deref(),

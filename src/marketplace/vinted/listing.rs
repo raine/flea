@@ -11,7 +11,7 @@ use crate::{
         vinted_listing::{
             VintedConditionIdentity, VintedConditionIdentityStatus, VintedListingCollection,
             VintedListingCondition, VintedListingDetail, VintedListingPhoto, VintedListingShipping,
-            VintedListingState, VintedListingSummary, VintedListingValue,
+            VintedListingSize, VintedListingState, VintedListingSummary, VintedListingValue,
         },
     },
     error::{AppError, ExitClass},
@@ -20,6 +20,7 @@ use crate::{
         vinted::{
             auth::{VintedAuthentication, VintedCredentialRecord},
             binding::VINTED_FI_BINDING,
+            categories::CatalogTree,
             composer::{
                 numeric_id, object_label, publication_attribute_definitions,
                 publication_attribute_options,
@@ -146,19 +147,24 @@ impl<'a> VintedListings<'a> {
         credentials: &VintedCredentialRecord,
         detail: &mut VintedListingDetail,
     ) {
-        let (Some(api), Some(category_id), Some(condition)) = (
+        let (Some(api), Some(category_id)) = (
             self.discovery_api,
             detail
                 .category
                 .as_ref()
                 .and_then(|category| category.id.as_deref())
                 .and_then(|id| id.parse::<u64>().ok()),
-            detail.condition.as_mut(),
         ) else {
             return;
         };
-        if condition.name.is_none() && condition.identity.composer_id.is_none() {
-            return;
+        if let Ok(response) = api.execute(credentials, &DiscoveryRequest::Catalogs).await
+            && let Ok(tree) = CatalogTree::from_response(&response)
+            && let Some(node) = tree.get(category_id)
+        {
+            if let Some(category) = detail.category.as_mut() {
+                category.name = Some(node.category.title.clone());
+            }
+            detail.category_path = Some(node.category.path.clone());
         }
         let request = DiscoveryRequest::Attributes {
             selections: serde_json::json!([{"code": "category", "value": [category_id]}]),
@@ -166,7 +172,27 @@ impl<'a> VintedListings<'a> {
         let Ok(response) = api.execute(credentials, &request).await else {
             return;
         };
-        resolve_condition_identity(condition, &response);
+        if let Some(condition) = detail.condition.as_mut() {
+            resolve_condition_identity(condition, &response);
+        }
+        if let Some(size) = detail.size.as_mut()
+            && let Some(selected) = size.composer_id.as_deref()
+        {
+            let labels: HashSet<_> = publication_attribute_definitions(&response)
+                .into_iter()
+                .filter(|(code, _)| *code == "size")
+                .flat_map(|(_, definition)| publication_attribute_options(definition))
+                .filter_map(|option| {
+                    let object = option.as_object()?;
+                    (numeric_id(object)?.to_string() == selected)
+                        .then(|| object_label(object))
+                        .flatten()
+                })
+                .collect();
+            if labels.len() == 1 {
+                size.name = labels.into_iter().next();
+            }
+        }
     }
 
     async fn account_item(
@@ -390,7 +416,10 @@ fn absent_detail(listing_id: String, state: VintedListingState) -> VintedListing
         description: None,
         price: None,
         condition: None,
+        size: None,
+        is_unisex: None,
         category: None,
+        category_path: None,
         brand: None,
         colors: Vec::new(),
         shipping: None,
@@ -413,7 +442,10 @@ fn summary_detail(expected_id: &str, item: &Value) -> Result<VintedListingDetail
         description: None,
         price: summary.price,
         condition: None,
+        size: None,
+        is_unisex: None,
         category: None,
+        category_path: None,
         brand: None,
         colors: Vec::new(),
         shipping: None,
@@ -494,6 +526,9 @@ pub(super) fn normalize_detail(
                     .and_then(|value| normalize_price(value, wardrobe.get("currency")))
             }),
         condition: detail_condition(edit),
+        size: detail_size(edit),
+        is_unisex: edit.get("is_unisex").and_then(Value::as_bool),
+        category_path: None,
         category: listing_value(
             edit.get("catalog_id"),
             edit.get("catalog_name")
@@ -630,6 +665,36 @@ fn listing_condition(id: Option<&Value>, name: Option<&Value>) -> Option<VintedL
             upstream_id,
             composer_id: None,
         },
+    })
+}
+
+fn selected_attribute_id(edit: &Map<String, Value>, code: &str) -> Option<String> {
+    let mut attributes = edit
+        .get("item_attributes")?
+        .as_array()?
+        .iter()
+        .filter(|attribute| attribute.get("code").and_then(Value::as_str) == Some(code));
+    let selected = attributes.next()?;
+    if attributes.next().is_some() {
+        return None;
+    }
+    let ids = selected.get("ids")?.as_array()?;
+    if ids.len() != 1 {
+        return None;
+    }
+    ids[0]
+        .as_u64()
+        .filter(|id| *id > 0)
+        .map(|id| id.to_string())
+}
+
+fn detail_size(edit: &Map<String, Value>) -> Option<VintedListingSize> {
+    let upstream_id = identifier(edit.get("size_id"));
+    let composer_id = selected_attribute_id(edit, "size");
+    (upstream_id.is_some() || composer_id.is_some()).then_some(VintedListingSize {
+        upstream_id,
+        composer_id,
+        name: None,
     })
 }
 
@@ -821,6 +886,57 @@ fn execution_error(error: TransportError) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn size_keeps_legacy_and_composer_namespaces_separate() {
+        let edit = serde_json::json!({"size_id": 12,
+            "item_attributes": [{"code": "size", "ids": [591]}]});
+        let size = detail_size(edit.as_object().unwrap()).unwrap();
+        assert_eq!(size.upstream_id.as_deref(), Some("12"));
+        assert_eq!(size.composer_id.as_deref(), Some("591"));
+        assert_eq!(size.name, None);
+        let legacy = serde_json::json!({"size_id": "591"});
+        assert_eq!(
+            detail_size(legacy.as_object().unwrap())
+                .unwrap()
+                .composer_id,
+            None
+        );
+    }
+
+    #[test]
+    fn malformed_size_selections_and_unknown_unisex_remain_unknown() {
+        for attributes in [
+            serde_json::json!([{"code": "size", "ids": [591, 592]}]),
+            serde_json::json!([{"code": "size", "ids": [591]}, {"code": "size", "ids": [591]}]),
+            serde_json::json!([{"code": "size", "ids": ["591"]}]),
+            serde_json::json!([{"code": "size", "ids": [0]}]),
+            serde_json::json!([]),
+        ] {
+            let detail = normalize_detail(
+                "1",
+                &serde_json::json!({"item": {"id": 1}}),
+                &serde_json::json!({"item": {"id": 1, "item_attributes": attributes,
+                    "description": "Unisex, size 22", "is_unisex": "true"}}),
+            )
+            .unwrap();
+            assert_eq!(detail.size, None);
+            assert_eq!(detail.is_unisex, None);
+        }
+        for value in [
+            serde_json::json!(true),
+            serde_json::json!(false),
+            Value::Null,
+        ] {
+            let detail = normalize_detail(
+                "1",
+                &serde_json::json!({"item": {"id": 1}}),
+                &serde_json::json!({"item": {"id": 1, "is_unisex": value}}),
+            )
+            .unwrap();
+            assert_eq!(detail.is_unisex, value.as_bool());
+        }
+    }
 
     #[test]
     fn absence_classification_distinguishes_missing_and_deleted() {

@@ -135,6 +135,7 @@ fn valid_selection_field(field: &str) -> bool {
 #[derive(Clone, Debug)]
 pub struct GuidedSellRequest {
     pub input_path: PathBuf,
+    pub output_path: Option<PathBuf>,
     pub images: Vec<PathBuf>,
     pub selections: GuidedSelections,
     pub marketplace_evidence: bool,
@@ -187,6 +188,8 @@ pub struct GuidedAmbiguity {
 pub struct GuidedChoice {
     pub id: u64,
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub command: String,
 }
 
@@ -339,10 +342,14 @@ impl<'a> GuidedVintedSell<'a> {
                         apply_resolved_value(&mut partial, field, value);
                         changed = true;
                     }
-                    Resolution::Ambiguous { semantic, choices } => {
+                    Resolution::Ambiguous {
+                        semantic,
+                        choices,
+                        code,
+                    } => {
                         layer_ambiguities.push(option_ambiguity(
                             field,
-                            &issue.code,
+                            code.unwrap_or(&issue.code),
                             semantic,
                             choices,
                             request,
@@ -382,7 +389,16 @@ impl<'a> GuidedVintedSell<'a> {
         }
 
         if !ambiguities.is_empty() || !composed.form.ready {
-            let next_actions = ambiguity_actions(&ambiguities);
+            let next_actions = if ambiguities
+                .iter()
+                .any(|ambiguity| ambiguity.choices.is_empty())
+            {
+                vec![NextAction {
+                    command: resume_command(request, &request.selections),
+                }]
+            } else {
+                Vec::new()
+            };
             return Ok((
                 GuidedSellOutput {
                     status: GuidedSellStatus::NeedsInput,
@@ -469,6 +485,7 @@ fn category_ambiguity(
             GuidedChoice {
                 id: category.id,
                 label: category.path.join(" > "),
+                description: None,
                 command: if category.leaf {
                     resume_command(
                         request,
@@ -490,8 +507,7 @@ fn category_ambiguity(
         semantic_value: facts.category.clone(),
         choices,
     };
-    let mut actions = ambiguity_actions(std::slice::from_ref(&ambiguity));
-    actions.push(browse_roots(portal));
+    let mut actions = vec![browse_roots(portal)];
     if discovery.page.truncated {
         let mut command = format!(
             "flea vinted --portal {portal} category search --limit {} --offset {}",
@@ -652,6 +668,7 @@ enum Resolution<'a> {
     Resolved(Value),
     Ambiguous {
         semantic: Option<String>,
+        code: Option<&'static str>,
         choices: Vec<&'a FieldOption>,
     },
     Missing,
@@ -672,6 +689,7 @@ fn resolve_options<'a>(
         if selected.len() != ids.len() {
             return Resolution::Ambiguous {
                 semantic: None,
+                code: None,
                 choices: options.to_vec(),
             };
         }
@@ -696,12 +714,22 @@ fn resolve_options<'a>(
     for semantic in semantics {
         let matches = options
             .iter()
-            .filter(|option| normalize(&option.label) == normalize(semantic))
+            .filter(|option| {
+                normalize(&option.label) == normalize(semantic)
+                    || option.raw.as_ref().is_some_and(|raw| {
+                        super::semantic_values::matches_runtime_alias(raw, semantic)
+                    })
+            })
             .copied()
             .collect::<Vec<_>>();
         if matches.len() != 1 {
             return Resolution::Ambiguous {
                 semantic: Some(semantic.clone()),
+                code: Some(if matches.is_empty() {
+                    "unmatched_semantic_value"
+                } else {
+                    "ambiguous_semantic_value"
+                }),
                 choices: if matches.is_empty() {
                     options.to_vec()
                 } else {
@@ -782,19 +810,20 @@ fn option_ambiguity(
             Some(GuidedChoice {
                 id,
                 label: option.label.clone(),
+                description: if field == "package_size" {
+                    package_description(option)
+                } else {
+                    None
+                },
                 command: resume_command(request, &request.selections.with_choice(field, id)),
             })
         })
         .collect();
     GuidedAmbiguity {
         field: field.into(),
-        code: if semantic.is_some() {
-            "ambiguous_semantic_value".into()
-        } else {
-            code.into()
-        },
+        code: code.into(),
         instruction: if semantic.is_some() {
-            "Choose a scoped runtime option. Flea only resolves exact semantic matches automatically."
+            "Choose a scoped runtime option. Flea resolves exact labels and runtime-provided aliases, not translations."
                 .into()
         } else {
             "Choose a scoped runtime option that matches the seller's facts.".into()
@@ -858,14 +887,16 @@ fn deduplicate_paths(paths: &mut Vec<PathBuf>) {
     paths.retain(|path| seen.insert(path.clone()));
 }
 
-fn ambiguity_actions(ambiguities: &[GuidedAmbiguity]) -> Vec<NextAction> {
-    ambiguities
-        .iter()
-        .flat_map(|ambiguity| ambiguity.choices.iter())
-        .map(|choice| NextAction {
-            command: choice.command.clone(),
-        })
-        .collect()
+fn package_description(option: &FieldOption) -> Option<String> {
+    let description = option.raw.as_ref()?.get("description")?.as_str()?.trim();
+    if description.is_empty() {
+        return None;
+    }
+    let mut result = description.chars().take(512).collect::<String>();
+    if description.chars().count() > 512 {
+        result.push_str("...");
+    }
+    Some(result)
 }
 
 fn resume_command(request: &GuidedSellRequest, selections: &GuidedSelections) -> String {
@@ -877,6 +908,10 @@ fn resume_command(request: &GuidedSellRequest, selections: &GuidedSelections) ->
             request.input_path.to_string_lossy()
         })
     );
+    if let Some(path) = &request.output_path {
+        command.push_str(" --output=");
+        command.push_str(&shell_word(&path.to_string_lossy()));
+    }
     if request.marketplace_evidence {
         command.push_str(" --marketplace-evidence");
     }
@@ -909,6 +944,105 @@ fn shell_word(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn condition_matching_distinguishes_unmatched_multiple_aliases_and_explicit_ids() {
+        let options = [
+            FieldOption {
+                field: "attribute.condition".into(),
+                value: json!(2),
+                label: "Erittäin hyvä".into(),
+                raw: Some(json!({"code":"very_good"})),
+            },
+            FieldOption {
+                field: "attribute.condition".into(),
+                value: json!(3),
+                label: "Hyvä".into(),
+                raw: Some(json!({"code":"good"})),
+            },
+        ];
+        let refs = options.iter().collect::<Vec<_>>();
+        assert!(
+            matches!(resolve_options("attribute.condition", Some(&["used".into()]), None, &refs), Resolution::Ambiguous { code: Some("unmatched_semantic_value"), choices, .. } if choices.len() == 2)
+        );
+        assert!(
+            matches!(resolve_options("attribute.condition", Some(&["very good".into()]), None, &refs), Resolution::Resolved(value) if value == json!([2]))
+        );
+        assert!(
+            matches!(resolve_options("attribute.condition", Some(&["used".into()]), Some(&[3]), &refs), Resolution::Resolved(value) if value == json!([3]))
+        );
+        assert!(matches!(
+            resolve_options("attribute.condition", None, Some(&[99]), &refs),
+            Resolution::Ambiguous {
+                code: None,
+                semantic: None,
+                ..
+            }
+        ));
+        let mut localized_only = options[0].clone();
+        localized_only.raw = None;
+        assert!(matches!(
+            resolve_options(
+                "attribute.condition",
+                Some(&["very good".into()]),
+                None,
+                &[&localized_only]
+            ),
+            Resolution::Ambiguous {
+                code: Some("unmatched_semantic_value"),
+                ..
+            }
+        ));
+        let mut duplicate = options[0].clone();
+        duplicate.value = json!(4);
+        let refs = vec![&options[0], &duplicate];
+        assert!(
+            matches!(resolve_options("attribute.condition", Some(&["very_good".into()]), None, &refs), Resolution::Ambiguous { code: Some("ambiguous_semantic_value"), choices, .. } if choices.len() == 2)
+        );
+    }
+
+    #[test]
+    fn package_choices_include_only_bounded_upstream_descriptions() {
+        let request = GuidedSellRequest {
+            input_path: "facts.json".into(),
+            output_path: Some("saved proposal.json".into()),
+            images: vec![],
+            selections: GuidedSelections::default(),
+            marketplace_evidence: false,
+        };
+        let mut option = FieldOption {
+            field: "package_size".into(),
+            value: json!(1),
+            label: "Small".into(),
+            raw: Some(json!({"description":"Runtime package guidance", "unknown":"not copied"})),
+        };
+        let ambiguity = option_ambiguity("package_size", "required", None, vec![&option], &request);
+        assert_eq!(
+            ambiguity.choices[0].description.as_deref(),
+            Some("Runtime package guidance")
+        );
+        assert!(
+            ambiguity.choices[0]
+                .command
+                .contains("--output='saved proposal.json'")
+        );
+        assert!(
+            ambiguity.choices[0]
+                .command
+                .contains("--select 'package_size=1'")
+        );
+        option.raw = Some(json!({"description":"ä".repeat(600)}));
+        assert_eq!(package_description(&option).unwrap().chars().count(), 515);
+        for raw in [
+            None,
+            Some(json!({})),
+            Some(json!({"description":null})),
+            Some(json!({"description":" "})),
+        ] {
+            option.raw = raw;
+            assert!(package_description(&option).is_none());
+        }
+    }
 
     #[test]
     fn exact_matching_is_case_and_unicode_normalized_without_fuzzy_guesses() {
@@ -961,12 +1095,20 @@ mod tests {
         let request = GuidedSellRequest {
             marketplace_evidence: false,
             input_path: "facts.json".into(),
+            output_path: None,
             images: vec![],
             selections: GuidedSelections::default(),
         };
         let (output, actions, warnings) =
             category_ambiguity(PortalId::Fi, &facts, discovery, &request);
         assert!(warnings.is_empty());
+        assert_eq!(actions.len(), 2);
+        assert!(actions.iter().all(|action| {
+            output.ambiguities[0]
+                .choices
+                .iter()
+                .all(|choice| choice.command != action.command)
+        }));
         assert_eq!(output.ambiguities[0].choices.len(), 20);
         assert_eq!(output.ambiguities[0].choices[0].label, "Root 01");
         assert_eq!(
@@ -986,6 +1128,7 @@ mod tests {
         let request = GuidedSellRequest {
             marketplace_evidence: false,
             input_path: "-".into(),
+            output_path: None,
             images: vec!["front.jpg".into(), "back.jpg".into()],
             selections: GuidedSelections::parse(&["brand=12".into()]).unwrap(),
         };
@@ -1001,6 +1144,7 @@ mod tests {
         let request = GuidedSellRequest {
             marketplace_evidence: false,
             input_path: "facts file.json".into(),
+            output_path: None,
             images: vec!["front photo.jpg".into()],
             selections: GuidedSelections::parse(&["category=12".into()]).unwrap(),
         };

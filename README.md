@@ -288,8 +288,10 @@ exact `vinted listing show ITEM_ID` action for authoritative follow-up.
 facts and image paths, performs scoped runtime discovery, and makes no remote
 mutation. Select a current leaf with `--select category=ID`; search-derived
 categories are never selected automatically. Complete, unambiguous facts then
-produce a validated `proposed_mutation` whose `listing_input` can be saved and
-passed to the existing `publish` command. Missing or ambiguous values produce
+produce a validated `proposed_mutation`. Add `--output listing.json` to save its
+exact `listing_input` without overwriting an existing path; the returned publish
+command references that file and preserves the original image order. Export
+never publishes and writes nothing while more input is needed. Missing or ambiguous values produce
 structured choices with opaque runtime IDs and resumable `--select FIELD=ID`
 actions. Use a durable facts file for resumable work rather than consumed stdin.
 Flea does not fuzzy-match or infer marketplace values.
@@ -314,8 +316,8 @@ A semantic input can use runtime-localized labels without knowing their IDs:
 Use `attributes` for additional runtime fields by their returned code or label.
 An empty `brand` explicitly selects Vinted's no-brand encoding. Image paths can
 live in the JSON, be passed with repeatable `--image`, or use both. When the
-result is ready, write `proposed_mutation.listing_input` to the path in the
-returned publish command. Publication then runs through the existing image
+result is ready, prefer `sell --output listing.json` over manually copying
+`proposed_mutation.listing_input`. Publication then runs through the existing image
 sanitization, payload validation, brand verification, authoritative inspection,
 moderation reconciliation, and retry-safety behavior.
 
@@ -397,6 +399,11 @@ the localized listing condition against live attribute discovery for the
 listing's category. `identity.status` is `composer_matched`, `upstream_only`, or
 `unavailable`; null IDs remain in their named namespace and never imply that an
 upstream ID can be submitted to the composer.
+
+`vinted listing show` exposes observed size identities and unisex status, plus
+best-effort category names and full paths from current discovery. Size keeps
+upstream and composer IDs separate; missing facts remain null. It does not infer
+structured facts from listing text or an earlier submission.
 
 `vinted listing update` accepts a partial JSON object containing one or more of
 `title`, `description`, and `price`, all as strings. It applies only to an owned,

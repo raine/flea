@@ -42,6 +42,13 @@ pub struct VintedListingCondition {
     pub identity: VintedConditionIdentity,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct VintedListingSize {
+    pub upstream_id: Option<String>,
+    pub composer_id: Option<String>,
+    pub name: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct VintedListingShipping {
     pub package_size_id: Option<String>,
@@ -66,7 +73,10 @@ pub struct VintedListingDetail {
     pub description: Option<String>,
     pub price: Option<SearchPrice>,
     pub condition: Option<VintedListingCondition>,
+    pub size: Option<VintedListingSize>,
+    pub is_unisex: Option<bool>,
     pub category: Option<VintedListingValue>,
+    pub category_path: Option<Vec<String>>,
     pub brand: Option<VintedListingValue>,
     pub colors: Vec<VintedListingValue>,
     pub shipping: Option<VintedListingShipping>,

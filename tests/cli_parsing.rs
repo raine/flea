@@ -655,3 +655,41 @@ fn category_search_accepts_opt_in_marketplace_evidence() {
         .is_ok()
     );
 }
+
+#[test]
+fn vinted_sell_output_is_explicit_and_documented() {
+    let cli = Cli::parse_from([
+        "flea",
+        "vinted",
+        "sell",
+        "--input",
+        "facts.json",
+        "--output",
+        "ready listing.json",
+    ]);
+    let Command::Vinted(vinted) = cli.command else {
+        panic!("expected Vinted")
+    };
+    let VintedCommand::Sell(sell) = vinted.command else {
+        panic!("expected sell")
+    };
+    assert_eq!(
+        sell.output.unwrap(),
+        std::path::PathBuf::from("ready listing.json")
+    );
+    let help = Cli::try_parse_from(["flea", "vinted", "sell", "--help"]).unwrap_err();
+    assert_eq!(help.kind(), clap::error::ErrorKind::DisplayHelp);
+    assert!(help.to_string().contains("--output <PATH>"));
+    assert!(help.to_string().contains("without overwriting"));
+    assert!(
+        Cli::try_parse_from([
+            "flea",
+            "vinted",
+            "sell",
+            "--input",
+            "facts.json",
+            "--output"
+        ])
+        .is_err()
+    );
+}

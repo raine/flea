@@ -343,6 +343,16 @@ fn collect_named_options(value: &Value, output: &mut Vec<RuntimeOption>) {
     }
 }
 
+pub(super) fn matches_runtime_alias(raw: &Value, supplied: &str) -> bool {
+    let normalized = normalize(supplied);
+    !normalized.is_empty()
+        && ALIAS_KEYS.iter().any(|key| {
+            raw.get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|alias| normalize(alias) == normalized)
+        })
+}
+
 fn runtime_option(object: &Map<String, Value>) -> Option<RuntimeOption> {
     let id = ["id", "value_id", "package_size_id", "color_id"]
         .iter()

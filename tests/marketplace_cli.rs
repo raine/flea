@@ -291,7 +291,7 @@ fn guided_sell_requires_explicit_category_selection_for_multiple_runtime_leaves(
         2
     );
     assert!(
-        output["next_actions"]
+        output["data"]["ambiguities"][0]["choices"]
             .as_array()
             .unwrap()
             .iter()
@@ -337,6 +337,12 @@ fn guided_sell_returns_scoped_resumable_choices_instead_of_guessing() {
         .find(|ambiguity| ambiguity["field"] == "attribute.condition")
         .unwrap();
     assert_eq!(ambiguity["semantic_value"], "Used");
+    assert_eq!(ambiguity["code"], "unmatched_semantic_value");
+    assert!(
+        output
+            .get("next_actions")
+            .is_none_or(|actions| actions.as_array().is_some_and(Vec::is_empty))
+    );
     assert_eq!(ambiguity["choices"][0]["id"], 6);
     assert!(
         ambiguity["choices"][0]["command"]

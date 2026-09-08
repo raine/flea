@@ -84,12 +84,17 @@ This flag does not replace selecting an actual category branch in Vinted's tree.
 It performs scoped runtime discovery without mutating remote state. Select a
 current category leaf explicitly with `--select category=ID`, even when search
 returns only one candidate. After category selection, complete unambiguous facts
-produce a validated `proposed_mutation`; save its `listing_input` and run the
-returned existing publish command. Missing or ambiguous values contain runtime
+produce a validated `proposed_mutation`. Pass `--output listing.json` to save the
+validated `listing_input` without manual copying, then run the returned publish
+command. Output is written only when ready and never overwrites an existing
+path; publication remains a separate deliberate action. Missing or ambiguous values contain runtime
 choices and resumable `--select FIELD=ID` commands. Prefer a durable facts file
 for this multi-step workflow: consumed stdin cannot be replayed. Follow the
 returned actions instead of fuzzy matching, selecting the first category, or
-inventing IDs.
+inventing IDs. An unrecognized semantic phrase is not evidence of several
+matching choices: inspect the returned accepted labels and select the one that
+matches seller facts. Choice-local commands are executable continuations; do
+not expect every choice command to be repeated in top-level `next_actions`.
 
 `listing list` enumerates active and draft-associated items for the authenticated
 account without relying on search indexing. Use it to verify that a
@@ -98,7 +103,10 @@ then inspect the returned item ID with `listing show`. Listing conditions expose
 separate `identity.upstream_id` and `identity.composer_id` values. Use the
 composer ID for publication correlation when `identity.status` is
 `composer_matched`. Treat `upstream_only` and `unavailable` as explicit limits,
-not as permission to submit a listing-side ID to the composer.
+not as permission to submit a listing-side ID to the composer. Listing inspection
+also exposes observed `size` and `is_unisex`, and a `category_path` when current
+catalog lookup succeeds. Size keeps upstream and composer IDs separate; unknown
+values remain null rather than being inferred from the title or submitted facts.
 
 `listing update` accepts only a partial JSON object with one or more string
 fields named `title`, `description`, and `price`. It updates an owned, editable
@@ -173,6 +181,10 @@ the composer; never submit group headings. Use `--full` only when the complete
 form is genuinely needed. Discover size, condition, and other attributes for
 the chosen category; never assume an EU shoe size is its opaque option ID or
 reuse IDs from another branch.
+
+Use upstream package descriptions shown with choices to decide package size.
+If descriptions do not establish applicable limits, inspect package discovery
+rather than inventing weights or dimensions.
 
 Brands and package sizes are category scoped. Colors are portal scoped,
 configuration is account scoped, and attributes are selection scoped. Put
