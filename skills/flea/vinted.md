@@ -136,6 +136,16 @@ Write listing text naturally in the seller's language. Vinted's buyer-facing
 experience translates supported member-authored content and offers the original.
 Structured taxonomy localization and seller-text translation are separate.
 
+Pass photos in the intended display order. The first `--image` becomes the main
+photo; subsequent images follow in the order supplied:
+
+```sh
+flea vinted publish --input listing.json --image front.jpg --image back.jpg
+```
+
+Here, `front.jpg` is the main photo. Confirm the authoritative order in the
+result's `assigned_photos`: `display_order: 0` identifies the main photo.
+
 Completion reuses photos; `--image` replaces them. Publication results keep
 `assigned_photo_ids` for compatibility and add `assigned_photos` with
 `display_order`. Both reflect authoritative post-mutation draft or listing
