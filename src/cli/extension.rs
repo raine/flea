@@ -18,9 +18,9 @@ pub fn setup(copy_to_clipboard: bool) -> Result<CommandOutcome, AppError> {
 fn setup_document(path: &str, macos: bool, copied: bool) -> String {
     let picker_tip = if macos {
         if copied {
-            "   Path copied to clipboard. Press Command+Shift+G (⌘⇧G) in the folder\n   picker, paste with Command+V, then press Return and click Select.\n\n"
+            "   Path copied to clipboard. Press Command+Shift+G in the folder\n   picker, paste with Command+V, then press Return and click Select.\n\n"
         } else {
-            "   In the folder picker, press Command+Shift+G (⌘⇧G), paste the path\n   above, then press Return and click Select.\n\n"
+            "   In the folder picker, press Command+Shift+G, paste the path\n   above, then press Return and click Select.\n\n"
         }
     } else {
         ""
@@ -91,7 +91,7 @@ mod tests {
             true,
         );
         assert!(document.contains("Path copied to clipboard"));
-        assert!(document.contains("Command+Shift+G (⌘⇧G)"));
+        assert!(document.contains("Command+Shift+G"));
         assert!(document.contains("Command+V"));
         assert!(document.contains("\n   /Users/test/Library/Application Support/flea/extension\n"));
         assert!(document.contains("flea vinted auth status --browser"));
