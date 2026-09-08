@@ -1,50 +1,35 @@
 # Changelog
 
-## Unreleased
+## v0.1.3 (2026-09-08)
 
-- Resolve semantic Vinted size, condition, color, and package values against
-  live scoped publication catalogs while preserving explicit opaque IDs
-- Add a non-interactive Vinted sell workflow that resolves semantic seller facts
-  through scoped runtime discovery and returns either a validated publication
-  proposal or structured resumable ambiguity choices
-- Resolve unique exact or normalized Vinted brand names to category-scoped IDs,
-  while preserving bounded ambiguity and runtime custom-brand policy
-- Rank ambiguous Vinted publication categories with supplied listing text and
-  compact scores derived from live marketplace category evidence
-- Normalize Vinted listing conditions against selection-scoped runtime composer
-  options while preserving distinct upstream and composer identity namespaces
-- Replace the duplicate Vinted `auth` and `auth web` trees with one
-  `auth login/status/logout` command set that manages both catalog credentials
-  and the publication browser by default; `--api` and `--browser` select one
-  layer, and existing state remains in place
-- Show required Vinted category attributes and executable option-selection
-  actions in the primary publication composer
-- Verify confirmed Vinted publications with bounded account polling, reporting
-  public, moderated, timed-out, and uncertain outcomes without risking a
-  duplicate publication
-- Link supplied Vinted brands outside initial composer suggestions directly to
-  focused category-scoped discovery
-- Keep default Vinted composer output concise with readiness, selected values,
-  issues, and next actions; complete runtime option catalogs are available with
-  `--full`
-- Separate temporary Vinted upload photo IDs from authoritative assigned photo
-  IDs and report assigned display order after every publication mutation
-- Report Vinted publication category locale, expose upstream suggestions, and
-  guide zero-result searches through the localized catalog
-- Add bounded Vinted draft listing, complete remote draft inspection, and
-  publication-readiness validation with reusable photo ordering
-- Reuse verified remote photos when publishing Vinted drafts, with explicit
-  replace-all image uploads and inspectable partial replacement state
-- Add authenticated Vinted item inspection with exact raw output and
-  exposure-aware seller-disclosed location fields
-- Add direct Vinted account listing inspection and bounded active and draft
-  enumeration without relying on search indexing
-- Vinted catalog search supports categories, common and dynamic attributes,
-  decimal price ranges, every catalog sort order, pagination, and raw output
-- Vinted filter commands discover active filters, retrieve lazy facets, and
-  search contextual option lists such as brands
-- Nested Vinted options preserve hierarchy, counts, selected state, metadata,
-  totals, and truncation in the shared facet output
+- Breaking: Tori commands now use `flea tori ...`. Existing unscoped credentials
+  are removed; sign in again with `flea tori auth login`
+- Discover supported marketplaces, portals, and operations offline with
+  `flea marketplaces` and `flea capabilities`
+- Add Vinted Finland login, status, and logout for both catalog access and a
+  persistent publication browser, with automatic catalog session refresh
+- Search and browse Vinted with category and attribute filters, decimal price
+  ranges, sorting, pagination, and raw output; discover available filter options
+- Inspect Vinted items, including seller-disclosed locations when available,
+  and list your active listings and drafts without relying on search indexing
+- Create, inspect, update, validate, delete, and publish Vinted drafts, or
+  publish directly through a signed-in Chrome browser
+- Prepare Vinted listings with `flea vinted sell`, resolving category, brand,
+  size, condition, color, and package choices into a validated proposal without
+  publishing; ambiguous choices can be selected and resumed
+- Discover Vinted publication categories and required attributes, with
+  listing-based category rankings and concise validation guidance; use `--full`
+  for complete composer options
+- Reuse existing Vinted draft photos when publishing, optionally replace the
+  full photo set, and inspect the resulting photo order
+- Automatically check confirmed Vinted publications for public or moderated
+  status, with safe follow-up guidance when verification times out or fails
+- Fix Tori favorite and draft changes, postal-code updates, photo removal, and
+  deletion of newly created drafts
+- Recover Tori price and trade details from listing subtitles when missing from
+  the listing's structured details
+- Speed up large HEIC/HEIF photo preparation on macOS and improve timeout errors
+- Add dedicated agent guides through `flea skill tori` and `flea skill vinted`
 
 ## v0.1.2 (2026-08-23)
 
