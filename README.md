@@ -175,17 +175,20 @@ combines those sources into normalized fields, options, requirements, validation
 issues, and a direct `ListingInput` value when all seller facts are confirmed.
 
 Publication executes Vinted API requests inside a visible, persistent Google
-Chrome session so Vinted receives the browser cookies, CSRF state, and
-human-verification state associated with that session. Flea launches ordinary Chrome with a dedicated profile and a
-localhost debugging port. `agent-browser` connects to that Chrome instance as a
-client and does not launch its automation-oriented Chromium build. Publication
-relies on the browser login and requires no native Vinted token. Install the
-client:
+Chrome session so Vinted receives that session's cookies, CSRF state, and human
+verification. Flea connects directly to Chrome using its built-in DevTools
+Protocol client. No separate browser automation client or browser download is
+required: install ordinary Google Chrome (or Chromium on Linux).
 
-```sh
-brew install agent-browser
-agent-browser install
-```
+Flea uses a dedicated profile and a Chrome-selected loopback debugging port, so
+other browsers can use port 9222 independently. The endpoint is discovered only
+from that profile's `DevToolsActivePort` file. Chrome's debugging interface has
+no authentication; local processes able to reach it can control the dedicated
+profile. Do not expose it to the network or use your everyday browser profile.
+
+If Chrome is already running with the Flea profile but cannot expose a usable
+endpoint, close that Flea Chrome window and retry. There is no need to close
+unrelated browser windows or delete the profile.
 
 Set up authentication and sign in once:
 
@@ -203,8 +206,10 @@ Use `--api` or `--browser` when only one layer should be changed or inspected.
 The login command leaves the visible publication browser open when sign-in or a
 human check needs user interaction. Complete that interaction in the browser,
 then run `flea vinted auth status --browser`. Flea stores account credentials
-and the dedicated Chrome profile in their established private state locations. `flea vinted auth logout` clears both layers; `--api` or `--browser`
-limits the clear operation to one layer.
+and the dedicated Chrome profile in private state locations.
+`flea vinted auth logout` clears both authentication layers; `--api` or `--browser`
+limits the clear operation to one layer. Browser logout clears cookies and Vinted
+local storage and closes the selected tab; it does not delete the profile.
 
 ```sh
 flea --format json vinted category search SEARCH_TEXT \

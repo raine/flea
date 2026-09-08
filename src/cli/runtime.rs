@@ -48,7 +48,7 @@ use crate::{
                 VintedSearchApi, VintedSearchSession,
             },
             session as vinted_session, web as vinted_web,
-            web_publication::AgentBrowserVintedPublicationApi,
+            web_publication::VintedWebPublicationApi,
         },
     },
     storage::StatePaths,
@@ -101,7 +101,7 @@ impl ApplicationDependencies {
             vinted_item: Arc::new(HttpVintedItemApi::new()),
             vinted_draft: Arc::new(HttpVintedDraftApi::new()),
             vinted_listing: Arc::new(HttpVintedListingApi::new()),
-            vinted_publication: Arc::new(AgentBrowserVintedPublicationApi::new()),
+            vinted_publication: Arc::new(VintedWebPublicationApi::new()),
             vinted_publication_discovery: Arc::new(HttpVintedPublicationDiscoveryApi::new()),
             vinted_readiness: Arc::new(HttpVintedReadinessApi::new()),
         }

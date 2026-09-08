@@ -1,10 +1,7 @@
 use std::{
     future::Future,
     pin::Pin,
-    sync::{
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Mutex, OnceLock},
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -20,42 +17,35 @@ use crate::{
             decode_draft_response, decode_mutation_response, decode_photo_response,
             operation_endpoint,
         },
-        web::AgentBrowserSession,
+        web::VintedWebSession,
     },
     transport::TransportResponse,
 };
 
 const MAX_BROWSER_BODY_BYTES: usize = 4 * 1024 * 1024;
 
-pub struct AgentBrowserVintedPublicationApi {
-    opened: AtomicBool,
+pub struct VintedWebPublicationApi {
+    session: OnceLock<VintedWebSession>,
     csrf_token: Mutex<Option<String>>,
 }
 
-impl AgentBrowserVintedPublicationApi {
+impl VintedWebPublicationApi {
     pub const fn new() -> Self {
         Self {
-            opened: AtomicBool::new(false),
+            session: OnceLock::new(),
             csrf_token: Mutex::new(None),
         }
     }
 
-    fn session(&self) -> Result<AgentBrowserSession, AppError> {
-        AgentBrowserSession::discover(crate::marketplace::PortalId::Fi)
+    fn session(&self) -> Result<&VintedWebSession, AppError> {
+        if let Some(session) = self.session.get() {
+            return Ok(session);
+        }
+        let session = VintedWebSession::discover(crate::marketplace::PortalId::Fi)?;
+        Ok(self.session.get_or_init(|| session))
     }
 
-    fn ensure_open(&self, session: &AgentBrowserSession) -> Result<(), AppError> {
-        if self.opened.swap(true, Ordering::AcqRel) {
-            return Ok(());
-        }
-        if let Err(error) = session.open() {
-            self.opened.store(false, Ordering::Release);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    fn csrf_token(&self, session: &AgentBrowserSession) -> Result<String, AppError> {
+    fn csrf_token(&self, session: &VintedWebSession) -> Result<String, AppError> {
         let mut cached = self.csrf_token.lock().map_err(|_| {
             AppError::unexpected("failed to access the Vinted browser security token")
         })?;
@@ -69,15 +59,14 @@ impl AgentBrowserVintedPublicationApi {
 
     async fn configuration_request(&self) -> Result<Value, AppError> {
         let session = self.session()?;
-        self.ensure_open(&session)?;
+        session.open()?;
         Ok(json!({ "upload_session_id": uuid::Uuid::new_v4().to_string() }))
     }
 
     async fn fetch_item_request(&self, item_id: &str) -> Result<Value, AppError> {
         let session = self.session()?;
-        self.ensure_open(&session)?;
         let response = self.json_request(
-            &session,
+            session,
             "GET",
             &format!("/api/v2/item_upload/items/{item_id}"),
             None,
@@ -95,8 +84,7 @@ impl AgentBrowserVintedPublicationApi {
         image: PreparedImage,
     ) -> Result<UploadedPhoto, AppError> {
         let session = self.session()?;
-        self.ensure_open(&session)?;
-        let csrf_token = self.csrf_token(&session)?;
+        let csrf_token = self.csrf_token(session)?;
         let script = photo_upload_script(upload_session_id, &image, &csrf_token);
         let response = decode_browser_response(session.evaluate(&script)?)?;
         if let Some(error) = browser_gate_error(response.status) {
@@ -111,10 +99,9 @@ impl AgentBrowserVintedPublicationApi {
         body: Option<Value>,
     ) -> Result<Value, AppError> {
         let session = self.session()?;
-        self.ensure_open(&session)?;
         let (method, path) = operation_endpoint(operation);
         let response = self.json_request(
-            &session,
+            session,
             method.as_str(),
             &format!("/api/v2/{path}"),
             body.as_ref(),
@@ -128,7 +115,7 @@ impl AgentBrowserVintedPublicationApi {
 
     fn json_request(
         &self,
-        session: &AgentBrowserSession,
+        session: &VintedWebSession,
         method: &str,
         path: &str,
         body: Option<&Value>,
@@ -142,13 +129,13 @@ impl AgentBrowserVintedPublicationApi {
     }
 }
 
-impl Default for AgentBrowserVintedPublicationApi {
+impl Default for VintedWebPublicationApi {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl VintedPublicationApi for AgentBrowserVintedPublicationApi {
+impl VintedPublicationApi for VintedWebPublicationApi {
     fn configuration<'a>(
         &'a self,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
@@ -175,7 +162,7 @@ impl VintedPublicationApi for AgentBrowserVintedPublicationApi {
         operation: &'a PublicationOperation,
         body: Option<Value>,
     ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
-        Box::pin(async move { self.mutation_request(operation, body).await })
+        Box::pin(self.mutation_request(operation, body))
     }
 }
 
@@ -207,10 +194,6 @@ fn json_request_script(
             const method = {method};
             const encodedBody = {body};
             const csrfToken = {csrf_token};
-            if (csrfToken !== null) {{
-                window.__fleaCsrfToken = csrfToken;
-                localStorage.setItem('__fleaCsrfToken', csrfToken);
-            }}
             const headers = {{ accept: 'application/json,text/plain,*/*,image/webp' }};
             if (csrfToken !== null) headers['x-csrf-token'] = csrfToken;
             let requestBody;
@@ -264,8 +247,6 @@ fn photo_upload_script(upload_session_id: &str, image: &PreparedImage, csrf_toke
         r#"(async () => {{
             {response_helper}
             const csrfToken = {csrf_token};
-            window.__fleaCsrfToken = csrfToken;
-            localStorage.setItem('__fleaCsrfToken', csrfToken);
             const raw = atob({bytes});
             const content = new Uint8Array(raw.length);
             for (let index = 0; index < raw.length; index++) content[index] = raw.charCodeAt(index);

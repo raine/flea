@@ -1,3 +1,4 @@
+mod browser;
 mod cli;
 mod diagnostics;
 pub mod domain;

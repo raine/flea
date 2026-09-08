@@ -50,9 +50,11 @@ presentation text. `--raw` preserves upstream JSON.
 
 ## Publish Vinted listings
 
-Publication commands use Chrome cookies and human verification through
-`agent-browser`. Publication also uses account credentials for discovery and
-account reads, so set up both layers:
+Publication commands use ordinary Chrome cookies and human verification through
+Flea's built-in browser connection. No separate browser automation client is
+required. Flea chooses an available local debugging port automatically.
+Publication also uses account credentials for discovery and account reads, so
+set up both layers:
 
 ```sh
 flea vinted auth login
@@ -145,4 +147,5 @@ inspection without another publication mutation. Read `verification.status` as
 `vinted.publication_verification_uncertain`. All of these confirmed mutation
 outcomes set `safe_to_retry: false`. Follow the exact `listing show` action for
 a timed-out or uncertain verification. `auth logout` clears both authentication
-layers; `auth logout --browser` clears only browser cookies and profile state.
+layers; `auth logout --browser` clears browser cookies and Vinted local storage,
+then closes the selected tab without deleting the profile.
