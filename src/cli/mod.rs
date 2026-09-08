@@ -42,6 +42,10 @@ pub struct Cli {
     #[arg(long, global = true, value_enum, default_value_t)]
     pub format: OutputFormat,
 
+    /// Connect to an existing Chrome debugging HTTP URL instead of managed Chrome.
+    #[arg(long, global = true, value_parser = crate::browser::parse_browser_url)]
+    pub browser_url: Option<url::Url>,
+
     #[arg(skip)]
     pub format_explicit: bool,
 
@@ -51,6 +55,12 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Open the dedicated Flea browser without enabling remote debugging.
+    #[command(
+        long_about = "Open the dedicated Flea Chrome profile without enabling remote debugging. Close any debugging-enabled Flea Chrome instance first."
+    )]
+    Browser,
+
     #[command(
         about = "Show the marketplace capability matrix",
         long_about = "Show the offline capability matrix for every configured marketplace and portal."
@@ -85,7 +95,11 @@ impl Command {
         match self {
             Self::Tori(_) => Some(MarketplaceContext::TORI_FI),
             Self::Vinted(_) => Some(MarketplaceContext::VINTED_FI),
-            Self::Capabilities | Self::Marketplaces | Self::Skill(_) | Self::Unsupported(_) => None,
+            Self::Browser
+            | Self::Capabilities
+            | Self::Marketplaces
+            | Self::Skill(_)
+            | Self::Unsupported(_) => None,
         }
     }
 
@@ -94,7 +108,11 @@ impl Command {
         match self {
             Self::Tori(args) => args.command.capability_id(),
             Self::Vinted(args) => args.command.capability_id(),
-            Self::Capabilities | Self::Marketplaces | Self::Skill(_) | Self::Unsupported(_) => None,
+            Self::Browser
+            | Self::Capabilities
+            | Self::Marketplaces
+            | Self::Skill(_)
+            | Self::Unsupported(_) => None,
         }
     }
 
@@ -105,6 +123,7 @@ impl Command {
             Self::Tori(args) => args.command.telemetry_name(),
             Self::Vinted(args) => args.command.telemetry_name(),
             Self::Skill(_) => "skill".to_owned(),
+            Self::Browser => "browser".to_owned(),
             Self::Unsupported(_) => "unknown".to_owned(),
         }
     }
@@ -322,6 +341,50 @@ pub async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_url_is_global_and_validated() {
+        for args in [
+            vec![
+                "flea",
+                "--browser-url",
+                "http://localhost:9222",
+                "vinted",
+                "auth",
+                "status",
+                "--browser",
+            ],
+            vec![
+                "flea",
+                "vinted",
+                "auth",
+                "status",
+                "--browser",
+                "--browser-url",
+                "http://localhost:9222",
+            ],
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(args)
+                    .unwrap()
+                    .browser_url
+                    .unwrap()
+                    .port(),
+                Some(9222)
+            );
+        }
+        for value in [
+            "not-a-url",
+            "file:///tmp/chrome",
+            "http://user:secret@localhost:9222",
+        ] {
+            assert!(Cli::try_parse_from(["flea", "--browser-url", value, "capabilities"]).is_err());
+        }
+        assert!(matches!(
+            Cli::try_parse_from(["flea", "browser"]).unwrap().command,
+            Command::Browser
+        ));
+    }
 
     #[test]
     fn parsed_command_variants_have_stable_telemetry_names() {

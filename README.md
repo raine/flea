@@ -180,7 +180,7 @@ verification. Flea connects directly to Chrome using its built-in DevTools
 Protocol client. No separate browser automation client or browser download is
 required: install ordinary Google Chrome (or Chromium on Linux).
 
-Flea uses a dedicated profile and a Chrome-selected loopback debugging port, so
+By default, Flea uses a dedicated profile and a Chrome-selected loopback debugging port, so
 other browsers can use port 9222 independently. The endpoint is discovered only
 from that profile's `DevToolsActivePort` file. Chrome's debugging interface has
 no authentication; local processes able to reach it can control the dedicated
@@ -189,6 +189,30 @@ profile. Do not expose it to the network or use your everyday browser profile.
 If Chrome is already running with the Flea profile but cannot expose a usable
 endpoint, close that Flea Chrome window and retry. There is no need to close
 unrelated browser windows or delete the profile.
+
+To use an existing Chrome with remote debugging enabled:
+
+```sh
+flea --browser-url http://127.0.0.1:9222 vinted auth status --browser
+```
+
+This global option applies to browser-backed Vinted authentication, publication,
+and listing edits. Flea discovers the WebSocket endpoint through `/json/version`
+and uses that browser instead of creating, locking, or launching its managed
+profile. The advertised `ws://` address must be reachable. Connection failures
+never fall back to the managed browser. Pass the option on every invocation,
+including suggested follow-up commands. Browser logout clears Vinted data in
+that selected browser. API-only operations are unchanged.
+
+To open the dedicated Flea profile manually without enabling remote debugging:
+
+```sh
+flea browser
+```
+
+Close any debugging-enabled Flea Chrome instance first. Close the manual browser
+before using Flea's browser automation again. `flea browser` cannot be combined
+with `--browser-url`.
 
 Set up authentication and sign in once:
 

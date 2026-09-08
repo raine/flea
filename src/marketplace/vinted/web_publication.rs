@@ -25,13 +25,19 @@ use crate::{
 const MAX_BROWSER_BODY_BYTES: usize = 4 * 1024 * 1024;
 
 pub struct VintedWebPublicationApi {
+    browser_url: Option<url::Url>,
     session: OnceLock<VintedWebSession>,
     csrf_token: Mutex<Option<String>>,
 }
 
 impl VintedWebPublicationApi {
     pub const fn new() -> Self {
+        Self::with_browser_url(None)
+    }
+
+    pub const fn with_browser_url(browser_url: Option<url::Url>) -> Self {
         Self {
+            browser_url,
             session: OnceLock::new(),
             csrf_token: Mutex::new(None),
         }
@@ -41,7 +47,10 @@ impl VintedWebPublicationApi {
         if let Some(session) = self.session.get() {
             return Ok(session);
         }
-        let session = VintedWebSession::discover(crate::marketplace::PortalId::Fi)?;
+        let session = VintedWebSession::discover_with_browser_url(
+            crate::marketplace::PortalId::Fi,
+            self.browser_url.as_ref(),
+        )?;
         Ok(self.session.get_or_init(|| session))
     }
 

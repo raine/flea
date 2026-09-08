@@ -105,7 +105,8 @@ where
             );
         }
     };
-    let dependencies = cli::runtime::ApplicationDependencies::production();
+    let dependencies =
+        cli::runtime::ApplicationDependencies::production_with_browser_url(cli.browser_url.clone());
     session.run(&command, || {
         let result = run_command(cli, &dependencies, Some(session.context()));
         let exit_code = result.exit_code;
@@ -153,6 +154,17 @@ fn run_command(
     dependencies: &cli::runtime::ApplicationDependencies,
     diagnostics: Option<&DiagnosticsContext>,
 ) -> RunResult {
+    if cli.browser_url.is_some() && matches!(cli.command, cli::Command::Browser) {
+        return finish(
+            cli.format,
+            cli.format_explicit,
+            Err(AppError::usage(
+                "--browser-url cannot be used with flea browser",
+            )),
+            diagnostics,
+            None,
+        );
+    }
     let format = cli.format;
     let format_explicit = cli.format_explicit;
     let context = cli.command.context();

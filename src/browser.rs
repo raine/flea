@@ -1,7 +1,7 @@
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Write},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpStream},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpStream, ToSocketAddrs},
     path::Path,
     process::{Command, Stdio},
     thread,
@@ -18,6 +18,108 @@ use crate::error::AppError;
 const START_TIMEOUT: Duration = Duration::from_secs(15);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+
+pub(crate) fn parse_browser_url(value: &str) -> Result<Url, String> {
+    let url = Url::parse(value).map_err(|_| "expected a Chrome debugging HTTP URL".to_owned())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(
+            "expected an HTTP(S) browser URL without credentials, query, or fragment".to_owned(),
+        );
+    }
+    Ok(url)
+}
+
+fn connect_remote(endpoint: &Url) -> Result<Cdp, AppError> {
+    let mut endpoint = endpoint.clone();
+    endpoint.set_path(&format!(
+        "{}/json/version",
+        endpoint.path().trim_end_matches('/')
+    ));
+    // Reqwest's runtime must not nest inside the command's Tokio runtime.
+    let websocket_url = thread::spawn(move || -> Result<String, AppError> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| remote_connection_error())?
+            .block_on(async {
+                let client = reqwest::Client::builder()
+                    .timeout(START_TIMEOUT)
+                    .redirect(reqwest::redirect::Policy::none())
+                    .no_proxy()
+                    .build()
+                    .map_err(|_| remote_connection_error())?;
+                let mut response = client
+                    .get(endpoint)
+                    .send()
+                    .await
+                    .and_then(reqwest::Response::error_for_status)
+                    .map_err(|_| remote_connection_error())?;
+                let mut body = Vec::new();
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|_| remote_connection_error())?
+                {
+                    if body.len() + chunk.len() > MAX_MESSAGE_BYTES {
+                        return Err(remote_connection_error());
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                let value: Value =
+                    serde_json::from_slice(&body).map_err(|_| remote_connection_error())?;
+                value
+                    .get("webSocketDebuggerUrl")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(remote_connection_error)
+            })
+    })
+    .join()
+    .map_err(|_| remote_connection_error())??;
+    let url = Url::parse(&websocket_url).map_err(|_| remote_connection_error())?;
+    if url.scheme() != "ws" || !url.username().is_empty() || url.password().is_some() {
+        return Err(remote_connection_error());
+    }
+    let host = url.host_str().ok_or_else(remote_connection_error)?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(remote_connection_error)?;
+    let addresses = (host.trim_matches(['[', ']']), port)
+        .to_socket_addrs()
+        .map_err(|_| remote_connection_error())?;
+    let deadline = Instant::now() + START_TIMEOUT;
+    for address in addresses {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .ok_or_else(remote_connection_error)?;
+        let Ok(stream) = TcpStream::connect_timeout(&address, remaining) else {
+            continue;
+        };
+        let config = WebSocketConfig::default()
+            .max_message_size(Some(MAX_MESSAGE_BYTES))
+            .max_frame_size(Some(MAX_MESSAGE_BYTES));
+        if let Ok((socket, _)) = client_with_config(
+            url.as_str(),
+            DeadlineStream { stream, deadline },
+            Some(config),
+        ) {
+            return Ok(Cdp { socket, next_id: 0 });
+        }
+    }
+    Err(remote_connection_error())
+}
+
+fn remote_connection_error() -> AppError {
+    browser_error(
+        "could not connect to the supplied Chrome debugging URL; verify its /json/version endpoint and ws debugger address are reachable",
+    )
+}
 
 // A deadline on each underlying read bounds fragmented frames and trickling peers too.
 struct DeadlineStream {
@@ -159,6 +261,16 @@ pub(crate) struct ChromePage {
 }
 
 impl ChromePage {
+    pub(crate) fn open_remote(endpoint: &Url, url: &str) -> Result<Self, AppError> {
+        let mut page = Self::attach(connect_remote(endpoint)?, url, url)?;
+        page.wait_ready()?;
+        Ok(page)
+    }
+
+    pub(crate) fn clear_remote(endpoint: &Url, origin: &str) -> Result<(), AppError> {
+        Self::attach(connect_remote(endpoint)?, origin, "about:blank")?.clear()
+    }
+
     pub(crate) fn open(profile: &Path, url: &str) -> Result<Self, AppError> {
         let mut page = Self::connect(profile, url, url)?;
         page.wait_ready()?;
@@ -369,18 +481,45 @@ fn parse_endpoint(content: &str) -> Option<(u16, &str)> {
     Some((port, path))
 }
 
+pub(crate) fn open_without_debugging(profile: &Path) -> Result<(), AppError> {
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(profile.with_extension("lock"))
+        .map_err(profile_error)?;
+    FileExt::lock_exclusive(&lock).map_err(profile_error)?;
+    if connect_profile(profile, Instant::now() + START_TIMEOUT).is_some() {
+        return Err(AppError::usage(
+            "close the debugging-enabled Flea Chrome window before running flea browser",
+        ));
+    }
+    launch_chrome_with_debugging(profile, false)
+}
+
 fn launch_chrome(profile: &Path) -> Result<(), AppError> {
-    for executable in chrome_executables() {
-        match Command::new(executable)
+    launch_chrome_with_debugging(profile, true)
+}
+
+fn chrome_command(executable: &str, profile: &Path, debugging: bool) -> Command {
+    let mut command = Command::new(executable);
+    if debugging {
+        command
             .arg("--remote-debugging-port=0")
-            .arg("--remote-debugging-address=127.0.0.1")
-            .arg(format!("--user-data-dir={}", profile.display()))
-            .arg("about:blank")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+            .arg("--remote-debugging-address=127.0.0.1");
+    }
+    command
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg("about:blank")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+fn launch_chrome_with_debugging(profile: &Path, debugging: bool) -> Result<(), AppError> {
+    for executable in chrome_executables() {
+        match chrome_command(executable, profile, debugging).spawn() {
             Ok(_) => return Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => {
@@ -525,6 +664,86 @@ pub(crate) mod tests {
         socket
             .send(Message::Text(response.to_string().into()))
             .unwrap();
+    }
+
+    #[test]
+    fn manual_browser_has_no_debugging_flags() {
+        for debugging in [false, true] {
+            let command = chrome_command("chrome", Path::new("/tmp/flea-profile"), debugging);
+            let args: Vec<_> = command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect();
+            assert!(args.contains(&"--user-data-dir=/tmp/flea-profile".to_owned()));
+            assert_eq!(
+                args.iter().any(|arg| arg.starts_with("--remote-debugging")),
+                debugging
+            );
+        }
+    }
+
+    #[test]
+    fn remote_browser_discovers_endpoint_and_attaches() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let join = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut header = Vec::new();
+            while !header.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                stream.read_exact(&mut byte).unwrap();
+                header.push(byte[0]);
+            }
+            assert!(
+                String::from_utf8(header)
+                    .unwrap()
+                    .starts_with("GET /json/version HTTP/1.1")
+            );
+            let body =
+                json!({"webSocketDebuggerUrl": format!("ws://{address}/devtools/browser/remote")})
+                    .to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+            drop(stream);
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let call = request(&mut socket, "Target.getTargets");
+            reply(
+                &mut socket,
+                &call,
+                json!({"targetInfos": [{"type": "page", "url": "https://www.vinted.fi/items/new", "targetId": "existing"}]}),
+            );
+            let call = request(&mut socket, "Target.attachToTarget");
+            assert_eq!(call["params"]["targetId"], "existing");
+            reply(&mut socket, &call, json!({"sessionId": "session"}));
+            let call = request(&mut socket, "Runtime.evaluate");
+            reply(&mut socket, &call, json!({"result": {"value": true}}));
+        });
+        let endpoint = parse_browser_url(&format!("http://{address}/")).unwrap();
+        // Remote attachment does not require a profile directory or Chrome executable.
+        let page = ChromePage::open_remote(&endpoint, "https://www.vinted.fi/items/new").unwrap();
+        assert_eq!(page.target, "existing");
+        join.join().unwrap();
+    }
+
+    #[test]
+    fn unavailable_remote_browser_returns_error_without_fallback() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let endpoint =
+            parse_browser_url(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        drop(listener);
+        assert!(connect_remote(&endpoint).is_err());
     }
 
     #[test]

@@ -30,11 +30,26 @@ pub struct VintedWebLogoutOutput {
 
 pub struct VintedWebSession {
     profile: PathBuf,
+    browser_url: Option<url::Url>,
     page: Mutex<Option<ChromePage>>,
 }
 
 impl VintedWebSession {
     pub fn discover(portal: PortalId) -> Result<Self, AppError> {
+        Self::discover_with_browser_url(portal, None)
+    }
+
+    pub fn discover_with_browser_url(
+        portal: PortalId,
+        browser_url: Option<&url::Url>,
+    ) -> Result<Self, AppError> {
+        if let Some(browser_url) = browser_url {
+            return Ok(Self {
+                profile: PathBuf::new(),
+                browser_url: Some(browser_url.clone()),
+                page: Mutex::new(None),
+            });
+        }
         let context = match portal {
             PortalId::Fi => MarketplaceContext::VINTED_FI,
         };
@@ -44,6 +59,7 @@ impl VintedWebSession {
         secure_directory(&profile).map_err(state_error)?;
         Ok(Self {
             profile,
+            browser_url: None,
             page: Mutex::new(None),
         })
     }
@@ -57,9 +73,16 @@ impl VintedWebSession {
             .lock()
             .map_err(|_| AppError::unexpected("failed to access the Vinted browser"))?;
         if page.is_none() {
-            *page = Some(ChromePage::open(&self.profile, web_publication_url())?);
+            *page = Some(match &self.browser_url {
+                Some(endpoint) => ChromePage::open_remote(endpoint, web_publication_url())?,
+                None => ChromePage::open(&self.profile, web_publication_url())?,
+            });
         }
         action(page.as_mut().expect("page initialized"))
+    }
+
+    pub fn open_without_debugging(&self) -> Result<(), AppError> {
+        crate::browser::open_without_debugging(&self.profile)
     }
 
     pub fn open(&self) -> Result<(), AppError> {
@@ -75,7 +98,10 @@ impl VintedWebSession {
     }
 
     pub fn clear(&self) -> Result<(), AppError> {
-        ChromePage::clear_profile(&self.profile, VINTED_ORIGIN)
+        match &self.browser_url {
+            Some(endpoint) => ChromePage::clear_remote(endpoint, VINTED_ORIGIN),
+            None => ChromePage::clear_profile(&self.profile, VINTED_ORIGIN),
+        }
     }
 }
 
@@ -105,13 +131,19 @@ fn read_csrf_token(page: &mut ChromePage) -> Result<String, AppError> {
         })
 }
 
-pub fn begin_login(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
-    let session = VintedWebSession::discover(portal)?;
+pub fn begin_login_with_browser_url(
+    portal: PortalId,
+    browser_url: Option<&url::Url>,
+) -> Result<VintedWebAuthStatus, AppError> {
+    let session = VintedWebSession::discover_with_browser_url(portal, browser_url)?;
     status_with_session(&session)
 }
 
-pub fn login(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
-    let status = begin_login(portal)?;
+pub fn login_with_browser_url(
+    portal: PortalId,
+    browser_url: Option<&url::Url>,
+) -> Result<VintedWebAuthStatus, AppError> {
+    let status = begin_login_with_browser_url(portal, browser_url)?;
     if status.authenticated {
         return Ok(status);
     }
@@ -128,12 +160,18 @@ pub fn login(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
     Err(error)
 }
 
-pub fn status(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
-    begin_login(portal)
+pub fn status_with_browser_url(
+    portal: PortalId,
+    browser_url: Option<&url::Url>,
+) -> Result<VintedWebAuthStatus, AppError> {
+    begin_login_with_browser_url(portal, browser_url)
 }
 
-pub fn logout(portal: PortalId) -> Result<VintedWebLogoutOutput, AppError> {
-    VintedWebSession::discover(portal)?.clear()?;
+pub fn logout_with_browser_url(
+    portal: PortalId,
+    browser_url: Option<&url::Url>,
+) -> Result<VintedWebLogoutOutput, AppError> {
+    VintedWebSession::discover_with_browser_url(portal, browser_url)?.clear()?;
     Ok(VintedWebLogoutOutput {
         authenticated: false,
         cleared: true,
