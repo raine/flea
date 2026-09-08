@@ -69,6 +69,26 @@ Chrome can enable debugging through command-line flags or
 Flea's connection in Chrome within 60 seconds. Do not bypass approval or human
 verification. Keep the debugging endpoint private; do not expose it publicly.
 
+On macOS and Linux, Flea automatically starts a background helper that retains
+this approved connection across CLI commands. No separate terminal or server
+command is needed. Browser operations using the same endpoint and local state
+directory queue behind the active browser session, with a five-minute wait
+limit. API-only work is not serialized by the helper. Windows uses per-command
+connections instead.
+
+Release the retained connection when finished:
+
+```sh
+flea browser disconnect --browser-url http://localhost:9222
+```
+
+Disconnect waits for active browser work to finish, then releases access without
+closing Chrome, logging out, or clearing browser data. It does not start a helper
+if none exists. Chrome disconnects are detected by periodic liveness checks;
+failed commands are never automatically replayed. A later command can start a
+fresh session and require approval again. The helper's local socket is private
+to the current OS user; cookies and request bodies are not persisted by it.
+
 Pass the same `--browser-url` on every invocation that should use this browser.
 Add it to returned `next_actions` and other continuation commands even when
 those commands omit it. Browser logout clears Vinted cookies and local storage
@@ -83,7 +103,8 @@ flea browser
 Close any debugging-enabled Flea Chrome instance first. Close this manual browser
 before using managed browser automation again, or enable debugging through
 Chrome's UI and explicitly connect with `--browser-url`. Do not combine
-`flea browser` with `--browser-url`.
+the bare `flea browser` command with `--browser-url`; the `disconnect` subcommand
+requires it.
 
 ## Publish Vinted listings
 

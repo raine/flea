@@ -42,7 +42,7 @@ pub struct Cli {
     #[arg(long, global = true, value_enum, default_value_t)]
     pub format: OutputFormat,
 
-    /// Connect to an existing Chrome debugging HTTP URL instead of managed Chrome.
+    /// Use an existing Chrome debugging HTTP URL; reuse its session on macOS/Linux.
     #[arg(long, global = true, value_parser = crate::browser::parse_browser_url)]
     pub browser_url: Option<url::Url>,
 
@@ -57,9 +57,12 @@ pub struct Cli {
 pub enum Command {
     /// Open the dedicated Flea browser without enabling remote debugging.
     #[command(
-        long_about = "Open the dedicated Flea Chrome profile without enabling remote debugging. Close any debugging-enabled Flea Chrome instance first."
+        long_about = "Open the dedicated Flea Chrome profile without enabling remote debugging. Close any debugging-enabled Flea Chrome instance first. Use browser disconnect --browser-url URL to release a persistent external-browser connection."
     )]
-    Browser,
+    Browser(BrowserArgs),
+
+    #[command(name = "__browser-session", hide = true)]
+    BrowserSession,
 
     #[command(
         about = "Show the marketplace capability matrix",
@@ -95,7 +98,8 @@ impl Command {
         match self {
             Self::Tori(_) => Some(MarketplaceContext::TORI_FI),
             Self::Vinted(_) => Some(MarketplaceContext::VINTED_FI),
-            Self::Browser
+            Self::Browser(_)
+            | Self::BrowserSession
             | Self::Capabilities
             | Self::Marketplaces
             | Self::Skill(_)
@@ -108,7 +112,8 @@ impl Command {
         match self {
             Self::Tori(args) => args.command.capability_id(),
             Self::Vinted(args) => args.command.capability_id(),
-            Self::Browser
+            Self::Browser(_)
+            | Self::BrowserSession
             | Self::Capabilities
             | Self::Marketplaces
             | Self::Skill(_)
@@ -123,10 +128,29 @@ impl Command {
             Self::Tori(args) => args.command.telemetry_name(),
             Self::Vinted(args) => args.command.telemetry_name(),
             Self::Skill(_) => "skill".to_owned(),
-            Self::Browser => "browser".to_owned(),
+            Self::Browser(args) => match args.command {
+                None => "browser".to_owned(),
+                Some(BrowserCommand::Disconnect) => "browser disconnect".to_owned(),
+            },
+            Self::BrowserSession => "browser session".to_owned(),
             Self::Unsupported(_) => "unknown".to_owned(),
         }
     }
+}
+
+#[derive(Debug, Args)]
+pub struct BrowserArgs {
+    #[command(subcommand)]
+    pub command: Option<BrowserCommand>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BrowserCommand {
+    #[command(
+        about = "Release the persistent connection to an external browser",
+        long_about = "Disconnect the background Flea session selected by --browser-url without closing Chrome or clearing browser data. Waits for any active browser operation to finish."
+    )]
+    Disconnect,
 }
 
 #[derive(Debug, Args)]
@@ -382,13 +406,15 @@ mod tests {
         }
         assert!(matches!(
             Cli::try_parse_from(["flea", "browser"]).unwrap().command,
-            Command::Browser
+            Command::Browser(_)
         ));
     }
 
     #[test]
     fn parsed_command_variants_have_stable_telemetry_names() {
         let cases: &[(&[&str], &str)] = &[
+            (&["browser"], "browser"),
+            (&["browser", "disconnect"], "browser disconnect"),
             (&["capabilities"], "capabilities"),
             (&["marketplaces"], "marketplaces"),
             (&["skill"], "skill"),

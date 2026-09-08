@@ -1,3 +1,6 @@
+#[cfg(unix)]
+pub(crate) mod session;
+
 use std::{
     fs::{File, OpenOptions},
     io::{self, Read, Write},
@@ -19,6 +22,38 @@ const START_TIMEOUT: Duration = Duration::from_secs(15);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 
+pub(crate) fn serve_session(endpoint: Option<&Url>) -> Result<(), AppError> {
+    let endpoint = endpoint
+        .ok_or_else(|| AppError::usage("--browser-url is required for a browser session"))?;
+    #[cfg(unix)]
+    {
+        session::serve(endpoint)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = endpoint;
+        Err(AppError::usage(
+            "persistent browser sessions require macOS or Linux",
+        ))
+    }
+}
+
+pub(crate) fn disconnect_session(endpoint: Option<&Url>) -> Result<bool, AppError> {
+    let endpoint = endpoint
+        .ok_or_else(|| AppError::usage("--browser-url is required for flea browser disconnect"))?;
+    #[cfg(unix)]
+    {
+        session::disconnect(endpoint)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = endpoint;
+        Err(AppError::usage(
+            "persistent browser sessions require macOS or Linux",
+        ))
+    }
+}
+
 pub(crate) fn parse_browser_url(value: &str) -> Result<Url, String> {
     let url = Url::parse(value).map_err(|_| "expected a Chrome debugging HTTP URL".to_owned())?;
     if !matches!(url.scheme(), "http" | "https")
@@ -35,7 +70,7 @@ pub(crate) fn parse_browser_url(value: &str) -> Result<Url, String> {
     Ok(url)
 }
 
-fn connect_remote(endpoint: &Url) -> Result<Cdp, AppError> {
+fn connect_remote(endpoint: &Url) -> Result<DirectCdp, AppError> {
     let mut endpoint = endpoint.clone();
     endpoint.set_path(&format!(
         "{}/json/version",
@@ -128,7 +163,7 @@ fn connect_remote(endpoint: &Url) -> Result<Cdp, AppError> {
         ).map_err(|_| browser_error(
             "Chrome did not accept the browser connection; if debugging was enabled in chrome://inspect/#remote-debugging, approve the connection in Chrome within 60 seconds",
         ))?;
-        return Ok(Cdp { socket, next_id: 0 });
+        return Ok(DirectCdp { socket, next_id: 0 });
     }
     Err(remote_connection_error())
 }
@@ -172,12 +207,12 @@ impl Write for DeadlineStream {
     }
 }
 
-struct Cdp {
+struct DirectCdp {
     socket: WebSocket<DeadlineStream>,
     next_id: u64,
 }
 
-impl Cdp {
+impl DirectCdp {
     fn connect(port: u16, path: &str, deadline: Instant) -> Option<Self> {
         for ip in [
             IpAddr::V4(Ipv4Addr::LOCALHOST),
@@ -203,15 +238,6 @@ impl Cdp {
             }
         }
         None
-    }
-
-    fn call(
-        &mut self,
-        session: Option<&str>,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, AppError> {
-        self.call_until(session, method, params, Instant::now() + COMMAND_TIMEOUT)
     }
 
     fn call_until(
@@ -271,6 +297,54 @@ impl Cdp {
     }
 }
 
+enum Cdp {
+    Direct(Box<DirectCdp>),
+    #[cfg(unix)]
+    Shared(session::Client),
+}
+
+impl From<DirectCdp> for Cdp {
+    fn from(cdp: DirectCdp) -> Self {
+        Self::Direct(Box::new(cdp))
+    }
+}
+
+impl Cdp {
+    fn external(endpoint: &Url) -> Result<Self, AppError> {
+        #[cfg(unix)]
+        {
+            session::Client::connect(endpoint).map(Self::Shared)
+        }
+        #[cfg(not(unix))]
+        {
+            connect_remote(endpoint).map(Self::from)
+        }
+    }
+
+    fn call(
+        &mut self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+    ) -> Result<Value, AppError> {
+        self.call_until(session, method, params, Instant::now() + COMMAND_TIMEOUT)
+    }
+
+    fn call_until(
+        &mut self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+    ) -> Result<Value, AppError> {
+        match self {
+            Self::Direct(cdp) => cdp.call_until(session, method, params, deadline),
+            #[cfg(unix)]
+            Self::Shared(client) => client.call_until(session, method, params, deadline),
+        }
+    }
+}
+
 pub(crate) struct ChromePage {
     cdp: Cdp,
     session: String,
@@ -280,13 +354,13 @@ pub(crate) struct ChromePage {
 
 impl ChromePage {
     pub(crate) fn open_remote(endpoint: &Url, url: &str) -> Result<Self, AppError> {
-        let mut page = Self::attach(connect_remote(endpoint)?, url, url)?;
+        let mut page = Self::attach(Cdp::external(endpoint)?, url, url)?;
         page.wait_ready()?;
         Ok(page)
     }
 
     pub(crate) fn clear_remote(endpoint: &Url, origin: &str) -> Result<(), AppError> {
-        Self::attach(connect_remote(endpoint)?, origin, "about:blank")?.clear()
+        Self::attach(Cdp::external(endpoint)?, origin, "about:blank")?.clear()
     }
 
     pub(crate) fn open(profile: &Path, url: &str) -> Result<Self, AppError> {
@@ -340,7 +414,8 @@ impl ChromePage {
         Ok(page)
     }
 
-    fn attach(mut cdp: Cdp, url: &str, initial_url: &str) -> Result<Self, AppError> {
+    fn attach(cdp: impl Into<Cdp>, url: &str, initial_url: &str) -> Result<Self, AppError> {
+        let mut cdp = cdp.into();
         let origin = Url::parse(url)
             .map_err(|_| invalid_response())?
             .origin()
@@ -463,7 +538,7 @@ fn matching_target<'a>(targets: &'a Value, origin: &str) -> Option<&'a str> {
         })
 }
 
-fn connect_profile(profile: &Path, deadline: Instant) -> Option<Cdp> {
+fn connect_profile(profile: &Path, deadline: Instant) -> Option<DirectCdp> {
     let mut content = String::new();
     File::open(profile.join("DevToolsActivePort"))
         .ok()?
@@ -471,7 +546,7 @@ fn connect_profile(profile: &Path, deadline: Instant) -> Option<Cdp> {
         .read_to_string(&mut content)
         .ok()?;
     let (port, path) = parse_endpoint(&content)?;
-    Cdp::connect(
+    DirectCdp::connect(
         port,
         path,
         deadline.min(Instant::now() + Duration::from_secs(1)),
@@ -639,7 +714,7 @@ pub(crate) mod tests {
             .unwrap();
             handler(&mut socket);
         });
-        let cdp = Cdp::connect(
+        let cdp = DirectCdp::connect(
             port,
             "/devtools/browser/test-id",
             Instant::now() + Duration::from_secs(5),
@@ -647,7 +722,7 @@ pub(crate) mod tests {
         .unwrap();
         (
             ChromePage {
-                cdp,
+                cdp: cdp.into(),
                 session: "page-session".into(),
                 target: "page-target".into(),
                 origin: "https://www.vinted.fi".into(),
@@ -783,7 +858,13 @@ pub(crate) mod tests {
         });
         let endpoint = parse_browser_url(&format!("http://{address}/")).unwrap();
         // Remote attachment does not require a profile directory or Chrome executable.
-        let page = ChromePage::open_remote(&endpoint, "https://www.vinted.fi/items/new").unwrap();
+        let mut page = ChromePage::attach(
+            connect_remote(&endpoint).unwrap(),
+            "https://www.vinted.fi/items/new",
+            "https://www.vinted.fi/items/new",
+        )
+        .unwrap();
+        page.wait_ready().unwrap();
         assert_eq!(page.target, "existing");
         join.join().unwrap();
     }

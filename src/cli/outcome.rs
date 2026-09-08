@@ -109,6 +109,7 @@ pub struct SavedSearchListOutput {
 #[serde(untagged)]
 pub enum CommandData {
     Browser { opened: bool, debugging: bool },
+    BrowserDisconnected { disconnected: bool },
     Capabilities(CapabilitiesOutput),
     Marketplaces(MarketplacesOutput),
     MarketplaceCapabilities(MarketplaceCapabilitiesOutput),

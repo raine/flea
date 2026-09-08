@@ -9,6 +9,10 @@ license = "MIT"
 autotests = false
 
 [[test]]
+name = "browser_session"
+path = "tests/browser_session.rs"
+
+[[test]]
 name = "cli_presentation"
 path = "tests/cli_presentation.rs"
 

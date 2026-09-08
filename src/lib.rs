@@ -90,6 +90,14 @@ where
         Ok(cli) => cli,
         Err(result) => return result,
     };
+    if matches!(cli.command, cli::Command::BrowserSession) {
+        let result = browser::serve_session(cli.browser_url.as_ref()).map(|()| {
+            cli::outcome::CommandOutcome::new(cli::outcome::CommandData::BrowserDisconnected {
+                disconnected: true,
+            })
+        });
+        return finish(cli.format, cli.format_explicit, result, None, None);
+    }
     let command = cli.command.telemetry_name();
     let context = cli.command.context();
 
@@ -154,7 +162,12 @@ fn run_command(
     dependencies: &cli::runtime::ApplicationDependencies,
     diagnostics: Option<&DiagnosticsContext>,
 ) -> RunResult {
-    if cli.browser_url.is_some() && matches!(cli.command, cli::Command::Browser) {
+    if cli.browser_url.is_some()
+        && matches!(
+            cli.command,
+            cli::Command::Browser(cli::BrowserArgs { command: None })
+        )
+    {
         return finish(
             cli.format,
             cli.format_explicit,

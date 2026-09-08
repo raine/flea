@@ -82,6 +82,21 @@ browser check, do so, then run:
 flea vinted auth status --browser
 ```
 
+To use an existing Chrome instead, enable debugging in
+`chrome://inspect/#remote-debugging`, then run:
+
+```sh
+flea --browser-url http://localhost:9222 vinted auth status --browser
+```
+
+On macOS and Linux, Flea automatically keeps that approved connection alive in a
+background helper. Keep passing the same URL on subsequent commands; no separate
+server command or terminal is needed. To release access without closing Chrome:
+
+```sh
+flea browser disconnect --browser-url http://localhost:9222
+```
+
 ### 3. Ask your agent
 
 Tell your agent what you'd like to find or sell. Include useful details such as

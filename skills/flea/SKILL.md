@@ -26,9 +26,9 @@ guide.
 
 ## Browser selection
 
-Use `--browser-url http://localhost:9222` for existing debugging-enabled Chrome.
-Preserve it on follow-up commands. See `flea skill vinted` for approval and
-manual-browser guidance.
+Use `--browser-url http://localhost:9222` for existing Chrome; macOS/Linux reuse
+connections automatically. Preserve it on follow-up commands. See
+`flea skill vinted` for approval and disconnect guidance.
 
 ## Shared safety rules
 

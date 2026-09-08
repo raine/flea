@@ -69,6 +69,7 @@ type ToriAuthHandler = dyn Fn(ToriAuthArgs) -> OutcomeFuture + Send + Sync;
 type VintedAuthHandler = dyn Fn(PortalId, VintedAuthArgs) -> OutcomeFuture + Send + Sync;
 
 pub struct ApplicationDependencies {
+    browser_url: Option<url::Url>,
     public_tori_client: Arc<dyn ToriClient>,
     authenticated_tori_client: Arc<dyn Fn() -> ToriClientFuture + Send + Sync>,
     tori_auth: Arc<ToriAuthHandler>,
@@ -93,6 +94,7 @@ impl ApplicationDependencies {
     pub fn production_with_browser_url(browser_url: Option<url::Url>) -> Self {
         let auth_browser_url = browser_url.clone();
         Self {
+            browser_url: browser_url.clone(),
             public_tori_client: Arc::new(public_client()),
             authenticated_tori_client: Arc::new(|| {
                 Box::pin(async {
@@ -211,7 +213,19 @@ pub async fn dispatch(
     dependencies: &ApplicationDependencies,
 ) -> Result<CommandOutcome, AppError> {
     match command {
-        Command::Browser => {
+        Command::Browser(super::BrowserArgs {
+            command: Some(super::BrowserCommand::Disconnect),
+        }) => {
+            let disconnected =
+                crate::browser::disconnect_session(dependencies.browser_url.as_ref())?;
+            Ok(CommandOutcome::new(CommandData::BrowserDisconnected {
+                disconnected,
+            }))
+        }
+        Command::BrowserSession => Err(AppError::usage(
+            "the browser session helper must run as a standalone process",
+        )),
+        Command::Browser(_) => {
             vinted_web::VintedWebSession::discover(PortalId::Fi)?.open_without_debugging()?;
             Ok(CommandOutcome::new(CommandData::Browser {
                 opened: true,
