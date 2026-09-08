@@ -157,30 +157,16 @@ impl<'a> VintedListings<'a> {
         ) else {
             return;
         };
-        let Some(name) = condition.name.as_deref() else {
+        if condition.name.is_none() && condition.identity.composer_id.is_none() {
             return;
-        };
+        }
         let request = DiscoveryRequest::Attributes {
             selections: serde_json::json!([{"code": "category", "value": [category_id]}]),
         };
         let Ok(response) = api.execute(credentials, &request).await else {
             return;
         };
-        let expected = normalized_label(name);
-        let composer_id = publication_attribute_definitions(&response)
-            .into_iter()
-            .filter(|(code, _)| *code == "condition")
-            .flat_map(|(_, definition)| publication_attribute_options(definition))
-            .find_map(|option| {
-                let object = option.as_object()?;
-                (object_label(object).is_some_and(|label| normalized_label(&label) == expected))
-                    .then(|| numeric_id(object).map(|id| id.to_string()))
-                    .flatten()
-            });
-        if let Some(composer_id) = composer_id {
-            condition.identity.composer_id = Some(composer_id);
-            condition.identity.status = VintedConditionIdentityStatus::ComposerMatched;
-        }
+        resolve_condition_identity(condition, &response);
     }
 
     async fn account_item(
@@ -507,7 +493,7 @@ pub(super) fn normalize_detail(
                     .get("price")
                     .and_then(|value| normalize_price(value, wardrobe.get("currency")))
             }),
-        condition: listing_condition(edit.get("status_id"), edit.get("status")),
+        condition: detail_condition(edit),
         category: listing_value(
             edit.get("catalog_id"),
             edit.get("catalog_name")
@@ -645,6 +631,66 @@ fn listing_condition(id: Option<&Value>, name: Option<&Value>) -> Option<VintedL
             composer_id: None,
         },
     })
+}
+
+fn detail_condition(edit: &Map<String, Value>) -> Option<VintedListingCondition> {
+    let mut condition = listing_condition(edit.get("status_id"), edit.get("status"));
+    let Some(attributes) = edit.get("item_attributes").and_then(Value::as_array) else {
+        return condition;
+    };
+    let mut attributes = attributes
+        .iter()
+        .filter(|attribute| attribute.get("code").and_then(Value::as_str) == Some("condition"));
+    let selected = attributes.next();
+    let composer_id = selected
+        .filter(|_| attributes.next().is_none())
+        .and_then(|attribute| attribute.get("ids"))
+        .and_then(Value::as_array)
+        .filter(|ids| ids.len() == 1)
+        .and_then(|ids| ids[0].as_u64())
+        .filter(|id| *id > 0);
+    if let Some(id) = composer_id {
+        let condition = condition.get_or_insert(VintedListingCondition {
+            name: None,
+            identity: VintedConditionIdentity {
+                status: VintedConditionIdentityStatus::ComposerMatched,
+                upstream_id: None,
+                composer_id: None,
+            },
+        });
+        condition.identity.composer_id = Some(id.to_string());
+        condition.identity.status = VintedConditionIdentityStatus::ComposerMatched;
+    }
+    condition
+}
+
+fn resolve_condition_identity(condition: &mut VintedListingCondition, response: &Value) {
+    let matches: HashSet<_> = publication_attribute_definitions(response)
+        .into_iter()
+        .filter(|(code, _)| *code == "condition")
+        .flat_map(|(_, definition)| publication_attribute_options(definition))
+        .filter_map(|option| {
+            let object = option.as_object()?;
+            let id = numeric_id(object)?.to_string();
+            let label = object_label(object)?;
+            let matches = match condition.identity.composer_id.as_deref() {
+                Some(selected) => selected == id,
+                None => condition
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| normalized_label(name) == normalized_label(&label)),
+            };
+            matches.then_some((id, label))
+        })
+        .collect();
+    if matches.len() == 1 {
+        let (id, label) = matches.into_iter().next().unwrap();
+        if condition.identity.composer_id.is_some() {
+            condition.name = Some(label);
+        }
+        condition.identity.composer_id = Some(id);
+        condition.identity.status = VintedConditionIdentityStatus::ComposerMatched;
+    }
 }
 
 fn normalized_label(value: &str) -> String {
@@ -806,6 +852,93 @@ mod tests {
         );
         assert_eq!(condition.identity.upstream_id, None);
         assert_eq!(condition.identity.composer_id, None);
+    }
+
+    #[test]
+    fn canonical_condition_resolves_label_without_legacy_status() {
+        let edit = serde_json::json!({
+            "id": 1,
+            "item_attributes": [{"code": "condition", "ids": [3]}]
+        });
+        let mut condition = normalize_detail(
+            "1",
+            &serde_json::json!({"item": {"id": 1}}),
+            &serde_json::json!({"item": edit}),
+        )
+        .unwrap()
+        .condition
+        .unwrap();
+        assert_eq!(condition.identity.upstream_id, None);
+        assert_eq!(condition.identity.composer_id.as_deref(), Some("3"));
+        assert_eq!(condition.name, None);
+        resolve_condition_identity(&mut condition, &condition_options());
+        assert_eq!(condition.name.as_deref(), Some("Hyvä"));
+        assert_eq!(
+            condition.identity.status,
+            VintedConditionIdentityStatus::ComposerMatched
+        );
+    }
+
+    fn condition_options() -> Value {
+        serde_json::json!({"attributes": [{"code": "condition", "configuration": {
+            "groups": [{"options": [{"id": 3, "title": "Hyvä"}, {"id": 6, "title": "Tyydyttävä"}]}]
+        }}]})
+    }
+
+    #[test]
+    fn canonical_condition_rejects_ambiguous_or_invalid_selections() {
+        for attributes in [
+            serde_json::json!([{"code": "condition", "ids": [3, 6]}]),
+            serde_json::json!([{"code": "condition", "ids": [3]}, {"code": "condition", "ids": [6]}]),
+            serde_json::json!([{"code": "condition", "ids": []}]),
+            serde_json::json!([{"code": "condition", "ids": [0]}]),
+            serde_json::json!([{"code": "condition", "ids": ["3"]}]),
+        ] {
+            let edit = serde_json::json!({"item_attributes": attributes});
+            assert_eq!(detail_condition(edit.as_object().unwrap()), None);
+        }
+    }
+
+    #[test]
+    fn legacy_condition_ids_are_not_composer_ids() {
+        let edit = serde_json::json!({"status_id": 3});
+        let mut condition = detail_condition(edit.as_object().unwrap()).unwrap();
+        resolve_condition_identity(&mut condition, &condition_options());
+        assert_eq!(condition.identity.upstream_id.as_deref(), Some("3"));
+        assert_eq!(condition.identity.composer_id, None);
+        assert_eq!(
+            condition.identity.status,
+            VintedConditionIdentityStatus::UpstreamOnly
+        );
+        condition.name = Some("Tyydyttävä".to_owned());
+        resolve_condition_identity(&mut condition, &condition_options());
+        assert_eq!(condition.identity.upstream_id.as_deref(), Some("3"));
+        assert_eq!(condition.identity.composer_id.as_deref(), Some("6"));
+    }
+
+    #[test]
+    fn duplicate_discovery_labels_do_not_guess_composer_identity() {
+        let mut condition = listing_condition(None, Some(&serde_json::json!("Hyvä"))).unwrap();
+        let response = serde_json::json!({"attributes": [{"code": "condition", "configuration": {
+            "groups": [{"options": [{"id": 3, "title": "Hyvä"}, {"id": 7, "title": "Hyvä"}]}]
+        }}]});
+        resolve_condition_identity(&mut condition, &response);
+        assert_eq!(condition.identity.composer_id, None);
+        assert_eq!(
+            condition.identity.status,
+            VintedConditionIdentityStatus::Unavailable
+        );
+    }
+
+    #[test]
+    fn canonical_id_takes_precedence_over_legacy_label() {
+        let edit = serde_json::json!({"status_id": 7, "status": "Tyydyttävä",
+            "item_attributes": [{"code": "condition", "ids": [3]}]});
+        let mut condition = detail_condition(edit.as_object().unwrap()).unwrap();
+        resolve_condition_identity(&mut condition, &condition_options());
+        assert_eq!(condition.name.as_deref(), Some("Hyvä"));
+        assert_eq!(condition.identity.upstream_id.as_deref(), Some("7"));
+        assert_eq!(condition.identity.composer_id.as_deref(), Some("3"));
     }
 
     #[test]

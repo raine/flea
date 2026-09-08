@@ -482,6 +482,12 @@ fn reject_unmapped_legacy_attributes(source: &Map<String, Value>) -> Result<(), 
         .ok_or_else(|| unsupported("item_attributes", "dynamic attributes are unavailable"))?;
     let codes = attributes
         .iter()
+        .filter(|attribute| {
+            attribute
+                .get("ids")
+                .and_then(Value::as_array)
+                .is_some_and(|ids| !ids.is_empty())
+        })
         .filter_map(|attribute| attribute.get("code").and_then(Value::as_str))
         .collect::<HashSet<_>>();
     for (field, code) in [
@@ -836,6 +842,16 @@ mod tests {
     fn fails_closed_instead_of_converting_legacy_condition_id() {
         let mut raw = editable();
         raw["item"]["item_attributes"] = json!([]);
+        raw["item"]["status_id"] = json!(3);
+
+        let error = project_editable("9001", &raw).unwrap_err();
+        assert_eq!(error.details.unwrap()["field"], "status_id");
+    }
+
+    #[test]
+    fn rejects_empty_canonical_selection_for_active_legacy_attribute() {
+        let mut raw = editable();
+        raw["item"]["item_attributes"] = json!([{"code":"condition","ids":[]}]);
         raw["item"]["status_id"] = json!(3);
 
         let error = project_editable("9001", &raw).unwrap_err();

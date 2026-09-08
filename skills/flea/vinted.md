@@ -102,7 +102,9 @@ shipping, parcel, and photo changes are unsupported and must use no guessed ID
 or workaround. Vinted provides no remote revision precondition, so this
 replacement-style update cannot guarantee protection from a concurrent edit
 between Flea's read and write. Inspect the returned authoritative listing before
-another update.
+another update. After an accepted update, Flea briefly polls account reads while
+Vinted processes the item; it never repeats the write. If verification still
+fails, follow the returned `listing show` action rather than retrying the update.
 
 Publication category search uses portal-localized taxonomy labels. Supply the
 known listing title and description as recommendation context. Output reports

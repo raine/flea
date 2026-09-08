@@ -71,7 +71,19 @@ impl<'a> VintedListingEdits<'a> {
             .api
             .wardrobe_item(&credentials, item_id)
             .await
-            .and_then(|lookup| owned_public_wardrobe(&credentials, item_id, lookup))?;
+            .and_then(|lookup| owned_wardrobe(&credentials, item_id, lookup))?;
+        if response_item(&wardrobe)?
+            .get("can_edit")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Err(unsupported_listing(
+                item_id,
+                "listing is not editable",
+                None,
+            ));
+        }
+        require_public_edit_state(item_id, &wardrobe)?;
         let editable = self.api.item_for_edit(&credentials, item_id).await?;
         validate_editable(item_id, &editable)?;
 
@@ -98,9 +110,19 @@ impl<'a> VintedListingEdits<'a> {
             ));
         }
 
-        let verified = self
+        let mut verified = self
             .verify_update(&credentials, item_id, &changes, &prepared.expected, &before)
             .await;
+        for _ in 0..5 {
+            if !matches!(&verified, Err(error) if error.code == "vinted_listing.update_processing")
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            verified = self
+                .verify_update(&credentials, item_id, &changes, &prepared.expected, &before)
+                .await;
+        }
         match verified {
             Ok(detail) => self.normalize_result(&credentials, detail).await,
             Err(error) => Err(verification_failed(error, portal, item_id)),
@@ -119,7 +141,17 @@ impl<'a> VintedListingEdits<'a> {
             .api
             .wardrobe_item(credentials, item_id)
             .await
-            .and_then(|lookup| owned_public_wardrobe(credentials, item_id, lookup))?;
+            .and_then(|lookup| owned_wardrobe(credentials, item_id, lookup))?;
+        if response_item(&wardrobe)?
+            .get("is_processing")
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            return Err(AppError::validation(
+                "vinted_listing.update_processing",
+                "Vinted is still processing the accepted listing update",
+            ));
+        }
         let editable = self.api.item_for_edit(credentials, item_id).await?;
         validate_editable(item_id, &editable)?;
 
@@ -168,7 +200,7 @@ fn validate_changes(changes: &VintedListingChanges) -> Result<(), AppError> {
     .map(|_| ())
 }
 
-fn owned_public_wardrobe(
+fn owned_wardrobe(
     credentials: &VintedCredentialRecord,
     item_id: &str,
     lookup: ListingLookup,
@@ -206,14 +238,11 @@ fn owned_public_wardrobe(
         )
         .with_details(json!({ "item_id": item_id })));
     }
-    if item.get("can_edit").and_then(Value::as_bool) != Some(true) {
-        return Err(unsupported_listing(
-            item_id,
-            "listing is not editable",
-            None,
-        ));
-    }
+    Ok(raw)
+}
 
+fn require_public_edit_state(item_id: &str, raw: &Value) -> Result<(), AppError> {
+    let item = response_item(raw)?;
     let state = normalize_state(item);
     let inactive_flag = ["is_draft", "is_closed", "is_hidden", "is_processing"]
         .into_iter()
@@ -225,7 +254,7 @@ fn owned_public_wardrobe(
             Some(state),
         ));
     }
-    Ok(raw)
+    Ok(())
 }
 
 fn validate_editable(item_id: &str, raw: &Value) -> Result<(), AppError> {
@@ -374,6 +403,16 @@ fn uncertain_mutation(mut error: AppError, portal: PortalId, item_id: &str) -> A
 }
 
 fn verification_failed(mut error: AppError, portal: PortalId, item_id: &str) -> AppError {
+    let mut details = error
+        .details
+        .take()
+        .map(|value| *value)
+        .unwrap_or_else(|| json!({}));
+    if let Some(details) = details.as_object_mut() {
+        details.insert("cause_code".to_owned(), json!(error.code));
+        details.insert("cause_message".to_owned(), json!(error.message));
+    }
+    error.details = Some(Box::new(details));
     error.code = "vinted_listing.update_verification_failed".to_owned();
     error.message =
         "Vinted accepted the listing update, but authoritative verification failed".to_owned();
@@ -863,6 +902,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn processing_verification_retries_reads_without_replaying_the_write() {
+        for completes in [true, false] {
+            let session = |_| Ok(credentials());
+            let mut processing = wardrobe("active");
+            processing["item"]["can_edit"] = json!(false);
+            processing["item"]["is_processing"] = json!(true);
+            let mut reads = vec![Ok(ListingLookup::Found(wardrobe("active")))];
+            reads.push(Ok(ListingLookup::Found(processing.clone())));
+            let edits = if completes {
+                reads.push(Ok(ListingLookup::Found(wardrobe("active"))));
+                vec![Ok(editable("Bicycle lock")), Ok(editable("Safer lock"))]
+            } else {
+                reads.extend((0..5).map(|_| Ok(ListingLookup::Found(processing.clone()))));
+                vec![Ok(editable("Bicycle lock"))]
+            };
+            let api = ListingApi::new(reads, edits);
+            let edit_api = EditApi::succeeding();
+            let result = VintedListingEdits::new(&session, &api, &edit_api)
+                .update(PortalId::Fi, "9001", title_change("Safer lock"))
+                .await;
+            if completes {
+                assert!(result.is_ok());
+                assert_eq!(api.calls(), (3, 2));
+            } else {
+                let error = result.unwrap_err();
+                assert_eq!(error.code, "vinted_listing.update_verification_failed");
+                assert!(!error.safe_to_retry);
+                assert_eq!(api.calls(), (7, 1));
+            }
+            assert_eq!(edit_api.calls(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn verification_does_not_require_permission_for_another_edit() {
+        let session = |_| Ok(credentials());
+        let mut after = wardrobe("active");
+        after["item"]["can_edit"] = json!(false);
+        let api = ListingApi::new(
+            vec![
+                Ok(ListingLookup::Found(wardrobe("active"))),
+                Ok(ListingLookup::Found(after)),
+            ],
+            vec![Ok(editable("Bicycle lock")), Ok(editable("Safer lock"))],
+        );
+        let edit_api = EditApi::succeeding();
+
+        VintedListingEdits::new(&session, &api, &edit_api)
+            .update(PortalId::Fi, "9001", title_change("Safer lock"))
+            .await
+            .unwrap();
+
+        assert_eq!(edit_api.calls(), 1);
+        assert_eq!(api.calls(), (2, 2));
+    }
+
+    #[tokio::test]
     async fn changed_photo_orientation_fails_canonical_verification() {
         let session = |_| Ok(credentials());
         let mut after = editable("Safer lock");
@@ -958,6 +1054,10 @@ mod tests {
         assert_eq!(error.code, "vinted_listing.update_verification_failed");
         assert_eq!(error.exit_class, ExitClass::Partial);
         assert!(!error.safe_to_retry);
+        assert_eq!(
+            error.details.as_ref().unwrap()["cause_code"],
+            "vinted_listing.update_unexpected_response"
+        );
         assert_eq!(error.partial.as_ref().unwrap()["item_id"], "9001");
         assert_eq!(
             error.next_actions[0].command,
