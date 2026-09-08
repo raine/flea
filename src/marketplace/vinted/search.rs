@@ -1,3 +1,5 @@
+pub mod enrichment;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -172,6 +174,7 @@ impl FromStr for AttributeSelection {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SearchRequest {
+    pub enrichment: enrichment::Options,
     pub query: Option<String>,
     pub price_from: Option<DecimalAmount>,
     pub price_to: Option<DecimalAmount>,
@@ -298,6 +301,15 @@ impl VintedSearchSession for super::session::VintedCredentialResolver {
 }
 
 pub trait VintedSearchApi: Send + Sync {
+    fn enrichment<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        _listing_id: &'a str,
+        _shipping: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async { Err(unexpected_response("enrichment unavailable")) })
+    }
+
     fn execute<'a>(
         &'a self,
         credentials: &'a VintedCredentialRecord,
@@ -325,6 +337,17 @@ impl<'a> VintedSearch<'a> {
                 "--raw cannot be combined with --include-facets; use `vinted filter list --raw`",
             ));
         }
+        enrichment::validate(&input.enrichment)?;
+        let enrichment_options = input.enrichment.clone();
+        let enriching = enrichment_options.include_seller
+            || enrichment_options.include_shipping
+            || enrichment_options.seller_country.is_some()
+            || enrichment_options.shipping_to.is_some();
+        if input.raw && enriching {
+            return Err(AppError::usage(
+                "--raw cannot be combined with enrichment or client-side filters",
+            ));
+        }
         let include_facets = input.include_facets;
         let include_hidden = input.include_hidden;
         let option_limit = validate_option_limit(input.option_limit)?;
@@ -350,6 +373,36 @@ impl<'a> VintedSearch<'a> {
                 normalize_filter_list(&filters_raw, &context, include_hidden, option_limit)?;
             normalized.applied_filters = filter_collection.applied_filters;
             normalized.facets = filter_collection.filters;
+        }
+        if enriching {
+            enrichment::enrich(self.api, &credentials, &mut normalized, &enrichment_options).await;
+            if let Some(summary) = normalized.enrichment.as_mut() {
+                summary["upstream_page"] = serde_json::json!(normalized.pagination.page);
+                summary["page_limit"] = serde_json::json!(SEARCH_PAGE_MAX);
+                summary["continuation_limited"] = serde_json::json!(
+                    normalized
+                        .pagination
+                        .next_page
+                        .is_some_and(|page| page > SEARCH_PAGE_MAX)
+                );
+            }
+            if let Some(page) = normalized
+                .pagination
+                .next_page
+                .filter(|page| *page <= SEARCH_PAGE_MAX)
+            {
+                let command = continuation(
+                    &context,
+                    &enrichment_options,
+                    page,
+                    include_facets,
+                    include_hidden,
+                    option_limit,
+                );
+                if let Some(summary) = normalized.enrichment.as_mut() {
+                    summary["next_command"] = Value::String(command);
+                }
+            }
         }
         Ok(SearchResult::Search(Box::new(normalized)))
     }
@@ -499,6 +552,41 @@ impl HttpVintedSearchApi {
 }
 
 impl VintedSearchApi for HttpVintedSearchApi {
+    fn enrichment<'a>(
+        &'a self,
+        credentials: &'a VintedCredentialRecord,
+        listing_id: &'a str,
+        shipping: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        Box::pin(async move {
+            if !listing_id.bytes().all(|b| b.is_ascii_digit()) || listing_id.is_empty() {
+                return Err(unexpected_response("invalid enrichment item ID"));
+            }
+            let path = if shipping {
+                format!("/pricing/public/api/v1/items/{listing_id}/services")
+            } else {
+                format!("/item-details/item/{listing_id}")
+            };
+            let request = self.auth.authenticated_request(
+                Method::GET,
+                format!("{}{path}", self.items_base_url),
+                credentials,
+                MAX_RESPONSE_BYTES,
+                transport_error,
+            )?;
+            let response = self
+                .auth
+                .executor()
+                .execute(request)
+                .await
+                .map_err(execution_error)?;
+            if !response.status.is_success() {
+                return Err(status_error(response.status));
+            }
+            bounded_json(response)
+        })
+    }
+
     fn execute<'a>(
         &'a self,
         credentials: &'a VintedCredentialRecord,
@@ -512,6 +600,60 @@ impl Default for HttpVintedSearchApi {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn continuation(
+    context: &CatalogueContext,
+    options: &enrichment::Options,
+    page: usize,
+    facets: bool,
+    hidden: bool,
+    option_limit: usize,
+) -> String {
+    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\"'\"'"));
+    let mut parts = vec!["flea --format json vinted --portal fi search".to_owned()];
+    parts.push(format!("--page {page} --limit {}", context.limit));
+    let sort = match context.sort {
+        SearchSort::Relevance => "relevance",
+        SearchSort::Newest => "newest",
+        SearchSort::PriceAsc => "price-asc",
+        SearchSort::PriceDesc => "price-desc",
+    };
+    parts.push(format!("--sort {sort}"));
+    for (flag, value) in [
+        ("price-from", &context.price_from),
+        ("price-to", &context.price_to),
+        ("shipping-to", &options.shipping_to),
+    ] {
+        if let Some(value) = value {
+            parts.push(format!("--{flag} {value}"));
+        }
+    }
+    for (code, ids) in &context.attributes {
+        parts.push(format!(
+            "--attribute {}",
+            quote(&format!("{code}={}", ids.join(",")))
+        ));
+    }
+    if let Some(country) = &options.seller_country {
+        parts.push(format!("--seller-country {}", quote(country)));
+    }
+    if options.include_seller {
+        parts.push("--include-seller".to_owned());
+    }
+    if options.include_shipping {
+        parts.push("--include-shipping".to_owned());
+    }
+    if facets {
+        parts.push(format!("--include-facets --option-limit {option_limit}"));
+    }
+    if hidden {
+        parts.push("--include-hidden".to_owned());
+    }
+    if !context.query.is_empty() {
+        parts.push(format!("-- {}", quote(&context.query)));
+    }
+    parts.join(" ")
 }
 
 fn prepare_search_context(input: SearchRequest) -> Result<CatalogueContext, AppError> {
@@ -780,6 +922,7 @@ fn normalize_search(raw: &Value, context: &CatalogueContext) -> Result<SearchCol
         .unwrap_or_else(|| total.div_ceil(limit));
     let has_next = page < total_pages;
     Ok(SearchCollection {
+        enrichment: None,
         query: context.query.clone(),
         location: None,
         results,
@@ -835,6 +978,10 @@ fn normalize_item(item: &Value) -> Result<SearchListing, AppError> {
         .and_then(Value::as_bool)
         .map(|business| if business { "business" } else { "private" }.to_owned());
     Ok(SearchListing {
+        vinted: Some(serde_json::json!({
+            "buyer_protection_fee": object.get("service_fee").and_then(normalize_price),
+            "price_including_buyer_protection": object.get("total_item_price").and_then(normalize_price),
+        })),
         listing_id,
         title,
         price,
@@ -1372,6 +1519,21 @@ mod tests {
         };
         assert_eq!(collection.query, "takki");
         assert_eq!(collection.results[0].listing_id, "123");
+        let buying = collection.results[0].vinted.as_ref().unwrap();
+        assert_eq!(
+            buying["buyer_protection_fee"]["amount"],
+            serde_json::json!(1.98)
+        );
+        assert_eq!(
+            buying["price_including_buyer_protection"]["amount"],
+            serde_json::json!(27.48)
+        );
+        assert_eq!(
+            buying["price_including_buyer_protection"]["currency"],
+            "EUR"
+        );
+        assert!(buying.get("delivered_total").is_none());
+        assert!(collection.enrichment.is_none());
         let requests = api.requests.lock().unwrap();
         assert_eq!(requests[0].operation, CatalogueOperation::Items);
         assert_eq!(requests[0].context.page, 1);
@@ -1459,6 +1621,57 @@ mod tests {
                 SearchResult::Raw(malformed.clone())
             );
         }
+    }
+
+    #[test]
+    fn continuation_retains_context_and_quotes_query() {
+        let mut ctx = context();
+        ctx.query = "-seller's jacket".to_owned();
+        let options = enrichment::Options {
+            seller_country: Some("Finland".to_owned()),
+            shipping_to: Some("3.50".parse().unwrap()),
+            include_seller: true,
+            include_shipping: true,
+        };
+        let command = continuation(&ctx, &options, 3, true, true, 42);
+        for expected in [
+            "--page 3 --limit 20",
+            "--sort newest",
+            "--price-from 10.50",
+            "--price-to 50",
+            "--shipping-to 3.50",
+            "--seller-country 'Finland'",
+            "--attribute 'brand=53,88'",
+            "--include-seller",
+            "--include-shipping",
+            "--include-facets --option-limit 42",
+            "--include-hidden",
+            "-- '-seller'\"'\"'s jacket'",
+        ] {
+            assert!(command.contains(expected), "{command} missing {expected}");
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_rejects_client_filters_before_requests() {
+        let api = FixtureApi::new(items_response());
+        let session = |_| Ok(credentials());
+        let error = VintedSearch::new(&session, &api)
+            .execute(
+                PortalId::Fi,
+                SearchRequest {
+                    raw: true,
+                    enrichment: enrichment::Options {
+                        shipping_to: Some("0".parse().unwrap()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.exit_class, ExitClass::Usage);
+        assert!(api.requests.lock().unwrap().is_empty());
     }
 
     #[test]

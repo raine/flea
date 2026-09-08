@@ -57,9 +57,53 @@ decimal places. Omit QUERY to browse; add `--include-facets` for contextual filt
 
 Shopping search is multilingual; publication taxonomy discovery is not.
 `item show` keeps original seller text; `--raw` preserves upstream JSON.
-Location filtering is unavailable. `seller.seller_disclosed_location` is seller
-profile data, not a catalog filter or guaranteed item location. Never infer it
-from presentation text.
+`seller.seller_disclosed_location` is seller profile data, not a guaranteed item
+location. Never infer it from presentation text.
+
+### Finland sellers and cheaper postage
+
+```sh
+flea --format json vinted search jacket --seller-country FI --limit 10
+flea --format json vinted search jacket --shipping-to 3 --include-seller --limit 10
+flea --format json vinted search jacket --seller-country Finland --shipping-to 0
+flea --format json vinted search jacket --include-seller --include-shipping --limit 5
+```
+
+`--seller-country` supports FI, Finland, and Suomi (case-insensitive). This
+Finland-only normalization uses the observed seller `country_title_local` value
+`Suomi`. Other disclosed country labels remain visible but are not guessed into
+country codes. Hidden locations remain unknown. This seller profile data is
+not a catalog filter or guaranteed item location. Seller country is a preference,
+not a guaranteed shipping origin or evidence of lower postage.
+
+`--shipping-to` is a maximum reported shipping quote in EUR, not item price.
+Both filters automatically fetch their required data. They run client-side on
+**one upstream page**, not across the marketplace. Unknown, failed, unprocessed,
+pickup-only, and non-EUR quotes cannot match the postage filter. A reported zero
+can match, but missing postage never becomes zero.
+
+Inspect each result's `vinted` enrichment and the collection's `enrichment`
+summary. Shipping is a contextual item-page quote, potentially a starting price,
+not guaranteed carrier-specific checkout pricing. Discounts can depend on the
+account, item, pickup method, and time. Compare the final price, original price,
+and discount context. No delivered total is computed. The always-available
+`vinted.buyer_protection_fee` and `vinted.price_including_buyer_protection` come
+from search and exclude shipping.
+
+Default search makes no enrichment requests. Enrichment processes at most the
+first 20 items, sequentially, with at most 40 extra GETs when both kinds are
+requested, a 3-second per-request timeout, and a 30-second overall budget.
+Use a small `--limit` for more predictable coverage. Failures and limits are
+reported explicitly. Without filters, unavailable items remain in the results;
+with filters they cannot count as matches. An empty filtered page does not mean
+there are no matching items elsewhere.
+
+Pagination totals and next pages describe the upstream search, not filtered
+marketplace totals. Follow `enrichment.next_command` to retain all selections
+on the next page. No automatic scanning occurs. Page access is limited to 100.
+`--raw` preserves the exact upstream JSON and cannot combine with enrichment or
+client-side filters. These read-only requests use existing API authentication;
+Chrome, checkout creation, and purchases are not needed.
 
 ## Prepare a listing from seller facts
 

@@ -149,6 +149,7 @@ You can also use Flea directly:
 ```sh
 flea tori search "tuoli" --area Helsinki,Espoo,Vantaa
 flea vinted search "Marimekko" --price-to 80 --sort newest
+flea --format json vinted search jacket --seller-country FI --shipping-to 3 --limit 10
 ```
 
 Output is structured for agents and scripts rather than a traditional terminal

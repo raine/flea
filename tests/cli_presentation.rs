@@ -196,6 +196,10 @@ fn help_tables_include_agent_oriented_summaries() {
         "--material",
         "--attribute",
         "--include-facets",
+        "--seller-country",
+        "--shipping-to",
+        "--include-seller",
+        "--include-shipping",
         "--raw",
     ] {
         assert!(vinted_search.contains(flag), "missing {flag}");

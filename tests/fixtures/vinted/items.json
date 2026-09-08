@@ -4,6 +4,8 @@
       "id": 123,
       "title": "Sanitized wool coat",
       "price": { "amount": "25.50", "currency_code": "EUR" },
+      "service_fee": { "amount": "1.98", "currency_code": "EUR" },
+      "total_item_price": { "amount": "27.48", "currency_code": "EUR" },
       "url": "/items/123-sanitized-wool-coat",
       "user": { "id": 9001, "login": "fixture-seller", "business": false },
       "photos": [{ "id": 1 }, { "id": 2 }],

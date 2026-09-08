@@ -99,6 +99,22 @@ impl VintedSearchContextArgs {
 
 #[derive(Debug, Args)]
 pub struct VintedSearchArgs {
+    /// Filter this upstream page by disclosed seller country: FI, Finland, or Suomi.
+    #[arg(long, conflicts_with = "raw")]
+    pub seller_country: Option<String>,
+
+    /// Maximum reported starting shipping quote in EUR. Unknown and pickup-only excluded.
+    #[arg(long, conflicts_with = "raw")]
+    pub shipping_to: Option<DecimalAmount>,
+
+    /// Fetch disclosed seller country (not a guaranteed shipping origin).
+    #[arg(long, conflicts_with = "raw")]
+    pub include_seller: bool,
+
+    /// Fetch contextual shipping quotes, not guaranteed checkout prices.
+    #[arg(long, conflicts_with = "raw")]
+    pub include_shipping: bool,
+
     /// Free-text marketplace query. May be omitted to browse listings.
     pub query: Option<String>,
 
@@ -126,6 +142,12 @@ impl From<VintedSearchArgs> for SearchRequest {
     fn from(args: VintedSearchArgs) -> Self {
         let input = args.context.into_input(args.query);
         Self {
+            enrichment: crate::marketplace::vinted::search::enrichment::Options {
+                seller_country: args.seller_country,
+                shipping_to: args.shipping_to,
+                include_seller: args.include_seller,
+                include_shipping: args.include_shipping,
+            },
             query: input.query,
             price_from: input.price_from,
             price_to: input.price_to,

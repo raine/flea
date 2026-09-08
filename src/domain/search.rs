@@ -3,6 +3,8 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SearchCollection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enrichment: Option<Value>,
     pub query: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<SearchLocationContext>,
@@ -20,6 +22,8 @@ pub struct SearchCollection {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SearchListing {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vinted: Option<Value>,
     pub listing_id: String,
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]

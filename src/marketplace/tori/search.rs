@@ -357,6 +357,7 @@ fn normalize_search(
         });
 
     Ok(SearchCollection {
+        enrichment: None,
         query: request.query.clone(),
         location: resolved_location.map(|location| SearchLocationContext {
             id: location.id,
@@ -495,6 +496,7 @@ fn normalize_listing(doc: &Value) -> Result<SearchListing, AppError> {
         .or_else(|| category.and_then(category_breadcrumb));
 
     Ok(SearchListing {
+        vinted: None,
         listing_id,
         title,
         price,

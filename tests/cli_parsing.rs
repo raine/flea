@@ -797,3 +797,50 @@ fn vinted_sell_output_is_explicit_and_documented() {
         .is_err()
     );
 }
+
+#[test]
+fn vinted_shopper_filters_parse_and_conflict_with_raw() {
+    let cli = Cli::try_parse_from([
+        "flea",
+        "vinted",
+        "search",
+        "jacket",
+        "--seller-country",
+        "FI",
+        "--shipping-to",
+        "0",
+        "--include-seller",
+        "--include-shipping",
+    ])
+    .unwrap();
+    let Command::Vinted(args) = cli.command else {
+        panic!("expected Vinted")
+    };
+    let VintedCommand::Search(args) = args.command else {
+        panic!("expected search")
+    };
+    assert_eq!(args.seller_country.as_deref(), Some("FI"));
+    assert_eq!(args.shipping_to.unwrap().as_str(), "0");
+    assert!(args.include_seller && args.include_shipping);
+    for options in [
+        vec!["--seller-country", "FI"],
+        vec!["--shipping-to", "0"],
+        vec!["--include-seller"],
+        vec!["--include-shipping"],
+    ] {
+        let mut args = vec!["flea", "vinted", "search", "--raw"];
+        args.extend(options);
+        assert!(Cli::try_parse_from(args).is_err());
+    }
+    for amount in ["-1", "NaN", "1.234", "1e2"] {
+        assert!(
+            Cli::try_parse_from([
+                "flea",
+                "vinted",
+                "search",
+                &format!("--shipping-to={amount}")
+            ])
+            .is_err()
+        );
+    }
+}

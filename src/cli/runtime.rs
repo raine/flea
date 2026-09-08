@@ -601,7 +601,18 @@ async fn execute_vinted(
         .await?
         {
             VintedSearchResult::Search(collection) => {
-                Ok(CommandOutcome::new(CommandData::Search(*collection)))
+                let next_actions = collection
+                    .enrichment
+                    .as_ref()
+                    .and_then(|summary| summary.get("next_command"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|command| crate::domain::envelope::NextAction {
+                        command: command.to_owned(),
+                    })
+                    .into_iter()
+                    .collect();
+                Ok(CommandOutcome::new(CommandData::Search(*collection))
+                    .with_next_actions(next_actions))
             }
             VintedSearchResult::Filters(collection) => {
                 Ok(CommandOutcome::new(CommandData::Filters(collection)))
