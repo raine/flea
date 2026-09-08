@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.1.4 (2026-09-08)
 
-- Publish and edit Vinted listings through the required Chrome extension in
-  your normal signed-in browser; run `flea extension setup` to get started
+- Breaking: Vinted publishing and editing now require the Chrome extension in
+  your normal signed-in browser instead of a separate browser profile; run
+  `flea extension setup` to get started
+- Update installer and Cargo installations to the latest release with
+  `flea update`; Homebrew and Nix installations continue using their package manager
 - Update the title, description, and price of your Vinted listings without
   replacing their photos or other listing details
 - Improve listing-update verification while Vinted processes changes, and show
