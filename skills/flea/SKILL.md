@@ -24,6 +24,12 @@ Use `flea skill tori` for every Tori task and `flea skill vinted` for every
 Vinted task. Follow the selected guide without loading the other marketplace's
 guide.
 
+## Browser selection
+
+Use `--browser-url http://localhost:9222` for existing debugging-enabled Chrome.
+Preserve it on follow-up commands. See `flea skill vinted` for approval and
+manual-browser guidance.
+
 ## Shared safety rules
 
 - Treat IDs, revisions, and options as opaque. Discover them with the commands

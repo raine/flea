@@ -48,11 +48,49 @@ IDs. `seller.seller_disclosed_location` is exposure-permitted seller profile
 data, not a catalog filter or guaranteed item location. Never infer it from
 presentation text. `--raw` preserves upstream JSON.
 
+## Choose the browser
+
+By default, Flea launches its dedicated Chrome profile and chooses an available
+local debugging port. To use an existing debugging-enabled Chrome instead:
+
+```sh
+flea --browser-url http://localhost:9222 vinted auth status --browser
+flea --browser-url http://localhost:9222 vinted auth login --browser
+```
+
+The global `--browser-url` option selects the browser for browser authentication,
+publication, and listing edits. Flea does not access its managed profile or
+launch another Chrome when this option is supplied. Connection failures do not
+fall back to the managed browser. API-only operations are unchanged; browser
+sign-in does not replace the account credentials needed for API operations.
+
+Chrome can enable debugging through command-line flags or
+`chrome://inspect/#remote-debugging`. For the latter, ask the user to approve
+Flea's connection in Chrome within 60 seconds. Do not bypass approval or human
+verification. Keep the debugging endpoint private; do not expose it publicly.
+
+Pass the same `--browser-url` on every invocation that should use this browser.
+Add it to returned `next_actions` and other continuation commands even when
+those commands omit it. Browser logout clears Vinted cookies and local storage
+in the selected browser, not necessarily Flea's dedicated profile.
+
+To open the dedicated Flea profile manually without enabling debugging:
+
+```sh
+flea browser
+```
+
+Close any debugging-enabled Flea Chrome instance first. Close this manual browser
+before using managed browser automation again, or enable debugging through
+Chrome's UI and explicitly connect with `--browser-url`. Do not combine
+`flea browser` with `--browser-url`.
+
 ## Publish Vinted listings
 
 Publication commands use ordinary Chrome cookies and human verification through
 Flea's built-in browser connection. No separate browser automation client is
-required. Flea chooses an available local debugging port automatically.
+required. Use the default managed profile or select an existing browser with
+`--browser-url` as described above.
 Publication also uses account credentials for discovery and account reads, so
 set up both layers:
 
