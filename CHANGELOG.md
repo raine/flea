@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fix Nix builds failing with HTTP 403 errors when downloading dependencies
+
 ## v0.1.3 (2026-09-08)
 
 - Breaking: Tori commands now use `flea tori ...`. Existing unscoped credentials
