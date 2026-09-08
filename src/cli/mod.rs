@@ -1,6 +1,7 @@
 pub(crate) mod auth;
 pub(crate) mod category;
 pub(crate) mod draft;
+pub(crate) mod extension;
 pub(crate) mod favorite;
 pub(crate) mod item;
 pub(crate) mod listing;
@@ -157,6 +158,9 @@ impl Command {
 
 #[derive(Debug, Args)]
 pub struct ExtensionArgs {
+    #[arg(skip)]
+    pub copy_path: bool,
+
     #[command(subcommand)]
     pub command: ExtensionCommand,
 }

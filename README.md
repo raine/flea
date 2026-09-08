@@ -105,7 +105,10 @@ flea extension setup
 
 The command installs bundled extension files and registers Flea's native bridge.
 Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
-and select the extension directory printed by setup. Open or reload one
+and select the extension directory printed by setup. On macOS, interactive setup
+copies the path to your clipboard: press **Command+Shift+G** in the folder picker,
+paste, and press Return. Explicit `--format json` or `--format toon` keeps
+structured output without changing the clipboard. Open or reload one
 `https://www.vinted.fi` tab and sign in normally.
 
 Flea automatically uses the extension after setup. No separate browser profile,

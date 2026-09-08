@@ -153,6 +153,9 @@ where
     cli::Cli::try_parse_from(args)
         .map(|mut cli| {
             cli.format_explicit = format_explicit;
+            if let cli::Command::Extension(args) = &mut cli.command {
+                args.copy_path = !format_explicit;
+            }
             cli
         })
         .map_err(clap_presentation)

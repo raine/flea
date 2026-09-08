@@ -141,3 +141,42 @@ fn rejects_other_extensions_without_emitting_cli_json_on_native_stdout() {
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
 }
+
+#[test]
+fn setup_defaults_to_instructions_and_preserves_explicit_formats() {
+    let home = tempfile::Builder::new()
+        .prefix("flea-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let plain = command(home.path())
+        .args(["extension", "setup"])
+        .output()
+        .unwrap();
+    assert!(plain.status.success());
+    let plain = String::from_utf8(plain.stdout).unwrap();
+    assert!(plain.starts_with("Flea's Chrome bridge is installed.\n"));
+    assert!(plain.contains("1. Open chrome://extensions"));
+    assert!(plain.contains("flea vinted auth status --browser"));
+    assert!(!plain.contains("extension_id:"));
+    assert!(!plain.contains("copied to clipboard"));
+    if cfg!(target_os = "macos") {
+        assert!(plain.contains("Command+Shift+G"));
+    }
+    for format in ["json", "toon"] {
+        let output = command(home.path())
+            .args(["extension", "setup", "--format", format])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let output = String::from_utf8(output.stdout).unwrap();
+        assert!(!output.starts_with("Flea's Chrome bridge"));
+        assert!(output.contains("extension_id"));
+        if format == "json" {
+            let value: Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(value["ok"], true);
+            assert!(value["data"]["next_steps"].is_array());
+        } else {
+            assert!(output.starts_with("ok: true\n"));
+        }
+    }
+}

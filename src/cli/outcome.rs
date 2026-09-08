@@ -177,6 +177,7 @@ pub enum PlainOutput {
     Document(String),
     SkillDocument(String),
     UpdateDocument(String),
+    ExtensionSetupDocument(String),
 }
 
 #[derive(Debug, Default)]
