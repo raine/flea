@@ -12,15 +12,6 @@ Ask your agent to:
 - Update your existing listings
 - Save favorites and set up search alerts on Tori
 
-For example:
-
-> Find dining chairs on Tori in Helsinki, Espoo, or Vantaa for under €100.
-
-> Search Vinted for Marimekko dresses under €80.
-
-> Help me sell this coat on Vinted. The photos are in ~/Pictures/coat.
-> Ask me for any missing details and show me the draft before publishing.
-
 ## Install
 
 With Homebrew on macOS or Linux:
@@ -45,91 +36,80 @@ nix profile install github:raine/flea
 
 </details>
 
-## Update
-
-For installer or Cargo installations:
-
-```sh
-flea update
-```
-
-Homebrew: `brew upgrade raine/flea/flea`. Nix: update through your profile or
-configuration.
-
-After updating, run `flea skill install` to refresh your agent's skill.
-
 ## Get started
 
-### 1. Connect your coding agent
-
-Install the bundled skill, which teaches your agent how to use Flea:
+### 1. Connect your agent
 
 ```sh
 flea skill install
 ```
 
-This detects Claude Code, Codex, and OpenCode. To choose one explicitly, use
-`--agent claude`, `--agent codex`, or `--agent opencode`.
+Flea detects Claude Code, Codex, and OpenCode and installs the skill your agent
+needs to use it.
 
 ### 2. Sign in
 
-**Tori:** Searching and viewing public listings work without an account. Sign in
-when you want to sell, save favorites, or manage alerts:
+For Tori, you can search without an account. Sign in to sell, save favorites,
+or manage alerts:
 
 ```sh
 flea tori auth login
 ```
 
-**Vinted:** Sign in before searching or selling:
+For Vinted, sign in to search or sell:
 
 ```sh
 flea vinted auth login
 ```
 
-**Why does Vinted need an extension?** Flea publishes and edits listings through
-Vinted's signed-in website. These requests use your browser session and the
-page's security tokens, and Vinted may ask you to complete a human verification
-check. The extension lets Flea make those requests from your normal Vinted tab
-without exporting browser credentials, launching a separate Chrome profile, or
-enabling a debugging port. Searching and browsing use separate API credentials
-and do not need the extension.
-
-For Vinted selling, connect Flea to your normal Google Chrome on macOS or Linux:
-
-```sh
-flea extension setup
-```
-
-The command installs bundled extension files and registers Flea's native bridge.
-Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
-and select the extension directory printed by setup. On macOS, interactive setup
-copies the path to your clipboard: press **Command+Shift+G** in the folder picker,
-paste, and press Return. Explicit `--format json` or `--format toon` keeps
-structured output without changing the clipboard. Open or reload one
-`https://www.vinted.fi` tab and sign in normally.
-
-Flea automatically uses the extension after setup. Keep exactly one Vinted tab
-open in the Chrome profile with the extension installed. Check the connection
-with:
-
-```sh
-flea vinted auth status --browser
-```
-
-The extension handles browser publication and listing edits. Vinted's catalog
-credentials are still configured through `flea vinted auth login`. Sign out of
-the shared browser session on the Vinted website; Flea does not clear your normal
-Chrome cookies. Run setup again after moving the Flea executable, or to install
-updated extension files, then reload the extension and Vinted tab.
+To sell on Vinted, also [connect the browser extension](#sell-on-vinted).
 
 ### 3. Ask your agent
 
-Tell your agent what you'd like to find or sell. Include useful details such as
-your budget, location, item condition, and photo paths. For selling, ask it to
-show you the listing before publishing.
+> Find dining chairs on Tori near Helsinki for under €100.
 
-You still handle account verification and any human checks required by the
-marketplace.
+> Help me sell this coat on Vinted. The photos are in ~/Pictures/coat.
+> Show me the listing before publishing.
+
+Your agent handles the details. You handle account verification and any human
+checks required by the marketplace.
+
+## Sell on Vinted
+
+Selling on Vinted requires Flea's extension in Google Chrome on macOS or Linux.
+It lets your agent publish and edit listings through your signed-in browser,
+without exporting your browser credentials. Searching does not need it.
+
+1. Run `flea extension setup`.
+2. Open `chrome://extensions` and enable **Developer mode**.
+3. Choose **Load unpacked** and select the directory printed by setup.
+4. Open `https://www.vinted.fi` and sign in. Keep exactly one Vinted tab open
+   in that Chrome profile.
+
+Check the connection with `flea vinted auth status --browser`.
+
+<details>
+<summary>Setup tips and troubleshooting</summary>
+
+- On macOS, interactive setup copies the extension path to your clipboard.
+  In the folder picker, press **Command+Shift+G**, paste, and press Return.
+- If Vinted was already open, reload the tab after installing the extension.
+- Run `flea vinted auth login` for search access, even if you are signed in
+  through Chrome.
+- After moving the Flea executable or updating the extension, run
+  `flea extension setup` again, then reload the extension and Vinted tab.
+- To sign out of the browser session, use Vinted's website. Flea does not clear
+  your Chrome cookies.
+
+</details>
+
+## Update
+
+- **Homebrew:** `brew upgrade raine/flea/flea`
+- **Installer or Cargo:** `flea update`
+- **Nix:** update through your profile or configuration.
+
+Then run `flea skill install` to refresh your agent's skill.
 
 ## Prefer the terminal?
 
@@ -141,27 +121,9 @@ flea vinted search "Marimekko" --price-to 80 --sort newest
 flea --format json vinted search jacket --seller-country FI --max-shipping 3 --limit 10
 ```
 
-Output is structured for agents and scripts rather than a traditional terminal
-UI. Add `--format json` if you need JSON:
-
-```sh
-flea --format json tori search "tuoli"
-```
-
-Use `--help` on any command for options and examples:
-
-```sh
-flea --help
-flea tori search --help
-flea vinted draft --help
-```
-
-The detailed marketplace guides are bundled with the installed version:
-
-```sh
-flea skill tori
-flea skill vinted
-```
+Output is structured for agents and scripts. Add `--format json` for JSON.
+Use `--help` on any command for options, or read the bundled marketplace guides
+with `flea skill tori` and `flea skill vinted`.
 
 ## Your photos and account
 
@@ -178,8 +140,9 @@ flea skill vinted
 ## Development
 
 Run `just check` to validate changes and `cargo run -- --help` to try the
-local build. Extension tests require Node.js 22 or newer. Rust tests use [cargo-nextest](https://nexte.st/), included in the Nix
-development shell or installable with `cargo install cargo-nextest --locked`.
+local build. Extension tests require Node.js 22 or newer. Rust tests use
+[cargo-nextest](https://nexte.st/), included in the Nix development shell or
+installable with `cargo install cargo-nextest --locked`.
 
 ## License
 
