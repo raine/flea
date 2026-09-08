@@ -55,6 +55,11 @@ returned IDs with `--catalog`, `--brand`, `--size`, `--status`, `--color`,
 `--material`, or repeatable `--attribute CODE=ID[,ID...]`. Prices accept up to two
 decimal places. Omit QUERY to browse; add `--include-facets` for contextual filters.
 
+If `filter facets size --catalog ID` or `filter search size L --catalog ID`
+returns no options, try `filter list --catalog ID`. Its contextual size filter
+may still provide selectable sizes. Use the returned IDs rather than guessing;
+empty facet/search results alone do not establish that sizes are unavailable.
+
 Shopping search is multilingual; publication taxonomy discovery is not.
 `item show` keeps original seller text; `--raw` preserves upstream JSON.
 `seller.seller_disclosed_location` is seller profile data, not a guaranteed item
@@ -97,6 +102,14 @@ Use a small `--limit` for more predictable coverage. Failures and limits are
 reported explicitly. Without filters, unavailable items remain in the results;
 with filters they cannot count as matches. An empty filtered page does not mean
 there are no matching items elsewhere.
+
+Use `enrichment.exclusion_counts.by_filter` for exclusion breakdowns instead of
+manually tallying item diagnostics. Counts are listing appearances on this page,
+not unique sellers or marketplace totals. A listing can fail both country and
+shipping filters, so counts overlap across filters and must not be added to
+calculate `excluded`. Only active filters contribute; enrichment alone does not
+exclude listings. Unknown values retain reasons such as `location_hidden`,
+`country_unrecognized`, `missing_or_invalid_quote`, or `item_limit`.
 
 Pagination totals and next pages describe the upstream search, not filtered
 marketplace totals. Follow `enrichment.next_command` to retain all selections

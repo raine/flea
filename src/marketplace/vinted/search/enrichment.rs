@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
 
 use serde_json::{Value, json};
 use tokio::time::{Instant, timeout_at};
@@ -72,6 +72,7 @@ async fn enrich_with_limits(
     let mut unknown = 0;
     let mut errors = 0;
     let mut excluded = 0;
+    let mut exclusion_counts: BTreeMap<&str, BTreeMap<String, usize>> = BTreeMap::new();
     let mut unprocessed = 0;
     let mut retained = Vec::with_capacity(original_count);
     for (index, mut listing) in std::mem::take(&mut collection.results)
@@ -111,6 +112,19 @@ async fn enrich_with_limits(
         errors += usize::from(stages.iter().any(|stage| stage["status"] == "error"));
         unprocessed += usize::from(stages.iter().any(|stage| stage["status"] == "unprocessed"));
         excluded += usize::from(!keep);
+        for (name, filter, stage) in [
+            ("seller_country", &country_filter, seller),
+            ("max_shipping", &postage_filter, shipping),
+        ] {
+            if filter["status"] == "excluded" {
+                let reason = exclusion_reason(filter, stage);
+                *exclusion_counts
+                    .entry(name)
+                    .or_default()
+                    .entry(reason.to_owned())
+                    .or_default() += 1;
+            }
+        }
         statuses.push(json!({
             "listing_id": listing.listing_id,
             "seller": diagnostic_status(seller),
@@ -142,6 +156,11 @@ async fn enrich_with_limits(
         "unknown": unknown,
         "errors": errors,
         "excluded": excluded,
+        "exclusion_counts": {
+            "unit": "listing_appearances",
+            "counts_can_overlap_across_filters": true,
+            "by_filter": exclusion_counts,
+        },
         "unprocessed": unprocessed,
         "coverage": {
             "complete": unknown == 0 && errors == 0 && unprocessed == 0,
@@ -160,6 +179,21 @@ async fn enrich_with_limits(
         },
         "items": statuses,
     }));
+}
+
+fn exclusion_reason<'a>(filter: &'a Value, stage: &'a Value) -> &'a str {
+    // Unknown filter values retain the enrichment reason that prevented evaluation.
+    if matches!(
+        filter["reason"].as_str(),
+        Some("seller_country_unknown" | "shipping_unknown")
+    ) {
+        stage["reason"]
+            .as_str()
+            .or_else(|| stage["status"].as_str())
+            .unwrap_or("unknown")
+    } else {
+        filter["reason"].as_str().unwrap_or("unknown")
+    }
 }
 
 async fn fetch(
@@ -892,6 +926,72 @@ mod tests {
             "currency_not_eur"
         );
         assert_eq!(summary["items"][5]["shipping"]["status"], "pickup_only");
+    }
+
+    #[tokio::test]
+    async fn exclusion_counts_overlap_only_for_active_filters() {
+        let mut hidden = seller_fixture("0");
+        hidden["item"]["user"]["expose_location"] = json!(false);
+        let mut unrecognized = seller_fixture("1");
+        unrecognized["item"]["user"]["country_title_local"] = json!("Other country");
+        let mut expensive = pricing_fixture();
+        expensive["services"]["shipping"]["final_price"]["amount"] = json!("5.01");
+        let api = FakeApi {
+            responses: vec![
+                ("0".into(), false, hidden),
+                ("1".into(), false, unrecognized),
+                ("0".into(), true, expensive),
+            ],
+            ..FakeApi::new()
+        };
+        for filter_country in [true, false] {
+            let mut result = collection(3);
+            enrich(
+                &api,
+                &credentials(),
+                &mut result,
+                &Options {
+                    include_seller: true,
+                    seller_country: filter_country.then(|| "FI".into()),
+                    max_shipping: Some("3".parse().unwrap()),
+                    ..Options::default()
+                },
+            )
+            .await;
+            let summary = result.enrichment.unwrap();
+            assert_eq!(summary["excluded"], if filter_country { 2 } else { 1 });
+            let counts = &summary["exclusion_counts"];
+            assert_eq!(counts["unit"], "listing_appearances");
+            assert_eq!(counts["counts_can_overlap_across_filters"], true);
+            assert_eq!(
+                counts["by_filter"]["max_shipping"],
+                json!({"shipping_above_maximum": 1})
+            );
+            if filter_country {
+                assert_eq!(
+                    counts["by_filter"]["seller_country"],
+                    json!({"location_hidden": 1, "country_unrecognized": 1})
+                );
+            } else {
+                assert!(counts["by_filter"].get("seller_country").is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_exclusions_preserve_failure_and_limit_reasons() {
+        let filter = status("excluded", Some("shipping_unknown"));
+        for (stage, expected) in [
+            (status("error", None), "error"),
+            (status("error", Some("request_timeout")), "request_timeout"),
+            (status("unprocessed", Some("item_limit")), "item_limit"),
+            (
+                status("unknown", Some("missing_or_invalid_quote")),
+                "missing_or_invalid_quote",
+            ),
+        ] {
+            assert_eq!(exclusion_reason(&filter, &stage), expected);
+        }
     }
 
     #[tokio::test]
