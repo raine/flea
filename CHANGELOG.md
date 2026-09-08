@@ -7,6 +7,12 @@
   `flea extension setup` to get started
 - Update installer and Cargo installations to the latest release with
   `flea update`; Homebrew and Nix installations continue using their package manager
+- Filter each Vinted search page for disclosed Finnish sellers and maximum
+  reported shipping cost with `--seller-country FI` and `--max-shipping`
+- See buyer-protection fees and fee-inclusive item prices in Vinted search,
+  with optional seller details and shipping quotes; checkout prices may differ
+- See why Vinted search results were excluded by each filter, including missing
+  information and lookup limits
 - Update the title, description, and price of your Vinted listings without
   replacing their photos or other listing details
 - Improve listing-update verification while Vinted processes changes, and show
