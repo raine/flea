@@ -208,6 +208,8 @@ fn reject_unknown_active_photo_fields(photo: &Map<String, Value>) -> Result<(), 
         "digital_source_type",
         "c2pa_read_error",
         "is_main",
+        "image_no",
+        "extra",
         "url",
         "width",
         "height",
@@ -700,6 +702,19 @@ mod tests {
         assert!(projected["item"].get("photos").is_none());
         assert!(projected.get("code").is_none());
         assert!(projected.get("upload_session_id").is_none());
+    }
+
+    #[test]
+    fn response_photo_metadata_does_not_change_assignment_order() {
+        let mut raw = editable();
+        raw["item"]["photos"][0]["image_no"] = json!(1);
+        raw["item"]["photos"][1]["image_no"] = json!(2);
+        raw["item"]["photos"][0]["extra"] = json!({});
+
+        assert_eq!(
+            project_editable("9001", &raw).unwrap(),
+            project_editable("9001", &editable()).unwrap()
+        );
     }
 
     #[test]
