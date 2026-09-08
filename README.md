@@ -77,8 +77,11 @@ checks required by the marketplace.
 ## Sell on Vinted
 
 Selling on Vinted requires Flea's extension in Google Chrome on macOS or Linux.
-It lets your agent publish and edit listings through your signed-in browser,
-without exporting your browser credentials. Searching does not need it.
+
+**Why an extension?** Publishing and editing use Vinted's signed-in website,
+including its security tokens and occasional human verification checks. The
+extension lets Flea work through your normal Vinted tab while keeping browser
+credentials in Chrome. Searching uses a separate API and does not need it.
 
 1. Run `flea extension setup`.
 2. Open `chrome://extensions` and enable **Developer mode**.
