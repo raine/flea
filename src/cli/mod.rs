@@ -61,9 +61,14 @@ pub enum Command {
         long_about = "Download the latest flea release, verify its SHA-256 checksum, and atomically replace the running executable. Requires tar and write access to the install directory. Homebrew and Nix installations must be updated through their package manager. Use --format json for structured output."
     )]
     Update,
-    /// Open the dedicated Flea browser without enabling remote debugging.
+    /// Install the Chrome extension files and register Flea's native bridge.
     #[command(
-        long_about = "Open the dedicated Flea Chrome profile without enabling remote debugging. Close any debugging-enabled Flea Chrome instance first. Use browser disconnect --browser-url URL to release a persistent external-browser connection."
+        long_about = "Install the bundled Chrome extension and register its native host for Vinted access through your normal signed-in browser. No debugging port is required. After setup, load the printed extension directory in chrome://extensions."
+    )]
+    Extension(ExtensionArgs),
+    /// Check the extension tab, or open the dedicated browser without debugging.
+    #[command(
+        long_about = "With the extension installed, check the connected Vinted tab. Otherwise open the dedicated Flea Chrome profile without enabling remote debugging. Close any debugging-enabled Flea Chrome instance first. Use browser disconnect --browser-url URL to release a persistent external-browser connection."
     )]
     Browser(BrowserArgs),
 
@@ -105,6 +110,7 @@ impl Command {
             Self::Tori(_) => Some(MarketplaceContext::TORI_FI),
             Self::Vinted(_) => Some(MarketplaceContext::VINTED_FI),
             Self::Browser(_)
+            | Self::Extension(_)
             | Self::Update
             | Self::BrowserSession
             | Self::Capabilities
@@ -120,6 +126,7 @@ impl Command {
             Self::Tori(args) => args.command.capability_id(),
             Self::Vinted(args) => args.command.capability_id(),
             Self::Browser(_)
+            | Self::Extension(_)
             | Self::Update
             | Self::BrowserSession
             | Self::Capabilities
@@ -131,6 +138,7 @@ impl Command {
 
     pub fn telemetry_name(&self) -> String {
         match self {
+            Self::Extension(_) => "extension setup".to_owned(),
             Self::Update => "update".to_owned(),
             Self::Capabilities => "capabilities".to_owned(),
             Self::Marketplaces => "marketplaces".to_owned(),
@@ -145,6 +153,21 @@ impl Command {
             Self::Unsupported(_) => "unknown".to_owned(),
         }
     }
+}
+
+#[derive(Debug, Args)]
+pub struct ExtensionArgs {
+    #[command(subcommand)]
+    pub command: ExtensionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ExtensionCommand {
+    /// Extract the bundled extension and register it with Google Chrome.
+    #[command(
+        long_about = "Write the bundled extension files and Chrome native messaging manifest on macOS or Linux. Load the printed directory as an unpacked extension, then open or reload one signed-in Vinted Finland tab. Run again after moving the Flea executable or to refresh extension files."
+    )]
+    Setup,
 }
 
 #[derive(Debug, Args)]

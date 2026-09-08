@@ -9,6 +9,7 @@ default:
 
 # Run dependency boundaries and project checks
 check:
+    node --test extension/bridge.test.cjs
     scripts/check-dependency-boundaries
     checkle run all
 

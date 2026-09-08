@@ -93,9 +93,18 @@ impl VintedWebPublicationApi {
         image: PreparedImage,
     ) -> Result<UploadedPhoto, AppError> {
         let session = self.session()?;
-        let csrf_token = self.csrf_token(session)?;
-        let script = photo_upload_script(upload_session_id, &image, &csrf_token);
-        let response = decode_browser_response(session.evaluate(&script)?)?;
+        let result = if session.uses_extension() {
+            session.extension_request(json!({
+                "action": "photo", "upload_session_id": upload_session_id,
+                "file_name": image.file_name, "media_type": image.media_type,
+                "bytes": STANDARD.encode(&image.bytes),
+            }))?
+        } else {
+            let csrf_token = self.csrf_token(session)?;
+            let script = photo_upload_script(upload_session_id, &image, &csrf_token);
+            session.evaluate(&script)?
+        };
+        let response = decode_browser_response(result)?;
         if let Some(error) = browser_gate_error(response.status) {
             return Err(error);
         }
@@ -130,6 +139,11 @@ impl VintedWebPublicationApi {
         body: Option<&Value>,
         csrf_required: bool,
     ) -> Result<TransportResponse, AppError> {
+        if session.uses_extension() {
+            return decode_browser_response(session.extension_request(json!({
+                "action": "request", "method": method, "path": path, "body": body,
+            }))?);
+        }
         let csrf_token = csrf_required
             .then(|| self.csrf_token(session))
             .transpose()?;

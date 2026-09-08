@@ -4,7 +4,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     error::AppError,
@@ -61,9 +61,18 @@ impl VintedWebListingEditApi {
 
     async fn update_request(&self, item_id: &str, body: Value) -> Result<Value, AppError> {
         let session = self.session().map_err(mutation_not_attempted)?;
-        let csrf_token = self.csrf_token(session).map_err(mutation_not_attempted)?;
-        let script = update_script(item_id, &body, &csrf_token).map_err(mutation_not_attempted)?;
-        let response = decode_browser_response(session.evaluate(&script)?)?;
+        let result = if session.uses_extension() {
+            session.extension_request(json!({
+                "action": "request", "method": "PUT",
+                "path": format!("/api/v2/item_upload/items/{item_id}"), "body": body,
+            }))?
+        } else {
+            let csrf_token = self.csrf_token(session).map_err(mutation_not_attempted)?;
+            let script =
+                update_script(item_id, &body, &csrf_token).map_err(mutation_not_attempted)?;
+            session.evaluate(&script)?
+        };
+        let response = decode_browser_response(result)?;
         if let Some(error) = browser_gate_error(response.status) {
             return Err(error);
         }

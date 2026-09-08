@@ -51,6 +51,7 @@
           default = pkgs.mkShell {
             buildInputs = with pkgs; [
               cargo
+              nodejs_22
               cargo-nextest
               rustc
               rust-analyzer

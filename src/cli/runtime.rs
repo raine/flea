@@ -213,6 +213,8 @@ pub async fn dispatch(
     dependencies: &ApplicationDependencies,
 ) -> Result<CommandOutcome, AppError> {
     match command {
+        Command::Extension(_) => crate::extension::setup()
+            .map(|result| CommandOutcome::new(CommandData::ExtensionSetup(result))),
         Command::Browser(super::BrowserArgs {
             command: Some(super::BrowserCommand::Disconnect),
         }) => {

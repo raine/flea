@@ -50,8 +50,24 @@ presentation text. `--raw` preserves upstream JSON.
 
 ## Choose the browser
 
-By default, Flea launches its dedicated Chrome profile and chooses an available
-local debugging port. To use an existing debugging-enabled Chrome instead:
+Prefer the Chrome extension on macOS and Linux:
+
+```sh
+flea extension setup
+```
+
+Ask the user to load the printed extension directory through **Load unpacked** in
+`chrome://extensions` with Developer mode enabled, then open or reload exactly
+one Vinted Finland tab and sign in. This is one-time setup, with no debugging
+port or connection approvals. After setup, browser authentication, publication,
+and listing edits automatically use that normal Chrome session. Tokens stay in
+the browser. Connection failures do not fall back to another browser. Run setup
+again after moving the executable or to refresh bundled extension files, then
+reload the extension and tab. API-only authentication remains separate.
+
+Without extension setup, Flea launches its dedicated Chrome profile and chooses
+an available local debugging port. To explicitly use debugging-enabled Chrome
+instead of the extension or managed profile:
 
 ```sh
 flea --browser-url http://localhost:9222 vinted auth status --browser
@@ -94,13 +110,14 @@ Add it to returned `next_actions` and other continuation commands even when
 those commands omit it. Browser logout clears Vinted cookies and local storage
 in the selected browser, not necessarily Flea's dedicated profile.
 
-To open the dedicated Flea profile manually without enabling debugging:
+To check the extension tab connection, or open the dedicated Flea profile when
+the extension is not installed:
 
 ```sh
 flea browser
 ```
 
-Close any debugging-enabled Flea Chrome instance first. Close this manual browser
+For the dedicated profile, close any debugging-enabled Flea Chrome instance first. Close this manual browser
 before using managed browser automation again, or enable debugging through
 Chrome's UI and explicitly connect with `--browser-url`. Do not combine
 the bare `flea browser` command with `--browser-url`; the `disconnect` subcommand
@@ -110,7 +127,7 @@ requires it.
 
 Publication commands use ordinary Chrome cookies and human verification through
 Flea's built-in browser connection. No separate browser automation client is
-required. Use the default managed profile or select an existing browser with
+required. Prefer the installed extension, use the managed profile, or select an existing browser with
 `--browser-url` as described above.
 Publication also uses account credentials for discovery and account reads, so
 set up both layers:
@@ -294,6 +311,8 @@ inspection without another publication mutation. Read `verification.status` as
 `public`, `moderated`, or `timed_out`; inspection failures return
 `vinted.publication_verification_uncertain`. All of these confirmed mutation
 outcomes set `safe_to_retry: false`. Follow the exact `listing show` action for
-a timed-out or uncertain verification. `auth logout` clears both authentication
-layers; `auth logout --browser` clears browser cookies and Vinted local storage,
-then closes the selected tab without deleting the profile.
+a timed-out or uncertain verification. With the extension, ask the user to sign
+out on the Vinted website: browser logout returns an instruction rather than
+clearing shared Chrome cookies. Use `auth logout --api` to clear only catalog
+credentials. With CDP, `auth logout --browser` clears browser cookies and Vinted
+local storage, then closes the selected tab without deleting the profile.

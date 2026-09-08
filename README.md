@@ -97,16 +97,37 @@ flea tori auth login
 flea vinted auth login
 ```
 
-Vinted selling requires Google Chrome, or Chromium on Linux. Flea uses a
-separate browser profile, leaving your everyday profile alone. Complete any
-sign-in or verification prompts in the browser. If Flea asks you to finish a
-browser check, do so, then run:
+For Vinted selling, connect Flea to your normal Google Chrome on macOS or Linux:
+
+```sh
+flea extension setup
+```
+
+The command installs bundled extension files and registers Flea's native bridge.
+Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
+and select the extension directory printed by setup. Open or reload one
+`https://www.vinted.fi` tab and sign in normally.
+
+Flea automatically uses the extension after setup. No separate browser profile,
+debugging port, or repeated connection approval is required. Keep exactly one
+Vinted tab open in the Chrome profile with the extension installed. Check the
+connection with:
 
 ```sh
 flea vinted auth status --browser
 ```
 
-To use an existing Chrome instead, enable debugging in
+The extension handles browser publication and listing edits. Vinted's catalog
+credentials are still configured through `flea vinted auth login`. Sign out of
+the shared browser session on the Vinted website; Flea does not clear your normal
+Chrome cookies. Run setup again after moving the Flea executable, or to install
+updated extension files, then reload the extension and Vinted tab.
+
+Without extension setup, Flea retains its automatically managed, separate Chrome
+profile (also supporting Chromium on Linux). Explicit `--browser-url` overrides
+the extension if you prefer CDP.
+
+To use an existing Chrome through CDP instead, enable debugging in
 `chrome://inspect/#remote-debugging`, then run:
 
 ```sh
@@ -168,14 +189,17 @@ flea skill vinted
 - JPEG and PNG are supported, along with HEIC/HEIF through macOS's built-in
   converter or the optional `heif-convert` tool on other platforms.
 - Credentials and Vinted's dedicated browser profile are stored locally.
-  Sign out with `flea tori auth logout` or `flea vinted auth logout`.
+  Sign out with `flea tori auth logout` or `flea vinted auth logout`. When using
+  the extension, sign out of Vinted directly in Chrome.
 - Keep Flea's browser debugging connection local. Never expose it to the
-  network or point it at your everyday browser profile.
+  network. Prefer the extension for access to your everyday browser session.
+- The extension is scoped to Vinted Finland. It exposes defined marketplace
+  requests, not arbitrary JavaScript, and keeps browser credentials in Chrome.
 
 ## Development
 
 Run `just check` to validate changes and `cargo run -- --help` to try the
-local build. Tests use [cargo-nextest](https://nexte.st/), included in the Nix
+local build. Extension tests require Node.js 22 or newer. Rust tests use [cargo-nextest](https://nexte.st/), included in the Nix
 development shell or installable with `cargo install cargo-nextest --locked`.
 
 ## License

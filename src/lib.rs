@@ -3,6 +3,7 @@ mod cli;
 mod diagnostics;
 pub mod domain;
 mod error;
+mod extension;
 mod image_processing;
 mod invocation;
 mod marketplace;
@@ -369,3 +370,8 @@ mod search_fixtures;
 #[cfg(test)]
 #[path = "../tests/tori_error_redaction_contracts.rs"]
 mod tori_error_redaction_contracts;
+
+/// Run Chrome's native messaging host without writing CLI output to stdout.
+pub fn run_extension_host(origin: &str) -> Result<(), AppError> {
+    extension::serve(origin)
+}

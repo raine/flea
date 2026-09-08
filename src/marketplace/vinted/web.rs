@@ -32,6 +32,7 @@ pub struct VintedWebSession {
     profile: PathBuf,
     browser_url: Option<url::Url>,
     page: Mutex<Option<ChromePage>>,
+    extension: bool,
 }
 
 impl VintedWebSession {
@@ -48,6 +49,15 @@ impl VintedWebSession {
                 profile: PathBuf::new(),
                 browser_url: Some(browser_url.clone()),
                 page: Mutex::new(None),
+                extension: false,
+            });
+        }
+        if crate::extension::configured() {
+            return Ok(Self {
+                profile: PathBuf::new(),
+                browser_url: None,
+                page: Mutex::new(None),
+                extension: true,
             });
         }
         let context = match portal {
@@ -61,6 +71,7 @@ impl VintedWebSession {
             profile,
             browser_url: None,
             page: Mutex::new(None),
+            extension: false,
         })
     }
 
@@ -82,14 +93,35 @@ impl VintedWebSession {
     }
 
     pub fn open_without_debugging(&self) -> Result<(), AppError> {
+        if self.extension {
+            return self.open();
+        }
         crate::browser::open_without_debugging(&self.profile)
     }
 
     pub fn open(&self) -> Result<(), AppError> {
+        if self.extension {
+            return self
+                .extension_request(json!({ "action": "ready" }))
+                .map(|_| ());
+        }
         self.with_page(|_| Ok(()))
     }
 
+    pub fn uses_extension(&self) -> bool {
+        self.extension
+    }
+
+    pub fn extension_request(&self, command: Value) -> Result<Value, AppError> {
+        crate::extension::request(command)
+    }
+
     pub fn evaluate(&self, script: &str) -> Result<Value, AppError> {
+        if self.extension {
+            return Err(AppError::usage(
+                "the extension accepts defined Vinted commands, not JavaScript",
+            ));
+        }
         self.with_page(|page| page.evaluate(script))
     }
 
@@ -98,6 +130,11 @@ impl VintedWebSession {
     }
 
     pub fn clear(&self) -> Result<(), AppError> {
+        if self.extension {
+            return Err(AppError::usage(
+                "sign out on the Vinted website to clear your normal Chrome session; Flea does not clear shared browser cookies",
+            ));
+        }
         match &self.browser_url {
             Some(endpoint) => ChromePage::clear_remote(endpoint, VINTED_ORIGIN),
             None => ChromePage::clear_profile(&self.profile, VINTED_ORIGIN),
@@ -179,8 +216,16 @@ pub fn logout_with_browser_url(
 }
 
 fn status_with_session(session: &VintedWebSession) -> Result<VintedWebAuthStatus, AppError> {
-    let result = session.evaluate(
-        r#"(async () => {
+    let result = if session.uses_extension() {
+        let response = session.extension_request(json!({
+            "action": "request", "method": "GET", "path": "/api/v2/users/current"
+        }))?;
+        let body = response.get("body").unwrap_or(&Value::Null);
+        let user = body.get("user").unwrap_or(body);
+        json!({ "status": response.get("status"), "authenticated": user.get("id").is_some_and(|id| !id.is_null()) })
+    } else {
+        session.evaluate(
+            r#"(async () => {
             const response = await fetch('/api/v2/users/current', {
                 credentials: 'include',
                 headers: { accept: 'application/json' }
@@ -189,7 +234,8 @@ fn status_with_session(session: &VintedWebSession) -> Result<VintedWebAuthStatus
             const user = body.user || body;
             return { status: response.status, authenticated: Boolean(response.ok && user.id) };
         })()"#,
-    )?;
+        )?
+    };
     let status = result
         .get("status")
         .and_then(Value::as_u64)
