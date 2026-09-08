@@ -237,6 +237,10 @@ fn help_tables_include_agent_oriented_summaries() {
     }
     let compose = stdout(&invoke(&["vinted", "category", "compose", "--help"]));
     assert!(compose.contains("Primary guided entry point"));
+    assert!(compose.contains("--field"));
+    assert!(compose.contains("--option-limit"));
+    assert!(compose.contains("--option-offset"));
+    assert!(compose.contains("attribute.size"));
     assert!(compose.contains("category search SEARCH_TEXT"));
 
     let auth = stdout(&invoke(&["tori", "auth", "--help"]));

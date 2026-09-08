@@ -16,9 +16,9 @@ use crate::{
             categories::{self, CatalogTree, CategoryPage, DiscoveryStages, SearchOptions},
             category_evidence::MarketplaceCategoryEvidence,
             composer::{
-                PublicationCategorySuggestion, VintedComposerReadiness, VintedPublicationComposer,
-                publication_attribute_definitions, publication_attribute_options,
-                selection_command,
+                PublicationCategorySuggestion, VintedComposer, VintedComposerReadiness,
+                VintedPublicationComposer, publication_attribute_definitions,
+                publication_attribute_options, selection_command,
             },
             publication_discovery::{
                 DiscoveryRequest, DiscoveryScope, PublicationDiscoveryOutput,
@@ -93,6 +93,9 @@ pub enum VintedCategoryCommand {
     Search {
         /// Portal-localized category search text.
         keyword: String,
+        /// Add best-effort marketplace category evidence.
+        #[arg(long)]
+        marketplace_evidence: bool,
         /// Listing title used as recommendation context.
         #[arg(long)]
         title: Option<String>,
@@ -121,10 +124,19 @@ pub enum VintedCategoryCommand {
         #[arg(long, value_name = "PATH")]
         input: Option<PathBuf>,
         /// Include complete fields and runtime option catalogs.
-        #[arg(long, conflicts_with = "readiness")]
+        #[arg(long, conflicts_with_all = ["readiness", "field"])]
         full: bool,
         #[arg(long, hide = true, conflicts_with = "full")]
         readiness: bool,
+        /// Inspect only this field and its selectable options, e.g. attribute.size.
+        #[arg(long, conflicts_with_all = ["full", "readiness"])]
+        field: Option<String>,
+        /// Maximum options per focused page (1-100, default 20).
+        #[arg(long, requires = "field", value_parser = parse_limit)]
+        option_limit: Option<usize>,
+        /// Number of selectable options to skip.
+        #[arg(long, requires = "field")]
+        option_offset: Option<usize>,
     },
     #[command(
         about = "Discover layered Vinted category attributes",
@@ -198,12 +210,24 @@ pub async fn execute(
         input,
         full,
         readiness: _,
+        field,
+        option_limit,
+        option_offset,
     } = command
     {
         let supplied = input.as_ref().map(read_json).transpose()?;
         let composer = VintedPublicationComposer::new(session, api)
             .compose(portal, category_id, supplied)
             .await?;
+        if let Some(field) = field {
+            return focused_field_outcome(
+                &composer,
+                &field,
+                input.as_ref(),
+                option_limit.unwrap_or(20),
+                option_offset.unwrap_or(0),
+            );
+        }
         let readiness = VintedComposerReadiness::from(&composer);
         let next_actions = if full {
             &composer.issue_actions
@@ -226,6 +250,7 @@ pub async fn execute(
     match &command {
         VintedCategoryCommand::Search {
             keyword,
+            marketplace_evidence,
             title,
             description,
             parent,
@@ -234,6 +259,7 @@ pub async fn execute(
         } => {
             let options = SearchOptions {
                 query: keyword,
+                marketplace_evidence: *marketplace_evidence,
                 title: title.as_deref(),
                 description: description.as_deref(),
                 parent_id: *parent,
@@ -251,6 +277,7 @@ pub async fn execute(
                     actions.push(NextAction {
                         command: search_command(
                             &suggestion.keyword,
+                            *marketplace_evidence,
                             title.as_deref(),
                             description.as_deref(),
                             *parent,
@@ -264,6 +291,7 @@ pub async fn execute(
                 actions.push(NextAction {
                     command: search_command(
                         keyword,
+                        *marketplace_evidence,
                         title.as_deref(),
                         description.as_deref(),
                         *parent,
@@ -377,6 +405,109 @@ pub async fn execute(
     )
 }
 
+fn focused_field_outcome(
+    composer: &VintedComposer,
+    key: &str,
+    input: Option<&PathBuf>,
+    limit: usize,
+    offset: usize,
+) -> Result<CommandOutcome, AppError> {
+    parse_limit(&limit.to_string()).map_err(AppError::usage)?;
+    let mut field = composer
+        .form
+        .fields
+        .iter()
+        .find(|field| field.key == key)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::usage(format!(
+                "Unknown composer field `{key}`. Available fields: {}",
+                composer
+                    .form
+                    .fields
+                    .iter()
+                    .map(|field| field.key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+    field.raw = None;
+    let source_options_truncated = field.options_truncated;
+    let matching = composer
+        .form
+        .options
+        .iter()
+        .filter(|option| option.field == key)
+        .collect::<Vec<_>>();
+    let total = matching.len();
+    let options = matching
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|option| {
+            let mut option = option.clone();
+            option.raw = None;
+            option
+        })
+        .collect::<Vec<_>>();
+    let returned = options.len();
+    let truncated = offset.saturating_add(returned) < total;
+    field.options_returned = returned;
+    field.options_truncated = source_options_truncated || truncated;
+    let issues = composer
+        .form
+        .issues
+        .iter()
+        .filter(|issue| issue.field == key)
+        .map(|issue| {
+            let mut issue = issue.clone();
+            issue.raw = None;
+            issue
+        })
+        .collect::<Vec<_>>();
+    let stdin_input = input.is_some_and(|path| path.as_os_str() == "-");
+    let mut guidance = "Apply the selected option value to your ListingInput and rerun compose with --input to validate readiness.".to_owned();
+    if stdin_input {
+        guidance.push_str(" Save the original stdin ListingInput to a file and replace <saved-listing.json> in the continuation before running it.");
+    }
+    if source_options_truncated {
+        guidance.push_str(" The discovered option catalog is incomplete; use the field-specific discovery command (for brands: category brands CATEGORY_ID SEARCH_TEXT).");
+    }
+    let mut actions = Vec::new();
+    if truncated {
+        let input_arg = input
+            .map(|path| {
+                let path = if stdin_input {
+                    "<saved-listing.json>".into()
+                } else {
+                    path.to_string_lossy()
+                };
+                format!(" --input={}", shell_quote(&path))
+            })
+            .unwrap_or_default();
+        actions.push(NextAction { command: invocation::vinted_fi(format!(
+            "category compose {} --field={} --option-limit {limit} --option-offset {}{input_arg}",
+            composer.category.id, shell_quote(key), offset.saturating_add(returned)
+        )) });
+    }
+    Ok(CommandOutcome::new(CommandData::Raw(json!({
+        "scope": composer.scope,
+        "category": composer.category,
+        "field": field,
+        "issues": issues,
+        "options": options,
+        "attribute_selection_payload": composer.attribute_selection_payload,
+        "limit": limit,
+        "offset": offset,
+        "total": total,
+        "returned": returned,
+        "truncated": truncated,
+        "source_options_truncated": source_options_truncated,
+        "guidance": guidance,
+    })))
+    .with_next_actions(actions))
+}
+
 fn page_actions(page: &CategoryPage) -> Vec<NextAction> {
     let mut nodes = page
         .categories
@@ -410,6 +541,7 @@ fn browse_command(parent: Option<u64>, limit: usize, offset: usize) -> String {
 
 fn search_command(
     query: &str,
+    marketplace_evidence: bool,
     title: Option<&str>,
     description: Option<&str>,
     parent: Option<u64>,
@@ -417,6 +549,9 @@ fn search_command(
     offset: usize,
 ) -> String {
     let mut command = "category search".to_owned();
+    if marketplace_evidence {
+        command.push_str(" --marketplace-evidence");
+    }
     for (flag, value) in [("title", title), ("description", description)] {
         if let Some(value) = value {
             command.push_str(&format!(" --{flag}={}", shell_quote(value)));
@@ -493,11 +628,139 @@ mod tests {
         search::{CatalogueRequest, VintedSearchApi},
     };
 
+    fn focused_fixture() -> VintedComposer {
+        use crate::domain::{
+            field::{Field, FieldOption, FieldType, Requirement},
+            publication_form::PublicationForm,
+        };
+        let definition = json!({"groups":[{"id":99,"title":"Heading","options":[
+            {"id":100,"title":"Separator","type":"heading"},
+            {"id":591,"title":"22"}, {"id":592,"title":"23"}
+        ]}]});
+        let mut form = PublicationForm::default();
+        for key in ["attribute.size", "attribute.condition", "brand"] {
+            let mut field = Field::new(
+                key,
+                key,
+                FieldType::MultiSelect,
+                Requirement::Required,
+                None,
+                "attributes",
+            );
+            field.raw = Some(json!({"bulky":"raw schema"}));
+            form.fields.push(field);
+        }
+        for option in publication_attribute_options(definition.as_object().unwrap()) {
+            form.options.push(FieldOption {
+                field: "attribute.size".into(),
+                value: option["id"].clone(),
+                label: option["title"].as_str().unwrap().into(),
+                raw: Some(option.clone()),
+            });
+        }
+        form.options.push(FieldOption {
+            field: "brand".into(),
+            value: json!(1),
+            label: "Bulky brand".into(),
+            raw: Some(json!({"large":true})),
+        });
+        form.values.insert("attribute.size".into(), json!([591]));
+        form.validate();
+        VintedComposer {
+            scope: DiscoveryScope::Selection,
+            category: crate::marketplace::vinted::composer::PublicationCategory {
+                id: 2749,
+                title: "Shoes".into(),
+                path: vec![],
+                leaf: true,
+            },
+            attribute_selection_payload: json!([{"code":"category","value":[2749]},{"code":"size","value":[591]}]),
+            form,
+            brand_validation: None,
+            suggestions: vec![],
+            issue_actions: vec![],
+            semantic_resolutions: vec![],
+            listing_input: None,
+            normalized_input: None,
+        }
+    }
+
+    #[test]
+    fn focused_options_are_bounded_and_exclude_other_fields_and_raw_data() {
+        let composer = focused_fixture();
+        let before = serde_json::to_value(&composer).unwrap();
+        let path = PathBuf::from("seller's listing.json");
+        let outcome =
+            focused_field_outcome(&composer, "attribute.size", Some(&path), 1, 0).unwrap();
+        let data = serde_json::to_value(outcome.data).unwrap();
+        assert_eq!(
+            data["options"],
+            json!([{"field":"attribute.size","value":591,"label":"22"}])
+        );
+        assert_eq!(data["field"]["value"], json!([591]));
+        assert_eq!(data["total"], 2);
+        assert_eq!(data["returned"], 1);
+        assert_eq!(data["truncated"], true);
+        assert_eq!(data["issues"], json!([]));
+        assert!(data["field"].get("raw").is_none());
+        assert!(data.get("form").is_none());
+        assert_eq!(
+            data["attribute_selection_payload"],
+            composer.attribute_selection_payload
+        );
+        assert_eq!(outcome.next_actions.len(), 1);
+        assert!(
+            outcome.next_actions[0]
+                .command
+                .contains("--input='seller'\\''s listing.json'")
+        );
+        assert!(
+            outcome.next_actions[0]
+                .command
+                .contains("--option-offset 1")
+        );
+        assert_eq!(serde_json::to_value(&composer).unwrap(), before);
+        for offset in [2, usize::MAX] {
+            let outcome =
+                focused_field_outcome(&composer, "attribute.size", None, 1, offset).unwrap();
+            let data = serde_json::to_value(outcome.data).unwrap();
+            assert_eq!(data["options"], json!([]));
+            assert_eq!(data["truncated"], false);
+            assert!(outcome.next_actions.is_empty());
+        }
+    }
+
+    #[test]
+    fn focused_stdin_continuation_requires_saved_input_and_unknown_fields_fail() {
+        let composer = focused_fixture();
+        let outcome =
+            focused_field_outcome(&composer, "attribute.size", Some(&PathBuf::from("-")), 1, 0)
+                .unwrap();
+        let data = serde_json::to_value(outcome.data).unwrap();
+        assert!(
+            data["guidance"]
+                .as_str()
+                .unwrap()
+                .contains("Save the original stdin")
+        );
+        assert!(
+            outcome.next_actions[0]
+                .command
+                .contains("--input='<saved-listing.json>'")
+        );
+        let error = focused_field_outcome(&composer, "size", None, 20, 0).unwrap_err();
+        assert!(error.to_string().contains("Unknown composer field `size`"));
+        assert!(error.to_string().contains("attribute.size"));
+        assert!(focused_field_outcome(&composer, "attribute.size", None, 0, 0).is_err());
+        assert!(focused_field_outcome(&composer, "attribute.size", None, 101, 0).is_err());
+    }
+
     #[test]
     fn generated_search_accepts_leading_hyphen_values() {
         use clap::Parser;
         let command = search_command(
             "- shoes",
+            true,
             Some("- title"),
             Some("- lightly used"),
             None,
@@ -621,6 +884,7 @@ mod tests {
         let outcome = execute(
             PortalId::Fi,
             VintedCategoryCommand::Search {
+                marketplace_evidence: false,
                 keyword: "reppu".into(),
                 title: None,
                 description: None,
@@ -638,6 +902,11 @@ mod tests {
         let CommandData::VintedCategories(result) = outcome.data else {
             panic!("expected normalized category search output");
         };
+        assert!(search_api.requests.lock().unwrap().is_empty());
+        assert_eq!(
+            serde_json::to_value(&result.stages).unwrap()["marketplace"],
+            "not_requested"
+        );
         assert_eq!(result.portal, PortalId::Fi);
         assert_eq!(result.request_locale, "fi-FI");
         assert_eq!(result.query.as_deref(), Some("reppu"));
@@ -669,6 +938,7 @@ mod tests {
         let outcome = execute(
             PortalId::Fi,
             VintedCategoryCommand::Search {
+                marketplace_evidence: false,
                 keyword: "backpack".into(),
                 title: None,
                 description: None,
@@ -750,6 +1020,7 @@ mod tests {
         let outcome = execute(
             PortalId::Fi,
             VintedCategoryCommand::Search {
+                marketplace_evidence: true,
                 keyword: "paljasjalkakengät".into(),
                 title: Some("Vibram FiveFingers miesten juoksukengät".into()),
                 description: Some("Kevyet paljasjalkakengät maastojuoksuun".into()),
@@ -819,6 +1090,7 @@ mod tests {
             let outcome = execute(
                 PortalId::Fi,
                 VintedCategoryCommand::Search {
+                    marketplace_evidence: true,
                     keyword: "Reput".into(),
                     title: Some("Seller's bag".into()),
                     description: None,
@@ -943,6 +1215,7 @@ mod tests {
         let outcome = execute(
             PortalId::Fi,
             VintedCategoryCommand::Search {
+                marketplace_evidence: false,
                 keyword: "Asusteet".into(),
                 title: Some("Seller's bag".into()),
                 description: Some("Line one\nLine two".into()),
@@ -992,6 +1265,7 @@ mod tests {
                 execute(
                     PortalId::Fi,
                     VintedCategoryCommand::Search {
+                        marketplace_evidence: false,
                         keyword,
                         title: None,
                         description: None,

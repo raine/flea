@@ -758,7 +758,13 @@ fn guided_sell_singleton_hint_requires_selection_and_retains_warning_and_full_pa
         .unwrap(),
     )
     .unwrap();
-    let output = run_discovery_json(&["vinted", "sell", "--input", file.path().to_str().unwrap()]);
+    let output = run_discovery_json(&[
+        "vinted",
+        "sell",
+        "--marketplace-evidence",
+        "--input",
+        file.path().to_str().unwrap(),
+    ]);
     assert_eq!(output["data"]["status"], "needs_input");
     assert_eq!(output["data"]["mutated"], false);
     assert_eq!(output["data"]["safe_to_retry"], true);

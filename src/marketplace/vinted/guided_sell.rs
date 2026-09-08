@@ -137,6 +137,7 @@ pub struct GuidedSellRequest {
     pub input_path: PathBuf,
     pub images: Vec<PathBuf>,
     pub selections: GuidedSelections,
+    pub marketplace_evidence: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -220,6 +221,7 @@ impl<'a> GuidedVintedSell<'a> {
             title: facts.title.as_deref(),
             description: facts.description.as_deref(),
             parent_id: None,
+            marketplace_evidence: request.marketplace_evidence,
             limit: categories::DEFAULT_LIMIT,
             offset: 0,
         };
@@ -496,6 +498,9 @@ fn category_ambiguity(
             discovery.page.limit,
             discovery.page.offset + discovery.page.returned,
         );
+        if request.marketplace_evidence {
+            command.push_str(" --marketplace-evidence");
+        }
         for (flag, value) in [
             ("--title", &facts.title),
             ("--description", &facts.description),
@@ -872,6 +877,9 @@ fn resume_command(request: &GuidedSellRequest, selections: &GuidedSelections) ->
             request.input_path.to_string_lossy()
         })
     );
+    if request.marketplace_evidence {
+        command.push_str(" --marketplace-evidence");
+    }
     for image in &request.images {
         command.push_str(" --image ");
         command.push_str(&shell_word(&image.to_string_lossy()));
@@ -951,6 +959,7 @@ mod tests {
         )
         .unwrap();
         let request = GuidedSellRequest {
+            marketplace_evidence: false,
             input_path: "facts.json".into(),
             images: vec![],
             selections: GuidedSelections::default(),
@@ -975,6 +984,7 @@ mod tests {
     #[test]
     fn consumed_stdin_is_never_replayed_in_resume_commands() {
         let request = GuidedSellRequest {
+            marketplace_evidence: false,
             input_path: "-".into(),
             images: vec!["front.jpg".into(), "back.jpg".into()],
             selections: GuidedSelections::parse(&["brand=12".into()]).unwrap(),
@@ -989,6 +999,7 @@ mod tests {
     #[test]
     fn resume_commands_preserve_scoped_selections_and_images() {
         let request = GuidedSellRequest {
+            marketplace_evidence: false,
             input_path: "facts file.json".into(),
             images: vec!["front photo.jpg".into()],
             selections: GuidedSelections::parse(&["category=12".into()]).unwrap(),

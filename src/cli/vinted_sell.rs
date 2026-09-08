@@ -27,6 +27,9 @@ pub struct VintedSellArgs {
     /// Opaque runtime choice from an earlier guided result, as FIELD=ID.
     #[arg(long, value_name = "FIELD=ID")]
     pub select: Vec<String>,
+    /// Request optional marketplace-count evidence during category discovery.
+    #[arg(long)]
+    pub marketplace_evidence: bool,
 }
 
 pub async fn execute(
@@ -38,6 +41,7 @@ pub async fn execute(
 ) -> Result<CommandOutcome, AppError> {
     let facts = read_facts(&args.input)?;
     let request = GuidedSellRequest {
+        marketplace_evidence: args.marketplace_evidence,
         input_path: args.input,
         images: args.image,
         selections: GuidedSelections::parse(&args.select)?,

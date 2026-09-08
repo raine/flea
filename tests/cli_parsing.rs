@@ -596,3 +596,62 @@ fn vinted_category_rejects_raw_pagination_conflicts_and_invalid_bounds() {
         assert!(Cli::try_parse_from(args.clone()).is_err(), "{args:?}");
     }
 }
+
+#[test]
+fn composer_focused_options_require_field_and_preserve_existing_modes() {
+    let base = ["flea", "vinted", "category", "compose", "2749"];
+    for flags in [
+        vec![],
+        vec!["--full"],
+        vec!["--readiness"],
+        vec![
+            "--field",
+            "attribute.size",
+            "--input",
+            "listing.json",
+            "--option-limit",
+            "1",
+            "--option-offset",
+            "20",
+        ],
+        vec![
+            "--field",
+            "attribute.condition",
+            "--input",
+            "-",
+            "--option-limit",
+            "100",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(base.into_iter().chain(flags)).is_ok());
+    }
+    for flags in [
+        vec!["--option-limit", "1"],
+        vec!["--option-offset", "0"],
+        vec!["--field", "attribute.size", "--full"],
+        vec!["--field", "attribute.size", "--readiness"],
+        vec!["--field", "attribute.size", "--option-limit", "0"],
+        vec!["--field", "attribute.size", "--option-limit", "101"],
+    ] {
+        assert!(Cli::try_parse_from(base.into_iter().chain(flags)).is_err());
+    }
+}
+
+#[test]
+fn category_search_accepts_opt_in_marketplace_evidence() {
+    assert!(
+        Cli::try_parse_from([
+            "flea",
+            "vinted",
+            "category",
+            "search",
+            "shoes",
+            "--marketplace-evidence",
+            "--limit",
+            "1",
+            "--offset",
+            "2",
+        ])
+        .is_ok()
+    );
+}

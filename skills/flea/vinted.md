@@ -78,6 +78,9 @@ flea vinted listing list
 Prefer `vinted sell` when starting from seller facts rather than opaque IDs. Its
 semantic JSON accepts title, description, price, category phrase, size,
 condition, brand, colors, package size, additional `attributes`, and `images`.
+For seller-confirmed unisex items, set `"is_unisex": true` in the facts JSON.
+Mentioning unisex only in description text does not set the structured flag.
+This flag does not replace selecting an actual category branch in Vinted's tree.
 It performs scoped runtime discovery without mutating remote state. Select a
 current category leaf explicitly with `--select category=ID`, even when search
 returns only one candidate. After category selection, complete unambiguous facts
@@ -112,8 +115,14 @@ fails, follow the returned `listing show` action rather than retrying the update
 ### Find a publication category
 
 The current publication catalog is authoritative. Category search matches
-portal-localized taxonomy labels across complete category paths; optional publication
-search and marketplace recommendations add hints, not selection authority.
+portal-localized taxonomy labels across complete category paths. Publication
+search adds hints, not selection authority. Marketplace-count recommendations
+are opt-in with `--marketplace-evidence` on `category search` or `sell`; normal
+discovery does not call that optional service. If explicitly requested evidence
+fails, its warning remains visible and catalog discovery still works.
+When local path matches exist, hints only annotate those candidates; unrelated
+hint-only results are excluded. Hint-only fallback is used when local matching
+finds nothing. A successful hint stage does not mean every hint was included.
 Supply known title and description as recommendation context. Inspect full
 paths, leaf flags, provenance, warnings, and truncation. Honor `selection_required`.
 When available, `marketplace_evidence.recommendations` contains relative listing
@@ -150,10 +159,20 @@ candidate still requires intentional selection. Category selection alone does
 not mean the listing is ready or authorized for publication.
 
 Composer returns readiness, issues, selected values, brand validation, and
-correction actions. Use `--full` when the next action requires runtime option
-catalogs. Discover size, condition, and other attributes for the chosen category;
-never assume an EU shoe size is its opaque option ID or reuse IDs from another
-branch.
+correction actions. Prefer focused field options instead of dumping `--full`:
+
+```sh
+flea vinted category compose CATEGORY_ID --field attribute.size --input listing.json
+flea vinted category compose CATEGORY_ID --field attribute.condition --input listing.json
+```
+
+Focused output includes only that field's issues and selectable options, with
+`--option-limit` and `--option-offset` pagination. Preserve the same input and
+selection context across pages. Apply the chosen option to the input and rerun
+the composer; never submit group headings. Use `--full` only when the complete
+form is genuinely needed. Discover size, condition, and other attributes for
+the chosen category; never assume an EU shoe size is its opaque option ID or
+reuse IDs from another branch.
 
 Brands and package sizes are category scoped. Colors are portal scoped,
 configuration is account scoped, and attributes are selection scoped. Put

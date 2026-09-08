@@ -85,6 +85,7 @@ pub struct SearchOptions<'a> {
     pub title: Option<&'a str>,
     pub description: Option<&'a str>,
     pub parent_id: Option<u64>,
+    pub marketplace_evidence: bool,
     pub limit: usize,
     pub offset: usize,
 }
@@ -368,6 +369,8 @@ pub async fn discover_in_tree(
     options.validate()?;
     let parent = tree.parent(options.parent_id)?;
     let mut candidates = tree.local_matches(options);
+    // Hints can corroborate local matches, but only supply candidates as a fallback.
+    let allow_hint_only = candidates.is_empty();
     let mut warnings = Vec::new();
     let mut suggestions = Vec::new();
     let mut stages = DiscoveryStages {
@@ -398,6 +401,7 @@ pub async fn discover_in_tree(
                     id,
                     options.parent_id,
                     MatchSource::PublicationSearch,
+                    allow_hint_only,
                 );
             }
             stages.publication_search = if matched {
@@ -416,11 +420,7 @@ pub async fn discover_in_tree(
         }
     }
     let mut marketplace_evidence = None;
-    let has_context = [options.title, options.description]
-        .into_iter()
-        .flatten()
-        .any(|text| !text.trim().is_empty());
-    if candidates.is_empty() || candidates.len() > 8 || has_context {
+    if options.marketplace_evidence {
         match category_evidence::discover(
             portal,
             RecommendationContext {
@@ -473,6 +473,7 @@ pub async fn discover_in_tree(
                         id,
                         options.parent_id,
                         MatchSource::Marketplace,
+                        allow_hint_only,
                     );
                 }
                 marketplace_evidence = Some(result.evidence);
@@ -504,6 +505,7 @@ fn merge_candidate(
     id: u64,
     parent: Option<u64>,
     source: MatchSource,
+    allow_hint_only: bool,
 ) -> bool {
     let Some(node) = tree.get(id).filter(|_| tree.in_scope(id, parent)) else {
         return false;
@@ -515,12 +517,13 @@ fn merge_candidate(
         if !candidate.match_sources.contains(&source) {
             candidate.match_sources.push(source);
         }
-    } else {
+    } else if allow_hint_only {
         candidates.push(CategoryCandidate {
             node: node.clone(),
             match_sources: vec![source],
         });
     }
+    // Stage success records valid in-scope evidence, even when it is not a candidate.
     true
 }
 fn stage_warning(code: &str, stage: &str, error: AppError) -> Warning {
@@ -552,6 +555,7 @@ mod tests {
             title: None,
             description: None,
             parent_id: None,
+            marketplace_evidence: false,
             limit: DEFAULT_LIMIT,
             offset: 0,
         }
@@ -682,7 +686,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn optional_failures_preserve_local_and_direct_candidates() {
+    async fn optional_failures_preserve_local_candidates() {
         for keyword in [
             None,
             Some(json!({"catalog_ids":[7,999],"suggestions":[{"id":6,"title":"ignored"}]})),
@@ -692,6 +696,7 @@ mod tests {
                 requests: Mutex::new(vec![]),
             };
             let mut o = options("poikien tarralenkkitossut");
+            o.marketplace_evidence = true;
             o.title = Some("seller title");
             let result = discover(PortalId::Fi, o, &credentials, &api, &NoMarketplace)
                 .await
@@ -711,11 +716,134 @@ mod tests {
                 1
             );
             if api.keyword.is_some() {
-                assert_eq!(ids(&result.page), [4, 7]);
+                assert_eq!(ids(&result.page), [4]);
+                assert_eq!(result.stages.publication_search, StageStatus::Ok);
             } else {
                 assert_eq!(result.warnings.len(), 2);
             }
         }
+    }
+
+    fn swimming_tree() -> CatalogTree {
+        CatalogTree::from_response(&json!({"catalogs":[
+            {"id":1,"title":"Lapset","catalogs":[
+                {"id":2,"title":"Poikien","catalogs":[
+                    {"id":2749,"title":"Uimakengät"}
+                ]},
+                {"id":5,"title":"Tyttöjen","catalogs":[
+                    {"id":2750,"title":"Uimakengät"}
+                ]}
+            ]},
+            {"id":8,"title":"Koti","catalogs":[
+                {"id":9,"title":"Huonekalut"}
+            ]}
+        ]}))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn local_leaves_are_not_padded_by_hint_only_furniture() {
+        let tree = swimming_tree();
+        let api = Api {
+            keyword: Some(json!({"catalog_ids":[9,2749,2750,999]})),
+            requests: Mutex::new(vec![]),
+        };
+        for (parent, offset, expected, total, truncated) in [
+            (None, 0, vec![2749], 2, true),
+            (None, 1, vec![2750], 2, false),
+            (None, 2, vec![], 2, false),
+            (Some(2), 0, vec![2749], 1, false),
+        ] {
+            let mut o = options("Uimakengät");
+            o.parent_id = parent;
+            o.limit = 1;
+            o.offset = offset;
+            let result =
+                discover_in_tree(PortalId::Fi, o, &tree, &credentials, &api, &NoMarketplace)
+                    .await
+                    .unwrap();
+            assert_eq!(ids(&result.page), expected);
+            assert_eq!(result.page.total, total);
+            assert_eq!(result.page.returned, expected.len());
+            assert_eq!(result.page.offset, offset);
+            assert_eq!(result.page.truncated, truncated);
+            assert_eq!(result.page.parent.as_ref().map(|p| p.category.id), parent);
+            assert!(result.selection_required);
+            assert_eq!(result.stages.publication_search, StageStatus::Ok);
+            assert_eq!(result.stages.marketplace, StageStatus::NotRequested);
+            for candidate in result.page.categories {
+                assert!(candidate.node.category.leaf);
+                assert_eq!(
+                    candidate.match_sources,
+                    [MatchSource::CatalogExact, MatchSource::PublicationSearch]
+                );
+            }
+        }
+        assert_eq!(ids(&tree.browse(Some(8), 20, 0).unwrap()), [9]);
+    }
+
+    #[tokio::test]
+    async fn no_local_match_preserves_hint_fallback_and_pagination() {
+        let tree = swimming_tree();
+        let api = Api {
+            keyword: Some(json!({"catalog_ids":[9,2749,2750,999]})),
+            requests: Mutex::new(vec![]),
+        };
+        for (parent, offset, expected, total, truncated) in [
+            (None, 0, vec![9], 3, true),
+            (None, 1, vec![2749], 3, true),
+            (None, 2, vec![2750], 3, false),
+            (Some(2), 0, vec![2749], 1, false),
+            // Local matches outside the requested parent do not disable fallback.
+            (Some(8), 0, vec![9], 1, false),
+        ] {
+            let mut o = options(if parent == Some(8) {
+                "Uimakengät"
+            } else {
+                "swimming shoes"
+            });
+            o.parent_id = parent;
+            o.limit = 1;
+            o.offset = offset;
+            let result =
+                discover_in_tree(PortalId::Fi, o, &tree, &credentials, &api, &NoMarketplace)
+                    .await
+                    .unwrap();
+            assert_eq!(ids(&result.page), expected);
+            assert_eq!(result.page.total, total);
+            assert_eq!(result.page.returned, expected.len());
+            assert_eq!(result.page.truncated, truncated);
+            assert!(result.selection_required);
+            assert_eq!(result.stages.publication_search, StageStatus::Ok);
+            for candidate in result.page.categories {
+                assert_eq!(candidate.match_sources, [MatchSource::PublicationSearch]);
+            }
+        }
+    }
+
+    #[test]
+    fn marketplace_hints_corroborate_but_do_not_expand_local_matches() {
+        let tree = swimming_tree();
+        let mut candidates = tree.local_matches(options("Uimakengät"));
+        for id in [9, 2749, 999] {
+            assert_eq!(
+                merge_candidate(
+                    &tree,
+                    &mut candidates,
+                    id,
+                    None,
+                    MatchSource::Marketplace,
+                    false
+                ),
+                id != 999,
+            );
+        }
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            candidates[0].match_sources,
+            [MatchSource::CatalogExact, MatchSource::Marketplace]
+        );
+        assert_eq!(candidates[1].match_sources, [MatchSource::CatalogExact]);
     }
 
     #[tokio::test]

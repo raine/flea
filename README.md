@@ -238,9 +238,11 @@ flea vinted listing list
 ```
 
 Publication category search uses the current authenticated publication catalog
-and matches localized words across complete category paths. Publication keyword
-search and marketplace ranking are optional hints: failures cannot erase valid
-catalog matches. Supply title and description as recommendation context, not as
+and matches localized words across complete category paths. When local matches
+exist, unrelated hint-only candidates are excluded. Publication keyword search
+adds optional hints; marketplace-count ranking is opt-in with
+`--marketplace-evidence` on category search or guided sell. Hint failures cannot
+erase valid catalog matches. Supply title and description as context, not as
 proof of the correct category. Results distinguish browse targets from leaves
 and require intentional selection, even for a single candidate.
 
