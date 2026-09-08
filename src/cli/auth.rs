@@ -76,7 +76,7 @@ pub struct VintedAuthArgs {
 pub enum VintedAuthCommand {
     #[command(
         about = "Sign in for Vinted catalog and publication commands",
-        long_about = "Set up both Vinted authentication layers: account credentials for catalog operations and the persistent interactive browser required for publication. Use --api or --browser to set up only one layer."
+        long_about = "Set up both Vinted authentication layers: account credentials for catalog operations and the extension-connected browser required for publication. Use --api or --browser to set up only one layer."
     )]
     Login(VintedAuthScopeArgs),
     #[command(
@@ -86,7 +86,7 @@ pub enum VintedAuthCommand {
     Status(VintedAuthScopeArgs),
     #[command(
         about = "Clear Vinted authentication state",
-        long_about = "Clear both account credentials and the persistent publication browser profile. Use --api or --browser to clear only one layer."
+        long_about = "Clear account credentials. The extension uses your normal browser, so sign out on the Vinted website manually to clear browser authentication. Use --api to clear only account credentials or --browser for browser logout guidance."
     )]
     Logout(VintedAuthScopeArgs),
 }
@@ -96,7 +96,7 @@ pub struct VintedAuthScopeArgs {
     /// Operate only on account credentials used by catalog API requests.
     #[arg(long, conflicts_with = "browser")]
     pub api: bool,
-    /// Operate only on the persistent browser used by publication requests.
+    /// Operate only on extension authentication used by publication requests.
     #[arg(long, conflicts_with = "api")]
     pub browser: bool,
 }

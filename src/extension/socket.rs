@@ -498,6 +498,10 @@ mod tests {
         let server = std::thread::spawn(move || {
             loop {
                 if let Ok((mut stream, _)) = socket.listener.accept() {
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(1)))
+                        .unwrap();
                     let request = protocol::read_frame(&mut stream, protocol::MAX_MESSAGE).unwrap();
                     let reply = json!({"id": request["id"], "error": "secret credential"});
                     protocol::write_frame(&mut stream, &protocol::encode(&reply).unwrap()).unwrap();

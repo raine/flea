@@ -1,10 +1,6 @@
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::{Mutex, OnceLock},
-};
+use std::{future::Future, pin::Pin};
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::{
     error::AppError,
@@ -13,65 +9,22 @@ use crate::{
         vinted::{
             listing_edit::VintedListingEditApi,
             publication::decode_mutation_response,
-            web::VintedWebSession,
-            web_publication::{browser_gate_error, decode_browser_response, json_request_script},
+            web::{VintedWebSession, request_command},
+            web_publication::{browser_gate_error, decode_browser_response},
         },
     },
 };
 
-pub struct VintedWebListingEditApi {
-    browser_url: Option<url::Url>,
-    session: OnceLock<VintedWebSession>,
-    csrf_token: Mutex<Option<String>>,
-}
+pub struct VintedWebListingEditApi;
 
 impl VintedWebListingEditApi {
     pub const fn new() -> Self {
-        Self::with_browser_url(None)
-    }
-
-    pub const fn with_browser_url(browser_url: Option<url::Url>) -> Self {
-        Self {
-            browser_url,
-            session: OnceLock::new(),
-            csrf_token: Mutex::new(None),
-        }
-    }
-
-    fn session(&self) -> Result<&VintedWebSession, AppError> {
-        if let Some(session) = self.session.get() {
-            return Ok(session);
-        }
-        let session =
-            VintedWebSession::discover_with_browser_url(PortalId::Fi, self.browser_url.as_ref())?;
-        Ok(self.session.get_or_init(|| session))
-    }
-
-    fn csrf_token(&self, session: &VintedWebSession) -> Result<String, AppError> {
-        let mut cached = self.csrf_token.lock().map_err(|_| {
-            AppError::unexpected("failed to access the Vinted browser security token")
-        })?;
-        if let Some(token) = cached.as_ref() {
-            return Ok(token.clone());
-        }
-        let token = session.csrf_token()?;
-        *cached = Some(token.clone());
-        Ok(token)
+        Self
     }
 
     async fn update_request(&self, item_id: &str, body: Value) -> Result<Value, AppError> {
-        let session = self.session().map_err(mutation_not_attempted)?;
-        let result = if session.uses_extension() {
-            session.extension_request(json!({
-                "action": "request", "method": "PUT",
-                "path": format!("/api/v2/item_upload/items/{item_id}"), "body": body,
-            }))?
-        } else {
-            let csrf_token = self.csrf_token(session).map_err(mutation_not_attempted)?;
-            let script =
-                update_script(item_id, &body, &csrf_token).map_err(mutation_not_attempted)?;
-            session.evaluate(&script)?
-        };
+        let session = VintedWebSession::discover(PortalId::Fi).map_err(mutation_not_attempted)?;
+        let result = session.extension_request(update_command(item_id, &body))?;
         let response = decode_browser_response(result)?;
         if let Some(error) = browser_gate_error(response.status) {
             return Err(error);
@@ -96,12 +49,11 @@ impl VintedListingEditApi for VintedWebListingEditApi {
     }
 }
 
-fn update_script(item_id: &str, body: &Value, csrf_token: &str) -> Result<String, AppError> {
-    json_request_script(
+fn update_command(item_id: &str, body: &Value) -> Value {
+    request_command(
         "PUT",
         &format!("/api/v2/item_upload/items/{item_id}"),
         Some(body),
-        Some(csrf_token),
     )
 }
 
@@ -120,13 +72,12 @@ fn mutation_not_attempted(mut error: AppError) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use base64::{Engine, engine::general_purpose::STANDARD};
     use serde_json::json;
 
     use super::*;
 
     #[test]
-    fn update_uses_exact_native_browser_method_path_and_headers() {
+    fn update_uses_defined_extension_command_and_preserves_the_body() {
         let body = json!({
             "item": {
                 "id": "42",
@@ -140,47 +91,38 @@ mod tests {
             "parcel": null,
             "upload_session_id": "4f557be2-1900-4dd5-ae51-0a4da54bf462"
         });
-        let token = "12345678-1234-1234-1234-123456789abc";
-        let script = update_script("42", &body, token).unwrap();
-        let encoded = STANDARD.encode(serde_json::to_vec(&body).unwrap());
-
-        assert!(script.contains("const method = \"PUT\""));
-        assert!(script.contains("/api/v2/item_upload/items/42"));
-        assert!(script.contains(&format!("const encodedBody = \"{encoded}\"")));
-        assert!(script.contains("credentials: 'include'"));
-        assert!(script.contains("headers['x-csrf-token']"));
-        assert!(script.contains("headers['x-upload-form'] = 'true'"));
-        assert!(script.contains("headers['x-enable-dynamic-attribute-condition'] = 'true'"));
-        assert!(script.contains("item.price = Number(item.price)"));
-        assert!(!script.contains("Changed"));
+        assert_eq!(
+            update_command("42", &body),
+            json!({
+                "action": "request", "method": "PUT",
+                "path": "/api/v2/item_upload/items/42", "body": body
+            })
+        );
     }
 
     #[test]
     fn preflight_errors_are_annotated_without_losing_details_or_guidance() {
-        let mut error = AppError::authentication("vinted.web_csrf_unavailable", "sign in")
-            .with_details(json!({"stage": "csrf"}));
+        let mut error = AppError::usage("run flea extension setup")
+            .with_details(json!({"stage": "extension_setup"}));
         error.safe_to_retry = true;
         error
             .next_actions
             .push(crate::domain::envelope::NextAction {
-                command: "flea vinted auth status".to_owned(),
+                command: "flea extension setup".to_owned(),
             });
 
         let error = mutation_not_attempted(error);
 
-        assert_eq!(error.details.as_ref().unwrap()["stage"], "csrf");
+        assert_eq!(error.details.as_ref().unwrap()["stage"], "extension_setup");
         assert_eq!(error.details.as_ref().unwrap()["mutation_attempted"], false);
         assert!(error.safe_to_retry);
-        assert_eq!(error.next_actions[0].command, "flea vinted auth status");
+        assert_eq!(error.next_actions[0].command, "flea extension setup");
     }
 
     #[test]
-    fn evaluated_request_errors_are_not_annotated_as_unattempted() {
-        let error = decode_browser_response(json!({"local_error": {
-            "code": "vinted.web_browser_request_failed",
-            "message": "fetch failed"
-        }}))
-        .unwrap_err();
+    fn invalid_extension_responses_are_not_annotated_as_unattempted() {
+        let error =
+            decode_browser_response(json!({"body": {"message": "request failed"}})).unwrap_err();
 
         assert_ne!(
             error

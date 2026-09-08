@@ -120,8 +120,8 @@ pub(super) fn configured() -> bool {
 }
 
 fn installed_at(root: &Path) -> bool {
-    // Installation remains selected across upgrades and damaged artifacts.
-    // A broken installation must not switch to a different browser session.
+    // Missing setup is distinct from an inaccessible or damaged installation.
+    // Transport validation reports problems with existing installation artifacts.
     !matches!(fs::symlink_metadata(root), Err(error) if error.kind() == io::ErrorKind::NotFound)
 }
 

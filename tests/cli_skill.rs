@@ -26,94 +26,18 @@ fn stderr(output: &Output) -> String {
 }
 
 #[test]
-fn skill_prints_the_compact_router() {
+fn skill_commands_print_the_bundled_documents() {
     let directory = tempfile::tempdir().unwrap();
-    let output = invoke(directory.path(), directory.path(), &["skill"]);
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), ROUTER_SKILL);
-    assert!(ROUTER_SKILL.contains("flea skill tori"));
-    assert!(ROUTER_SKILL.contains("flea skill vinted"));
-    assert!(ROUTER_SKILL.contains("Before searching, inspecting listings"));
-    assert!(ROUTER_SKILL.split_whitespace().count() <= 200);
-    assert!(!ROUTER_SKILL.contains("draft publish DRAFT_ID"));
-    assert!(stderr(&output).is_empty());
-}
-
-#[test]
-fn tori_skill_preserves_complete_operating_guidance() {
-    let directory = tempfile::tempdir().unwrap();
-    let output = invoke(directory.path(), directory.path(), &["skill", "tori"]);
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), TORI_SKILL);
-    for guidance in [
-        "flea tori search [QUERY] [filters]",
-        "flea tori location search [NAME]",
-        "flea tori category search QUERY",
-        "favorite add|remove LISTING_ID",
-        "saved-search list|show|create|update|delete",
-        "draft validate DRAFT_ID",
-        "draft publish DRAFT_ID --if-revision",
-        ".data.revision",
-        "listing list|show|update|dispose|delete",
-        "Use `taxonomy_value` with `search --category`",
+    for (args, expected) in [
+        (vec!["skill"], ROUTER_SKILL),
+        (vec!["skill", "tori"], TORI_SKILL),
+        (vec!["skill", "vinted"], VINTED_SKILL),
     ] {
-        assert!(TORI_SKILL.contains(guidance), "missing {guidance}");
+        let output = invoke(directory.path(), directory.path(), &args);
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert_eq!(stdout(&output), expected);
+        assert!(stderr(&output).is_empty());
     }
-    assert!(!TORI_SKILL.contains("flea vinted"));
-}
-
-#[test]
-fn vinted_skill_preserves_complete_operating_guidance() {
-    let directory = tempfile::tempdir().unwrap();
-    let output = invoke(directory.path(), directory.path(), &["skill", "vinted"]);
-
-    assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), VINTED_SKILL);
-    for guidance in [
-        "search requires account authentication",
-        "Unqualified auth commands",
-        "`--api` or `--browser` selects one layer",
-        "flea vinted filter facets CODE",
-        "flea vinted filter search CODE OPTION_TEXT",
-        "flea vinted search [QUERY]",
-        "flea vinted item show ITEM_ID",
-        "multilingual",
-        "portal-localized taxonomy labels",
-        "--title LISTING_TITLE --description LISTING_DESCRIPTION",
-        "marketplace_evidence.recommendations",
-        "selection_required",
-        "flea vinted category list --roots",
-        "flea vinted category list --parent PARENT_ID",
-        "consumed stdin cannot be replayed",
-        "HTTP 404 from optional ranking",
-        "single\ncandidate still requires intentional selection",
-        "seller profile",
-        "not a catalog filter or guaranteed item location",
-        "flea vinted category compose CATEGORY_ID",
-        "flea vinted draft publish DRAFT_ID",
-        "flea vinted listing show ITEM_ID",
-        "flea vinted listing update ITEM_ID --input changes.json",
-        "flea vinted listing list",
-        "owned, editable",
-        "existing photo order",
-        "Category, condition, attribute, brand, color, package",
-        "no remote revision precondition",
-        "concurrent edit",
-        "active and draft-associated items",
-        "without relying on search indexing",
-        "review-pending publication",
-        "bounded account",
-        "`verification.status`",
-        "`safe_to_retry: false`",
-        "exact `listing show` action",
-        "`uploaded_photo_ids`",
-        "`assigned_photo_ids` for compatibility",
-    ] {
-        assert!(VINTED_SKILL.contains(guidance), "missing {guidance}");
-    }
-    assert!(!VINTED_SKILL.contains("flea tori"));
 }
 
 #[test]

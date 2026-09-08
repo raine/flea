@@ -20,15 +20,12 @@ flea skill tori
 flea skill vinted
 ```
 
-Use `flea skill tori` for every Tori task and `flea skill vinted` for every
-Vinted task. Follow the selected guide without loading the other marketplace's
-guide.
+Load only the guide for the marketplace involved.
 
-## Browser selection
+## Vinted browser setup
 
-Use `--browser-url http://localhost:9222` for existing Chrome; macOS/Linux reuse
-connections automatically. Preserve it on follow-up commands. See
-`flea skill vinted` for approval and disconnect guidance.
+Vinted selling requires Flea's Chrome extension and a signed-in Vinted tab.
+See `flea skill vinted` for setup and logout instructions.
 
 ## Shared safety rules
 

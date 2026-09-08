@@ -2,12 +2,8 @@
 
 ## Unreleased
 
-- Publish and edit Vinted listings with Chrome alone, without installing
-  agent-browser
-- Use an existing Chrome session with `--browser-url`, including Chrome's
-  approval-based remote debugging; macOS and Linux reuse approved connections
-  across commands until you run `flea browser disconnect`
-- Open Flea's dedicated Chrome profile for manual browsing with `flea browser`
+- Publish and edit Vinted listings through the required Chrome extension in
+  your normal signed-in browser; run `flea extension setup` to get started
 - Update the title, description, and price of your Vinted listings without
   replacing their photos or other listing details
 - Improve listing-update verification while Vinted processes changes, and show

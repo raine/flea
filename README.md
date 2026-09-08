@@ -65,9 +65,9 @@ through their Nix profile or configuration. Flea refuses to overwrite those
 managed installations. No background update checks are performed.
 
 Progress goes to stderr, with a plain success message by default. Use
-`flea update --format json` for a structured result. Authentication, browser
-profiles, and installed agent skills are unchanged; run `flea skill install`
-after updating to refresh the bundled skill.
+`flea update --format json` for a structured result. Authentication and installed
+agent skills are unchanged; run `flea skill install` after updating to refresh
+the bundled skill.
 
 ## Get started
 
@@ -97,6 +97,14 @@ flea tori auth login
 flea vinted auth login
 ```
 
+**Why does Vinted need an extension?** Flea publishes and edits listings through
+Vinted's signed-in website. These requests use your browser session and the
+page's security tokens, and Vinted may ask you to complete a human verification
+check. The extension lets Flea make those requests from your normal Vinted tab
+without exporting browser credentials, launching a separate Chrome profile, or
+enabling a debugging port. Searching and browsing use separate API credentials
+and do not need the extension.
+
 For Vinted selling, connect Flea to your normal Google Chrome on macOS or Linux:
 
 ```sh
@@ -111,10 +119,9 @@ paste, and press Return. Explicit `--format json` or `--format toon` keeps
 structured output without changing the clipboard. Open or reload one
 `https://www.vinted.fi` tab and sign in normally.
 
-Flea automatically uses the extension after setup. No separate browser profile,
-debugging port, or repeated connection approval is required. Keep exactly one
-Vinted tab open in the Chrome profile with the extension installed. Check the
-connection with:
+Flea automatically uses the extension after setup. Keep exactly one Vinted tab
+open in the Chrome profile with the extension installed. Check the connection
+with:
 
 ```sh
 flea vinted auth status --browser
@@ -125,25 +132,6 @@ credentials are still configured through `flea vinted auth login`. Sign out of
 the shared browser session on the Vinted website; Flea does not clear your normal
 Chrome cookies. Run setup again after moving the Flea executable, or to install
 updated extension files, then reload the extension and Vinted tab.
-
-Without extension setup, Flea retains its automatically managed, separate Chrome
-profile (also supporting Chromium on Linux). Explicit `--browser-url` overrides
-the extension if you prefer CDP.
-
-To use an existing Chrome through CDP instead, enable debugging in
-`chrome://inspect/#remote-debugging`, then run:
-
-```sh
-flea --browser-url http://localhost:9222 vinted auth status --browser
-```
-
-On macOS and Linux, Flea automatically keeps that approved connection alive in a
-background helper. Keep passing the same URL on subsequent commands; no separate
-server command or terminal is needed. To release access without closing Chrome:
-
-```sh
-flea browser disconnect --browser-url http://localhost:9222
-```
 
 ### 3. Ask your agent
 
@@ -191,11 +179,9 @@ flea skill vinted
   Your original files are left untouched.
 - JPEG and PNG are supported, along with HEIC/HEIF through macOS's built-in
   converter or the optional `heif-convert` tool on other platforms.
-- Credentials and Vinted's dedicated browser profile are stored locally.
-  Sign out with `flea tori auth logout` or `flea vinted auth logout`. When using
-  the extension, sign out of Vinted directly in Chrome.
-- Keep Flea's browser debugging connection local. Never expose it to the
-  network. Prefer the extension for access to your everyday browser session.
+- Catalog credentials are stored locally. Sign out with `flea tori auth logout`
+  or `flea vinted auth logout --api`. To sign out of Vinted's shared browser session,
+  use Vinted's website in Chrome. Flea does not clear normal Chrome cookies.
 - The extension is scoped to Vinted Finland. It exposes defined marketplace
   requests, not arbitrary JavaScript, and keeps browser credentials in Chrome.
 

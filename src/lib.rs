@@ -1,4 +1,3 @@
-mod browser;
 mod cli;
 mod diagnostics;
 pub mod domain;
@@ -91,14 +90,6 @@ where
         Ok(cli) => cli,
         Err(result) => return result,
     };
-    if matches!(cli.command, cli::Command::BrowserSession) {
-        let result = browser::serve_session(cli.browser_url.as_ref()).map(|()| {
-            cli::outcome::CommandOutcome::new(cli::outcome::CommandData::BrowserDisconnected {
-                disconnected: true,
-            })
-        });
-        return finish(cli.format, cli.format_explicit, result, None, None);
-    }
     let command = cli.command.telemetry_name();
     let context = cli.command.context();
 
@@ -114,8 +105,7 @@ where
             );
         }
     };
-    let dependencies =
-        cli::runtime::ApplicationDependencies::production_with_browser_url(cli.browser_url.clone());
+    let dependencies = cli::runtime::ApplicationDependencies::production();
     session.run(&command, || {
         let result = run_command(cli, &dependencies, Some(session.context()));
         let exit_code = result.exit_code;
@@ -166,22 +156,6 @@ fn run_command(
     dependencies: &cli::runtime::ApplicationDependencies,
     diagnostics: Option<&DiagnosticsContext>,
 ) -> RunResult {
-    if cli.browser_url.is_some()
-        && matches!(
-            cli.command,
-            cli::Command::Browser(cli::BrowserArgs { command: None })
-        )
-    {
-        return finish(
-            cli.format,
-            cli.format_explicit,
-            Err(AppError::usage(
-                "--browser-url cannot be used with flea browser",
-            )),
-            diagnostics,
-            None,
-        );
-    }
     let format = cli.format;
     let format_explicit = cli.format_explicit;
     let context = cli.command.context();

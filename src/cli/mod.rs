@@ -44,10 +44,6 @@ pub struct Cli {
     #[arg(long, global = true, value_enum, default_value_t)]
     pub format: OutputFormat,
 
-    /// Use an existing Chrome debugging HTTP URL; reuse its session on macOS/Linux.
-    #[arg(long, global = true, value_parser = crate::browser::parse_browser_url)]
-    pub browser_url: Option<url::Url>,
-
     #[arg(skip)]
     pub format_explicit: bool,
 
@@ -67,15 +63,6 @@ pub enum Command {
         long_about = "Install the bundled Chrome extension and register its native host for Vinted access through your normal signed-in browser. No debugging port is required. After setup, load the printed extension directory in chrome://extensions."
     )]
     Extension(ExtensionArgs),
-    /// Check the extension tab, or open the dedicated browser without debugging.
-    #[command(
-        long_about = "With the extension installed, check the connected Vinted tab. Otherwise open the dedicated Flea Chrome profile without enabling remote debugging. Close any debugging-enabled Flea Chrome instance first. Use browser disconnect --browser-url URL to release a persistent external-browser connection."
-    )]
-    Browser(BrowserArgs),
-
-    #[command(name = "__browser-session", hide = true)]
-    BrowserSession,
-
     #[command(
         about = "Show the marketplace capability matrix",
         long_about = "Show the offline capability matrix for every configured marketplace and portal."
@@ -110,10 +97,8 @@ impl Command {
         match self {
             Self::Tori(_) => Some(MarketplaceContext::TORI_FI),
             Self::Vinted(_) => Some(MarketplaceContext::VINTED_FI),
-            Self::Browser(_)
-            | Self::Extension(_)
+            Self::Extension(_)
             | Self::Update
-            | Self::BrowserSession
             | Self::Capabilities
             | Self::Marketplaces
             | Self::Skill(_)
@@ -126,10 +111,8 @@ impl Command {
         match self {
             Self::Tori(args) => args.command.capability_id(),
             Self::Vinted(args) => args.command.capability_id(),
-            Self::Browser(_)
-            | Self::Extension(_)
+            Self::Extension(_)
             | Self::Update
-            | Self::BrowserSession
             | Self::Capabilities
             | Self::Marketplaces
             | Self::Skill(_)
@@ -146,11 +129,6 @@ impl Command {
             Self::Tori(args) => args.command.telemetry_name(),
             Self::Vinted(args) => args.command.telemetry_name(),
             Self::Skill(_) => "skill".to_owned(),
-            Self::Browser(args) => match args.command {
-                None => "browser".to_owned(),
-                Some(BrowserCommand::Disconnect) => "browser disconnect".to_owned(),
-            },
-            Self::BrowserSession => "browser session".to_owned(),
             Self::Unsupported(_) => "unknown".to_owned(),
         }
     }
@@ -172,21 +150,6 @@ pub enum ExtensionCommand {
         long_about = "Write the bundled extension files and Chrome native messaging manifest on macOS or Linux. Load the printed directory as an unpacked extension, then open or reload one signed-in Vinted Finland tab. Run again after moving the Flea executable or to refresh extension files."
     )]
     Setup,
-}
-
-#[derive(Debug, Args)]
-pub struct BrowserArgs {
-    #[command(subcommand)]
-    pub command: Option<BrowserCommand>,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum BrowserCommand {
-    #[command(
-        about = "Release the persistent connection to an external browser",
-        long_about = "Disconnect the background Flea session selected by --browser-url without closing Chrome or clearing browser data. Waits for any active browser operation to finish."
-    )]
-    Disconnect,
 }
 
 #[derive(Debug, Args)]
@@ -298,7 +261,7 @@ impl ToriCommand {
 pub enum VintedCommand {
     #[command(
         about = "Manage Vinted authentication",
-        long_about = "Set up, inspect, or clear the account credentials and persistent browser session used by Vinted catalog and publication commands."
+        long_about = "Set up, inspect, or clear the account credentials and extension-connected browser used by Vinted catalog and publication commands."
     )]
     Auth(auth::VintedAuthArgs),
     #[command(
@@ -403,55 +366,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn browser_url_is_global_and_validated() {
-        for args in [
-            vec![
-                "flea",
-                "--browser-url",
-                "http://localhost:9222",
-                "vinted",
-                "auth",
-                "status",
-                "--browser",
-            ],
-            vec![
-                "flea",
-                "vinted",
-                "auth",
-                "status",
-                "--browser",
-                "--browser-url",
-                "http://localhost:9222",
-            ],
-        ] {
-            assert_eq!(
-                Cli::try_parse_from(args)
-                    .unwrap()
-                    .browser_url
-                    .unwrap()
-                    .port(),
-                Some(9222)
-            );
-        }
-        for value in [
-            "not-a-url",
-            "file:///tmp/chrome",
-            "http://user:secret@localhost:9222",
-        ] {
-            assert!(Cli::try_parse_from(["flea", "--browser-url", value, "capabilities"]).is_err());
-        }
-        assert!(matches!(
-            Cli::try_parse_from(["flea", "browser"]).unwrap().command,
-            Command::Browser(_)
-        ));
-    }
-
-    #[test]
     fn parsed_command_variants_have_stable_telemetry_names() {
         let cases: &[(&[&str], &str)] = &[
             (&["update"], "update"),
-            (&["browser"], "browser"),
-            (&["browser", "disconnect"], "browser disconnect"),
             (&["capabilities"], "capabilities"),
             (&["marketplaces"], "marketplaces"),
             (&["skill"], "skill"),
@@ -717,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn vinted_publication_uses_the_browser_transport_without_selection() {
+    fn vinted_publication_uses_the_extension_without_transport_selection() {
         assert!(
             Cli::try_parse_from([
                 "flea",

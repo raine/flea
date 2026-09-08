@@ -195,6 +195,110 @@ fn every_command_leaf_parses() {
 }
 
 #[test]
+fn removed_browser_url_flag_is_rejected_at_root_and_nested_positions() {
+    for args in [
+        vec![
+            "flea",
+            "--browser-url",
+            "http://localhost:9222",
+            "capabilities",
+        ],
+        vec![
+            "flea",
+            "--browser-url=http://localhost:9222",
+            "capabilities",
+        ],
+        vec![
+            "flea",
+            "capabilities",
+            "--browser-url",
+            "http://localhost:9222",
+        ],
+        vec![
+            "flea",
+            "vinted",
+            "auth",
+            "status",
+            "--browser",
+            "--browser-url",
+            "http://localhost:9222",
+        ],
+        vec![
+            "flea",
+            "vinted",
+            "auth",
+            "status",
+            "--browser",
+            "--browser-url=http://localhost:9222",
+        ],
+    ] {
+        let error = Cli::try_parse_from(&args).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::UnknownArgument,
+            "{args:?}"
+        );
+        assert!(error.to_string().contains("--browser-url"), "{args:?}");
+    }
+}
+
+#[test]
+fn removed_browser_entrypoints_are_unrecognized_commands() {
+    let command = flea::command();
+    for name in ["browser", "__browser-session"] {
+        assert!(command.find_subcommand(name).is_none());
+    }
+    assert!(
+        command
+            .get_arguments()
+            .all(|arg| arg.get_long() != Some("browser-url"))
+    );
+
+    let dependencies = flea::dependencies::ApplicationDependencies::production();
+    for args in [
+        vec!["browser"],
+        vec!["browser", "disconnect"],
+        vec!["__browser-session"],
+    ] {
+        let result = flea::run_with_dependencies(
+            ["flea", "--format", "json"]
+                .into_iter()
+                .chain(args.iter().copied()),
+            &dependencies,
+        );
+        assert_eq!(result.exit_code, 2, "{args:?}: {}", result.document);
+        let output: serde_json::Value = serde_json::from_str(&result.document).unwrap();
+        assert_eq!(output["error"]["code"], "cli.invalid_usage");
+        assert_eq!(
+            output["error"]["message"],
+            "the root command is not recognized"
+        );
+        assert_eq!(output["error"]["details"]["command"], args[0]);
+    }
+}
+
+#[test]
+fn vinted_auth_browser_flag_selects_extension_authentication() {
+    use flea::cli::auth::{VintedAuthCommand, VintedAuthScope};
+
+    for operation in ["login", "status", "logout"] {
+        let cli = Cli::try_parse_from(["flea", "vinted", "auth", operation, "--browser"]).unwrap();
+        let Command::Vinted(args) = cli.command else {
+            panic!("expected Vinted command");
+        };
+        let VintedCommand::Auth(args) = args.command else {
+            panic!("expected Vinted auth command");
+        };
+        let scope = match args.command {
+            VintedAuthCommand::Login(scope)
+            | VintedAuthCommand::Status(scope)
+            | VintedAuthCommand::Logout(scope) => scope.scope(),
+        };
+        assert_eq!(scope, VintedAuthScope::Browser);
+    }
+}
+
+#[test]
 fn vinted_auth_has_one_command_set_with_exclusive_scope_flags() {
     assert!(Cli::try_parse_from(["flea", "vinted", "auth", "web", "status"]).is_err());
     assert!(

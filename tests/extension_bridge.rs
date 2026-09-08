@@ -86,7 +86,7 @@ fn installed_bridge_serves_real_cli_auth_without_debugging() {
         let request: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(
             request["command"],
-            json!({"action": "request", "method": "GET", "path": "/api/v2/users/current"})
+            json!({"action": "request", "method": "GET", "path": "/api/v2/users/current", "body": null})
         );
         let response =
             json!({"id":request["id"], "result":{"status":200,"body":{"user":{"id":42}}}});
@@ -179,4 +179,28 @@ fn setup_defaults_to_instructions_and_preserves_explicit_formats() {
             assert!(output.starts_with("ok: true\n"));
         }
     }
+}
+
+#[test]
+fn browser_auth_requires_extension_setup() {
+    let home = tempfile::tempdir().unwrap();
+    let result = command(home.path())
+        .args(["vinted", "auth", "status", "--browser", "--format", "json"])
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let result: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(
+        result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("flea extension setup")
+    );
+    assert!(
+        result["next_actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|action| action["command"] == "flea extension setup")
+    );
 }

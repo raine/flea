@@ -13,10 +13,6 @@ name = "extension_bridge"
 path = "tests/extension_bridge.rs"
 
 [[test]]
-name = "browser_session"
-path = "tests/browser_session.rs"
-
-[[test]]
 name = "cli_presentation"
 path = "tests/cli_presentation.rs"
 
@@ -76,7 +72,6 @@ toon-format = { version = "0.5", default-features = false }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 unicode-normalization = "0.1"
 url = { version = "2.5", features = ["serde"] }
 uuid = { version = "1.18", features = ["serde", "v4"] }

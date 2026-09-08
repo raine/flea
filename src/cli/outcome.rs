@@ -109,8 +109,6 @@ pub struct SavedSearchListOutput {
 #[serde(untagged)]
 pub enum CommandData {
     ExtensionSetup(serde_json::Value),
-    Browser { opened: bool, debugging: bool },
-    BrowserDisconnected { disconnected: bool },
     Capabilities(CapabilitiesOutput),
     Marketplaces(MarketplacesOutput),
     MarketplaceCapabilities(MarketplaceCapabilitiesOutput),

@@ -1,19 +1,7 @@
-use std::{path::PathBuf, sync::Mutex};
-
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::{
-    browser::ChromePage,
-    domain::envelope::NextAction,
-    error::AppError,
-    marketplace::{MarketplaceContext, PortalId},
-    storage::{StatePaths, atomic_file::secure_directory},
-};
-
-use super::binding::VINTED_FI_BINDING;
-
-const VINTED_ORIGIN: &str = "https://www.vinted.fi";
+use crate::{domain::envelope::NextAction, error::AppError, marketplace::PortalId};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct VintedWebAuthStatus {
@@ -28,159 +16,47 @@ pub struct VintedWebLogoutOutput {
     pub cleared: bool,
 }
 
-pub struct VintedWebSession {
-    profile: PathBuf,
-    browser_url: Option<url::Url>,
-    page: Mutex<Option<ChromePage>>,
-    extension: bool,
-}
+pub(super) struct VintedWebSession;
 
 impl VintedWebSession {
-    pub fn discover(portal: PortalId) -> Result<Self, AppError> {
-        Self::discover_with_browser_url(portal, None)
+    pub fn discover(_portal: PortalId) -> Result<Self, AppError> {
+        Self::from_configuration(crate::extension::configured())
     }
 
-    pub fn discover_with_browser_url(
-        portal: PortalId,
-        browser_url: Option<&url::Url>,
-    ) -> Result<Self, AppError> {
-        if let Some(browser_url) = browser_url {
-            return Ok(Self {
-                profile: PathBuf::new(),
-                browser_url: Some(browser_url.clone()),
-                page: Mutex::new(None),
-                extension: false,
+    fn from_configuration(configured: bool) -> Result<Self, AppError> {
+        if !configured {
+            let mut error = AppError::usage(
+                "Vinted browser access requires the Flea Chrome extension. Run flea extension setup, follow its installation instructions, then open or reload a Vinted tab in Chrome and sign in.",
+            );
+            error.next_actions.push(NextAction {
+                command: "flea extension setup".to_owned(),
             });
+            return Err(error);
         }
-        if crate::extension::configured() {
-            return Ok(Self {
-                profile: PathBuf::new(),
-                browser_url: None,
-                page: Mutex::new(None),
-                extension: true,
-            });
-        }
-        let context = match portal {
-            PortalId::Fi => MarketplaceContext::VINTED_FI,
-        };
-        let paths = StatePaths::discover(context).map_err(state_error)?;
-        paths.ensure().map_err(state_error)?;
-        let profile = paths.auth_dir().join("web-profile");
-        secure_directory(&profile).map_err(state_error)?;
-        Ok(Self {
-            profile,
-            browser_url: None,
-            page: Mutex::new(None),
-            extension: false,
-        })
+        Ok(Self)
     }
 
-    fn with_page<T>(
-        &self,
-        action: impl FnOnce(&mut ChromePage) -> Result<T, AppError>,
-    ) -> Result<T, AppError> {
-        let mut page = self
-            .page
-            .lock()
-            .map_err(|_| AppError::unexpected("failed to access the Vinted browser"))?;
-        if page.is_none() {
-            *page = Some(match &self.browser_url {
-                Some(endpoint) => ChromePage::open_remote(endpoint, web_publication_url())?,
-                None => ChromePage::open(&self.profile, web_publication_url())?,
-            });
-        }
-        action(page.as_mut().expect("page initialized"))
-    }
-
-    pub fn open_without_debugging(&self) -> Result<(), AppError> {
-        if self.extension {
-            return self.open();
-        }
-        crate::browser::open_without_debugging(&self.profile)
-    }
-
-    pub fn open(&self) -> Result<(), AppError> {
-        if self.extension {
-            return self
-                .extension_request(json!({ "action": "ready" }))
-                .map(|_| ());
-        }
-        self.with_page(|_| Ok(()))
-    }
-
-    pub fn uses_extension(&self) -> bool {
-        self.extension
+    pub fn ready(&self) -> Result<(), AppError> {
+        self.extension_request(json!({ "action": "ready" }))
+            .map(|_| ())
     }
 
     pub fn extension_request(&self, command: Value) -> Result<Value, AppError> {
         crate::extension::request(command)
     }
-
-    pub fn evaluate(&self, script: &str) -> Result<Value, AppError> {
-        if self.extension {
-            return Err(AppError::usage(
-                "the extension accepts defined Vinted commands, not JavaScript",
-            ));
-        }
-        self.with_page(|page| page.evaluate(script))
-    }
-
-    pub fn csrf_token(&self) -> Result<String, AppError> {
-        self.with_page(read_csrf_token)
-    }
-
-    pub fn clear(&self) -> Result<(), AppError> {
-        if self.extension {
-            return Err(AppError::usage(
-                "sign out on the Vinted website to clear your normal Chrome session; Flea does not clear shared browser cookies",
-            ));
-        }
-        match &self.browser_url {
-            Some(endpoint) => ChromePage::clear_remote(endpoint, VINTED_ORIGIN),
-            None => ChromePage::clear_profile(&self.profile, VINTED_ORIGIN),
-        }
-    }
 }
 
-// Vinted embeds CSRF_TOKEN in JSON-encoded inline bootstrap data. Inspect text only;
-// bootstrap script bodies are never evaluated or returned to the client.
-const CSRF_TOKEN_SCRIPT: &str = r#"(() => {
-    const tokens = new Set();
-    for (const script of document.scripts) {
-        if (script.src) continue;
-        for (const match of script.textContent.matchAll(/"CSRF_TOKEN\\?":\\?"([a-f0-9-]{36})\\?"/gi)) {
-            tokens.add(match[1]);
-        }
-    }
-    return tokens.size === 1 ? [...tokens][0] : null;
-})()"#;
-
-fn read_csrf_token(page: &mut ChromePage) -> Result<String, AppError> {
-    page.evaluate(CSRF_TOKEN_SCRIPT)?
-        .as_str()
-        .filter(|token| valid_csrf_token(token))
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            AppError::upstream(
-                "vinted.web_csrf_unavailable",
-                "the Vinted page did not expose an unambiguous publication security token",
-            )
-        })
+pub(super) fn request_command(method: &str, path: &str, body: Option<&Value>) -> Value {
+    json!({ "action": "request", "method": method, "path": path, "body": body })
 }
 
-pub fn begin_login_with_browser_url(
-    portal: PortalId,
-    browser_url: Option<&url::Url>,
-) -> Result<VintedWebAuthStatus, AppError> {
-    let session = VintedWebSession::discover_with_browser_url(portal, browser_url)?;
+pub fn begin_login(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
+    let session = VintedWebSession::discover(portal)?;
     status_with_session(&session)
 }
 
-pub fn login_with_browser_url(
-    portal: PortalId,
-    browser_url: Option<&url::Url>,
-) -> Result<VintedWebAuthStatus, AppError> {
-    let status = begin_login_with_browser_url(portal, browser_url)?;
+pub fn login(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
+    let status = begin_login(portal)?;
     if status.authenticated {
         return Ok(status);
     }
@@ -197,46 +73,27 @@ pub fn login_with_browser_url(
     Err(error)
 }
 
-pub fn status_with_browser_url(
-    portal: PortalId,
-    browser_url: Option<&url::Url>,
-) -> Result<VintedWebAuthStatus, AppError> {
-    begin_login_with_browser_url(portal, browser_url)
+pub fn status(portal: PortalId) -> Result<VintedWebAuthStatus, AppError> {
+    begin_login(portal)
 }
 
-pub fn logout_with_browser_url(
-    portal: PortalId,
-    browser_url: Option<&url::Url>,
-) -> Result<VintedWebLogoutOutput, AppError> {
-    VintedWebSession::discover_with_browser_url(portal, browser_url)?.clear()?;
-    Ok(VintedWebLogoutOutput {
-        authenticated: false,
-        cleared: true,
-    })
+pub fn logout(portal: PortalId) -> Result<VintedWebLogoutOutput, AppError> {
+    VintedWebSession::discover(portal)?;
+    Err(AppError::usage(
+        "sign out on the Vinted website to clear your normal Chrome session; Flea does not clear shared browser cookies",
+    ))
 }
 
 fn status_with_session(session: &VintedWebSession) -> Result<VintedWebAuthStatus, AppError> {
-    let result = if session.uses_extension() {
-        let response = session.extension_request(json!({
-            "action": "request", "method": "GET", "path": "/api/v2/users/current"
-        }))?;
-        let body = response.get("body").unwrap_or(&Value::Null);
-        let user = body.get("user").unwrap_or(body);
-        json!({ "status": response.get("status"), "authenticated": user.get("id").is_some_and(|id| !id.is_null()) })
-    } else {
-        session.evaluate(
-            r#"(async () => {
-            const response = await fetch('/api/v2/users/current', {
-                credentials: 'include',
-                headers: { accept: 'application/json' }
-            });
-            const body = await response.json().catch(() => ({}));
-            const user = body.user || body;
-            return { status: response.status, authenticated: Boolean(response.ok && user.id) };
-        })()"#,
-        )?
-    };
-    let status = result
+    decode_auth_response(session.extension_request(request_command(
+        "GET",
+        "/api/v2/users/current",
+        None,
+    ))?)
+}
+
+fn decode_auth_response(response: Value) -> Result<VintedWebAuthStatus, AppError> {
+    let status = response
         .get("status")
         .and_then(Value::as_u64)
         .ok_or_else(|| {
@@ -245,28 +102,14 @@ fn status_with_session(session: &VintedWebSession) -> Result<VintedWebAuthStatus
                 "the browser authentication check returned an invalid response",
             )
         })?;
-    let authenticated = result
-        .get("authenticated")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let body = response.get("body").unwrap_or(&Value::Null);
+    let user = body.get("user").unwrap_or(body);
+    let authenticated = user.get("id").is_some_and(|id| !id.is_null());
     Ok(VintedWebAuthStatus {
         authenticated: (200..300).contains(&status) && authenticated,
         browser_open: true,
         validation: "online_current_user",
     })
-}
-
-fn valid_csrf_token(token: &str) -> bool {
-    token.len() == 36
-        && token
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
-}
-
-fn web_publication_url() -> &'static str {
-    match VINTED_FI_BINDING.context.portal {
-        PortalId::Fi => "https://www.vinted.fi/items/new",
-    }
 }
 
 pub fn login_action(portal: PortalId) -> NextAction {
@@ -281,72 +124,60 @@ pub fn status_action(portal: PortalId) -> NextAction {
     }
 }
 
-fn state_error(error: std::io::Error) -> AppError {
-    AppError::unexpected("failed to manage the Vinted web browser profile").with_source(error)
-}
-
-#[cfg(test)]
-pub(crate) fn verify_token_fixture(page: &mut ChromePage) -> Result<(), AppError> {
-    let token = "12345678-1234-1234-1234-123456789abc";
-    assert!(read_csrf_token(page).is_err());
-    // Exercise the actual script on both JSON and JSON-encoded bootstrap payloads.
-    for bootstrap in [
-        json!({"CSRF_TOKEN":token}).to_string(),
-        serde_json::to_string(&json!({"CSRF_TOKEN":token}).to_string()).unwrap(),
-    ] {
-        page.evaluate(&format!("document.querySelector('#token-fixture')?.remove(); var s=document.createElement('script'); s.id='token-fixture'; s.type='application/json'; s.textContent={}; document.head.append(s); true", serde_json::to_string(&bootstrap).unwrap()))?;
-        assert_eq!(read_csrf_token(page)?, token);
-    }
-    page.evaluate(r#"document.querySelector('#token-fixture').textContent=JSON.stringify({a:{CSRF_TOKEN:'12345678-1234-1234-1234-123456789abc'},b:{CSRF_TOKEN:'abcdefab-1234-1234-1234-123456789abc'}}); true"#)?;
-    assert!(read_csrf_token(page).is_err());
-    page.evaluate("document.querySelector('#token-fixture').remove(); true")?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn token_values_are_validated_without_exposing_script_errors() {
-        use crate::browser::tests::{peer, reply, request};
-        for value in [
-            Value::Null,
-            json!("private-cookie-value"),
-            json!("12345678-1234-1234-1234-123456789abc"),
+    fn missing_extension_setup_has_actionable_guidance() {
+        let error = VintedWebSession::from_configuration(false).err().unwrap();
+        assert!(error.message.contains("Flea Chrome extension"));
+        assert!(error.message.contains("flea extension setup"));
+        assert_eq!(error.next_actions[0].command, "flea extension setup");
+        assert!(VintedWebSession::from_configuration(true).is_ok());
+    }
+
+    #[test]
+    fn authentication_requests_the_current_user_through_a_defined_command() {
+        assert_eq!(
+            request_command("GET", "/api/v2/users/current", None),
+            json!({
+                "action": "request", "method": "GET",
+                "path": "/api/v2/users/current", "body": null
+            })
+        );
+    }
+
+    #[test]
+    fn authentication_requires_success_and_a_current_user() {
+        for (status, body, authenticated) in [
+            (200, json!({"user": {"id": 42}}), true),
+            (200, json!({"id": 42}), true),
+            (200, json!({"user": {"id": null}}), false),
+            (200, json!({}), false),
+            (401, json!({"user": {"id": 42}}), false),
+            (403, json!({"message": "verification required"}), false),
         ] {
-            let expected = value.as_str().is_some_and(valid_csrf_token);
-            let (mut page, join) = peer(move |socket| {
-                let call = request(socket, "Runtime.evaluate");
-                assert!(
-                    call["params"]["expression"]
-                        .as_str()
-                        .unwrap()
-                        .ends_with(CSRF_TOKEN_SCRIPT)
-                );
-                reply(socket, &call, json!({"result":{"value":value}}));
-            });
-            let result = read_csrf_token(&mut page);
-            assert_eq!(result.is_ok(), expected);
-            if let Err(error) = result {
-                assert!(
-                    !error
-                        .internal_chain()
-                        .join(" ")
-                        .contains("private-cookie-value")
-                );
-            }
-            join.join().unwrap();
+            let response = decode_auth_response(json!({"status": status, "body": body})).unwrap();
+            assert_eq!(response.authenticated, authenticated);
+            assert!(response.browser_open);
+            assert_eq!(response.validation, "online_current_user");
         }
     }
 
     #[test]
-    #[ignore = "requires a signed-in Vinted Chrome profile; read-only"]
-    fn live_browser_read_only_probe() {
-        let session = VintedWebSession::discover(PortalId::Fi).unwrap();
-        assert!(status_with_session(&session).unwrap().authenticated);
-        session.csrf_token().unwrap();
-        eprintln!("authenticated browser and uncached token discovery succeeded (token redacted)");
+    fn invalid_auth_responses_do_not_expose_browser_payloads() {
+        for status in [Value::Null, json!("private-cookie-value"), json!(-1)] {
+            let error = decode_auth_response(json!({"status": status})).unwrap_err();
+            assert_eq!(error.code, "vinted.web_browser_invalid_response");
+            assert!(!format!("{error:?}").contains("private-cookie-value"));
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a signed-in Vinted Chrome extension; read-only"]
+    fn live_extension_read_only_probe() {
+        assert!(status(PortalId::Fi).unwrap().authenticated);
     }
 
     #[test]
