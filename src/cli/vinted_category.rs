@@ -272,6 +272,8 @@ pub async fn execute(
                     ),
                 });
             }
+            let mut seen_actions = std::collections::HashSet::new();
+            actions.retain(|action| seen_actions.insert(action.command.clone()));
             let guidance = Some("Candidates are current taxonomy nodes, not semantic certainty. Choose a leaf intentionally; browse nonleaves. Marketplace counts are relative listing support, not classification confidence, and zero listings do not exclude a category. Optional service failures do not mean a category is absent.".to_owned());
             return Ok(
                 CommandOutcome::new(CommandData::VintedCategories(CategoryOutput {
@@ -960,6 +962,7 @@ mod tests {
         assert_eq!(result.page.total, 2);
         assert!(result.page.truncated);
         assert!(!result.page.categories[0].node.category.leaf);
+        assert_eq!(outcome.next_actions.len(), 2);
         assert!(
             outcome.next_actions[0]
                 .command

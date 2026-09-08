@@ -188,7 +188,12 @@ impl<'a> VintedPublicationComposer<'a> {
         }
 
         let selections = attribute_selections(category_id, supplied.as_ref());
-        let attributes_request = DiscoveryRequest::Attributes { selections };
+        let baseline_selections = attribute_selections(category_id, None);
+        let selected_attributes_request = (selections != baseline_selections)
+            .then_some(DiscoveryRequest::Attributes { selections });
+        let attributes_request = DiscoveryRequest::Attributes {
+            selections: baseline_selections,
+        };
         let brands_request = DiscoveryRequest::Brands {
             category_id,
             keyword: String::new(),
@@ -204,6 +209,12 @@ impl<'a> VintedPublicationComposer<'a> {
             self.api.execute(&credentials, &packages_request),
         );
         let attributes = attributes?;
+        let attributes = if let Some(request) = selected_attributes_request {
+            let selected = self.api.execute(&credentials, &request).await?;
+            merge_attribute_definitions(&attributes, &selected)
+        } else {
+            attributes
+        };
         let brands = brands?;
         let colors = colors?;
         let configuration = configuration?;
@@ -672,6 +683,7 @@ fn compose_from_documents_with_semantics(
     add_optional_listing_fields(&mut form);
     summarize_options(&mut form);
     form.validate();
+    validate_discovered_attributes(&mut form);
     apply_semantic_issues(&mut form, semantic_issues);
     if let Some(validation) = brand_validation.as_ref()
         && !validation.valid
@@ -741,6 +753,45 @@ fn compose_from_documents_with_semantics(
         listing_input,
         normalized_input,
     })
+}
+
+fn merge_attribute_definitions(baseline: &Value, selected: &Value) -> Value {
+    // Selection-scoped responses describe child attributes, not a replacement root form.
+    let mut definitions = publication_attribute_definitions(baseline);
+    for (code, definition) in publication_attribute_definitions(selected) {
+        if let Some(existing) = definitions.iter_mut().find(|(key, _)| *key == code) {
+            *existing = (code, definition);
+        } else {
+            definitions.push((code, definition));
+        }
+    }
+    json!({"attributes": definitions.into_iter().map(|(code, definition)| {
+        json!({"code": code, "configuration": definition})
+    }).collect::<Vec<_>>()})
+}
+
+fn validate_discovered_attributes(form: &mut PublicationForm) {
+    for (key, value) in &form.values {
+        if !key.starts_with("attribute.")
+            || value.as_array().is_some_and(Vec::is_empty)
+            || form.options.iter().any(|option| option.field == *key)
+            || form.issues.iter().any(|issue| issue.field == *key)
+        {
+            continue;
+        }
+        let message = "The supplied attribute has no discovered selectable options; continue layered attribute discovery to validate it";
+        if let Some(field) = form.fields.iter_mut().find(|field| field.key == *key) {
+            field.invalidate(message);
+        }
+        form.issues.push(ValidationIssue {
+            field: key.clone(),
+            code: "invalid_option".into(),
+            message: message.into(),
+            source: None,
+            raw: None,
+        });
+    }
+    form.ready = form.issues.is_empty();
 }
 
 fn apply_semantic_issues(form: &mut PublicationForm, semantic_issues: Vec<ValidationIssue>) {
@@ -889,7 +940,12 @@ pub(crate) fn publication_attribute_options(definition: &Map<String, Value>) -> 
             let Some(object) = value.as_object() else {
                 continue;
             };
-            if numeric_id(object).is_some() && object_label(object).is_some() {
+            if matches!(
+                object.get("type").and_then(Value::as_str),
+                None | Some("default")
+            ) && numeric_id(object).is_some()
+                && object_label(object).is_some()
+            {
                 output.push(value);
             }
             if let Some(children) = object.get("options").and_then(Value::as_array) {
@@ -1280,6 +1336,291 @@ mod tests {
             &json!({"currencies":["EUR"],"minimum_price":"1.00","maximum_price":"10000.00"}),
             &json!({"package_sizes":[{"id":1,"title":"Small"}]}),
         ).unwrap()
+    }
+
+    fn grouped_shoe_attributes() -> Value {
+        // Retained category 2750 composer raw: size group 31 and condition group 1.
+        // The condition heading ID aliases the real "Uusi ilman hintalappua" choice.
+        json!({"attributes": [
+            {"code":"size", "configuration": {
+                "title":"Koko", "required":true, "options":[
+                    {"id":31,"title":"Lastenkenkien koot","type":"group","options":[
+                        {"id":595,"title":"26","group_title":"Lastenkenkien koot",
+                         "description":"","type":"default","has_children":false}
+                    ]}
+                ]
+            }},
+            {"code":"condition", "configuration": {
+                "title":"Kunto", "required":true, "options":[
+                    {"id":1,"title":"Condition","group_title":null,"type":"group","options":[
+                        {"id":1,"title":"Uusi ilman hintalappua","group_title":null,
+                         "type":"default","has_children":false},
+                        {"id":3,"title":"Hyvä","group_title":null,
+                         "type":"default","has_children":false}
+                    ]}
+                ]
+            }}
+        ]})
+    }
+
+    fn shoe_documents(input: Value, attributes: &Value) -> VintedComposer {
+        compose_from_documents(
+            PublicationCategory {
+                id: 2750,
+                title: "Tarralenkkitossut".into(),
+                path: vec!["Lapset".into(), "Tarralenkkitossut".into()],
+                leaf: true,
+            },
+            Some(input),
+            attributes,
+            (&json!({"brands":[]}), None),
+            &json!({"colors":[]}),
+            &json!({"currencies":["EUR"]}),
+            &json!({"package_sizes":[]}),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn composer_fetches_root_schema_before_overlaying_selected_children() {
+        use crate::marketplace::vinted::auth::VintedCredentialRecord;
+        use std::{future::Future, pin::Pin, sync::Mutex};
+
+        struct Api(Mutex<Vec<Value>>);
+        impl VintedPublicationDiscoveryApi for Api {
+            fn execute<'a>(
+                &'a self,
+                _: &'a VintedCredentialRecord,
+                request: &'a DiscoveryRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+                let response = match request {
+                    DiscoveryRequest::Catalogs => json!({"catalogs":[
+                        {"id":2750,"title":"Tarralenkkitossut","catalogs":[]}
+                    ]}),
+                    DiscoveryRequest::Attributes { selections } => {
+                        self.0.lock().unwrap().push(selections.clone());
+                        if selections.as_array().unwrap().len() == 1 {
+                            grouped_shoe_attributes()
+                        } else {
+                            json!({"code":0,"message":null,"attributes":[]})
+                        }
+                    }
+                    DiscoveryRequest::Brands { .. } => json!({"brands":[]}),
+                    DiscoveryRequest::Colors => json!({"colors":[]}),
+                    DiscoveryRequest::Configuration => json!({"currencies":["EUR"]}),
+                    DiscoveryRequest::PackageSizes { .. } => json!({"package_sizes":[]}),
+                    _ => panic!("unexpected discovery request"),
+                };
+                Box::pin(std::future::ready(Ok(response)))
+            }
+        }
+        let session = |portal| {
+            Ok(VintedCredentialRecord::new_for_adapter(
+                portal,
+                "user".into(),
+                None,
+                "access".into(),
+                "refresh".into(),
+                u64::MAX,
+                "device".into(),
+                "anonymous".into(),
+                None,
+            ))
+        };
+        for supplied in [
+            None,
+            Some(json!({"item_attributes":[{"code":"size","ids":[595]}]})),
+        ] {
+            let api = Api(Mutex::new(Vec::new()));
+            let composer = VintedPublicationComposer::new(&session, &api)
+                .compose(PortalId::Fi, 2750, supplied.clone())
+                .await
+                .unwrap();
+            let requests = api.0.lock().unwrap();
+            assert_eq!(requests[0], attribute_selections(2750, None));
+            assert_eq!(requests.len(), if supplied.is_some() { 2 } else { 1 });
+            if supplied.is_some() {
+                assert_eq!(requests[1], attribute_selections(2750, supplied.as_ref()));
+                assert!(
+                    !composer
+                        .form
+                        .issues
+                        .iter()
+                        .any(|issue| issue.field == "attribute.size")
+                );
+            }
+            assert!(
+                composer.form.issues.iter().any(|issue| {
+                    issue.field == "attribute.condition" && issue.code == "required"
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn grouped_headings_are_not_choices_or_validation_authority() {
+        let attributes = grouped_shoe_attributes();
+        let composer = shoe_documents(
+            json!({"item_attributes":[
+                {"code":"size","ids":[31]}, {"code":"condition","ids":[1]}
+            ]}),
+            &attributes,
+        );
+        assert!(
+            composer
+                .form
+                .issues
+                .iter()
+                .any(|issue| { issue.field == "attribute.size" && issue.code == "invalid_option" })
+        );
+        assert!(
+            !composer
+                .form
+                .issues
+                .iter()
+                .any(|issue| issue.field == "attribute.condition")
+        );
+        let condition = composer
+            .form
+            .options
+            .iter()
+            .filter(|option| option.field == "attribute.condition" && option.value == json!(1))
+            .collect::<Vec<_>>();
+        assert_eq!(condition.len(), 1);
+        assert_eq!(condition[0].label, "Uusi ilman hintalappua");
+        assert!(!composer.form.options.iter().any(|option| {
+            option.raw.as_ref().and_then(|raw| raw.get("type")) == Some(&json!("group"))
+        }));
+        assert!(
+            composer
+                .issue_actions
+                .iter()
+                .filter(|action| action.field == "attribute.size")
+                .all(|action| action.command.contains(r#""value":[595]"#))
+        );
+    }
+
+    #[test]
+    fn empty_selection_delta_preserves_required_sibling_and_valid_size() {
+        // The retained category 2750 + size 595 response has attributes: [].
+        let attributes = merge_attribute_definitions(
+            &grouped_shoe_attributes(),
+            &json!({"code":0,"message":null,"attributes":[]}),
+        );
+        let composer = shoe_documents(
+            json!({"item_attributes":[
+                {"code":"size","ids":[595]}
+            ]}),
+            &attributes,
+        );
+        assert!(
+            !composer
+                .form
+                .issues
+                .iter()
+                .any(|issue| issue.field == "attribute.size")
+        );
+        assert!(
+            composer
+                .form
+                .issues
+                .iter()
+                .any(|issue| { issue.field == "attribute.condition" && issue.code == "required" })
+        );
+        assert!(!composer.form.ready);
+        assert!(
+            composer
+                .issue_actions
+                .iter()
+                .any(|action| action.field == "attribute.condition")
+        );
+    }
+
+    #[test]
+    fn refreshed_definitions_replace_options_and_append_children() {
+        let attributes = merge_attribute_definitions(
+            &grouped_shoe_attributes(),
+            &json!({"attributes":[
+                {"code":"size","configuration":{"required":true,"options":[{"id":596,"title":"27"}]}},
+                {"code":"material","configuration":{"required":true,"options":[{"id":9,"title":"Steel"}]}}
+            ]}),
+        );
+        assert_eq!(publication_attribute_definitions(&attributes).len(), 3);
+        let composer = shoe_documents(
+            json!({"item_attributes":[{"code":"size","ids":[595]}]}),
+            &attributes,
+        );
+        assert!(
+            composer
+                .form
+                .issues
+                .iter()
+                .any(|issue| issue.field == "attribute.size" && issue.code == "invalid_option")
+        );
+        for key in ["attribute.condition", "attribute.material"] {
+            assert!(
+                composer
+                    .form
+                    .issues
+                    .iter()
+                    .any(|issue| issue.field == key && issue.code == "required")
+            );
+        }
+        assert!(
+            composer
+                .form
+                .options
+                .iter()
+                .any(|option| option.field == "attribute.size" && option.value == json!(596))
+        );
+    }
+
+    #[test]
+    fn nested_groups_keep_default_and_legacy_options_but_not_containers() {
+        let definition = json!({"options":[
+            {"id":10,"title":"Outer","type":"group","options":[
+                {"id":11,"title":"Inner","type":"group","options":[
+                    {"id":12,"title":"Leaf","type":"default","has_children":false},
+                    {"id":13,"title":"Layered choice","type":"default","has_children":true}
+                ]}
+            ]},
+            {"id":14,"title":"Legacy"},
+            {"id":15,"title":"Empty","type":"group","options":[]},
+            {"id":16,"title":"Unsupported","type":"unknown"}
+        ]});
+        let options = publication_attribute_options(definition.as_object().unwrap());
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| option["id"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [12, 13, 14]
+        );
+    }
+
+    #[test]
+    fn supplied_attributes_without_selectable_definitions_fail_closed() {
+        let attributes = json!({"attributes":[{"code":"size","configuration":{
+            "options":[{"id":31,"title":"Empty group","type":"group","options":[]}]
+        }}]});
+        for code in ["size", "undiscovered_child"] {
+            let composer = shoe_documents(
+                json!({"item_attributes":[{"code":code,"ids":[31]}]}),
+                &attributes,
+            );
+            let key = format!("attribute.{code}");
+            assert!(
+                composer
+                    .form
+                    .issues
+                    .iter()
+                    .any(|issue| issue.field == key && issue.code == "invalid_option")
+            );
+            assert!(composer.issue_actions.iter().any(
+                |action| action.field == key && action.command.contains("category attributes")
+            ));
+            assert!(!composer.form.ready);
+        }
     }
 
     #[test]

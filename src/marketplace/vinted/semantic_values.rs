@@ -307,70 +307,14 @@ fn issue(field: &str, code: &str, message: &str, raw: Value) -> ValidationIssue 
 }
 
 fn attribute_options(response: &Value, wanted_code: &str) -> Vec<RuntimeOption> {
-    let mut definitions = Vec::new();
-    collect_attribute_definitions(response, &mut definitions);
-    let mut options = Vec::new();
-    for (code, definition) in definitions {
-        if code != wanted_code {
-            continue;
-        }
-        for key in ["values", "options", "items"] {
-            if let Some(values) = definition.get(key).and_then(Value::as_array) {
-                collect_options(values, &mut options);
-            }
-        }
-        if let Some(groups) = definition.get("groups").and_then(Value::as_array) {
-            for group in groups {
-                if let Some(values) = group.get("options").and_then(Value::as_array) {
-                    collect_options(values, &mut options);
-                }
-            }
-        }
-    }
+    let options = super::composer::publication_attribute_definitions(response)
+        .into_iter()
+        .filter(|(code, _)| *code == wanted_code)
+        .flat_map(|(_, definition)| super::composer::publication_attribute_options(definition))
+        .filter_map(Value::as_object)
+        .filter_map(runtime_option)
+        .collect();
     deduplicate(options)
-}
-
-fn collect_attribute_definitions<'a>(
-    value: &'a Value,
-    output: &mut Vec<(&'a str, &'a Map<String, Value>)>,
-) {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                collect_attribute_definitions(value, output);
-            }
-        }
-        Value::Object(object) => {
-            if let Some(code) = object.get("code").and_then(Value::as_str) {
-                output.push((
-                    code,
-                    object
-                        .get("configuration")
-                        .and_then(Value::as_object)
-                        .unwrap_or(object),
-                ));
-            } else {
-                for value in object.values() {
-                    collect_attribute_definitions(value, output);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn collect_options(values: &[Value], output: &mut Vec<RuntimeOption>) {
-    for value in values {
-        let Some(object) = value.as_object() else {
-            continue;
-        };
-        if let Some(option) = runtime_option(object) {
-            output.push(option);
-        }
-        if let Some(children) = object.get("options").and_then(Value::as_array) {
-            collect_options(children, output);
-        }
-    }
 }
 
 fn named_options(response: &Value) -> Vec<RuntimeOption> {
@@ -471,6 +415,38 @@ mod tests {
                 {"id":6,"title":"Tyydyttävä","code":"satisfactory"}
             ]}}
         ]})
+    }
+
+    #[test]
+    fn semantic_attribute_choices_exclude_group_headings_with_aliased_ids() {
+        let raw = json!({"attributes":[{"code":"condition","configuration":{"options":[
+            {"id":1,"title":"Condition","type":"group","options":[
+                {"id":1,"title":"Uusi ilman hintalappua","type":"default"}
+            ]}
+        ]}}]});
+        let options = attribute_options(&raw, "condition");
+        assert_eq!(options.len(), 1);
+        let result = resolve_semantic_listing_values(
+            json!({"condition":"Condition"}),
+            &raw,
+            &json!({}),
+            &json!({}),
+        )
+        .unwrap();
+        assert!(!result.issues.is_empty());
+        assert!(result.input.get("item_attributes").is_none());
+        let result = resolve_semantic_listing_values(
+            json!({"condition":"Uusi ilman hintalappua"}),
+            &raw,
+            &json!({}),
+            &json!({}),
+        )
+        .unwrap();
+        assert!(result.issues.is_empty());
+        assert_eq!(
+            result.input["item_attributes"],
+            json!([{"code":"condition","ids":[1]}])
+        );
     }
 
     #[test]
