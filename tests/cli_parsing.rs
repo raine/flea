@@ -43,6 +43,15 @@ fn every_command_leaf_parses() {
         vec!["flea", "vinted", "item", "show", "9757271392"],
         vec!["flea", "vinted", "item", "show", "9757271392", "--raw"],
         vec!["flea", "vinted", "listing", "show", "9757271392"],
+        vec![
+            "flea",
+            "vinted",
+            "listing",
+            "update",
+            "9757271392",
+            "--input",
+            "changes.json",
+        ],
         vec!["flea", "vinted", "listing", "list"],
         vec![
             "flea",
@@ -511,6 +520,23 @@ fn vinted_prices_and_raw_facet_combinations_reject_malformed_input() {
     ] {
         assert!(Cli::try_parse_from(arguments).is_err());
     }
+}
+
+#[test]
+fn vinted_listing_update_requires_partial_input() {
+    assert!(
+        Cli::try_parse_from([
+            "flea",
+            "vinted",
+            "listing",
+            "update",
+            "9757271392",
+            "--input",
+            "changes.json",
+        ])
+        .is_ok()
+    );
+    assert!(Cli::try_parse_from(["flea", "vinted", "listing", "update", "9757271392"]).is_err());
 }
 
 #[test]

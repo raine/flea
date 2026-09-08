@@ -166,7 +166,7 @@ impl VintedPublicationApi for VintedWebPublicationApi {
     }
 }
 
-fn json_request_script(
+pub(super) fn json_request_script(
     method: &str,
     path: &str,
     body: Option<&Value>,
@@ -283,7 +283,7 @@ fn browser_response_helper() -> &'static str {
     "#
 }
 
-fn decode_browser_response(value: Value) -> Result<TransportResponse, AppError> {
+pub(super) fn decode_browser_response(value: Value) -> Result<TransportResponse, AppError> {
     if value.pointer("/local_error/code").and_then(Value::as_str)
         == Some("vinted.web_browser_request_invalid_utf8")
     {
@@ -324,7 +324,7 @@ fn decode_browser_response(value: Value) -> Result<TransportResponse, AppError> 
     })
 }
 
-fn browser_gate_error(status: StatusCode) -> Option<AppError> {
+pub(super) fn browser_gate_error(status: StatusCode) -> Option<AppError> {
     let (code, message, user_action) = match status {
         StatusCode::UNAUTHORIZED => (
             "vinted.web_authentication_required",

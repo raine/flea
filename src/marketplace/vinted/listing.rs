@@ -141,7 +141,7 @@ impl<'a> VintedListings<'a> {
         }
     }
 
-    async fn normalize_condition_identity(
+    pub(super) async fn normalize_condition_identity(
         &self,
         credentials: &VintedCredentialRecord,
         detail: &mut VintedListingDetail,
@@ -443,7 +443,7 @@ fn summary_detail(expected_id: &str, item: &Value) -> Result<VintedListingDetail
     })
 }
 
-fn normalize_detail(
+pub(super) fn normalize_detail(
     expected_id: &str,
     wardrobe_raw: &Value,
     edit_raw: &Value,
@@ -540,7 +540,7 @@ fn normalize_summary(value: &Value) -> Result<VintedListingSummary, AppError> {
     })
 }
 
-fn normalize_state(item: &Map<String, Value>) -> VintedListingState {
+pub(super) fn normalize_state(item: &Map<String, Value>) -> VintedListingState {
     let status = string(item.get("status"))
         .unwrap_or_default()
         .to_ascii_lowercase();
@@ -657,7 +657,7 @@ fn listing_value(id: Option<&Value>, name: Option<&Value>) -> Option<VintedListi
     (id.is_some() || name.is_some()).then_some(VintedListingValue { id, name })
 }
 
-fn response_item(raw: &Value) -> Result<&Map<String, Value>, AppError> {
+pub(super) fn response_item(raw: &Value) -> Result<&Map<String, Value>, AppError> {
     let body = raw.get("data").unwrap_or(raw);
     body.get("item")
         .and_then(Value::as_object)

@@ -1,12 +1,14 @@
 {
   "item": {
     "id": "9001",
+    "is_draft": false,
     "title": "Bicycle lock",
     "description": "Clean cable lock with two keys.",
     "catalog_id": "3412",
     "catalog_name": "Bicycle locks",
     "status_id": null,
     "status": "Tyydyttävä",
+    "item_attributes": [{"code": "condition", "ids": [6]}],
     "brand_dto": {"id": 77, "title": "Kryptonite"},
     "color1_id": "1",
     "color1": "Black",
@@ -16,9 +18,17 @@
     "price": {"amount": "12.50", "currency_code": "EUR"},
     "currency": "EUR",
     "shipment_prices": {"domestic": null, "international": null},
+    "model": null,
+    "isbn": null,
+    "is_unisex": false,
+    "ai_photo": false,
+    "measurement_length": null,
+    "measurement_width": null,
+    "manufacturer": null,
+    "manufacturer_labelling": null,
     "photos": [
-      {"id": 41, "url": "https://images.example/41.jpg", "width": 1200, "height": 900},
-      {"id": 42, "url": "https://images.example/42.jpg", "width": 900, "height": 1200}
+      {"id": 41, "orientation": 0, "url": "https://images.example/41.jpg", "width": 1200, "height": 900},
+      {"id": 42, "orientation": 0, "url": "https://images.example/42.jpg", "width": 900, "height": 1200}
     ]
   },
   "parcel": {"width": 10.0, "height": 5.0, "length": 15.0, "weight": 0.4}

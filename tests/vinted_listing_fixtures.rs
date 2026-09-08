@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     future::Future,
     pin::Pin,
     sync::{Arc, Mutex},
@@ -8,7 +9,8 @@ use flea::{
     AppError, PortalId,
     dependencies::{
         DiscoveryRequest, ListingLookup, VintedCredentialRecord, VintedListingApi,
-        VintedListingRequest, VintedListingResult, VintedListings, VintedPublicationDiscoveryApi,
+        VintedListingEditApi, VintedListingRequest, VintedListingResult, VintedListings,
+        VintedPublicationDiscoveryApi,
     },
     domain::vinted_listing::{VintedConditionIdentityStatus, VintedListingState},
     run_with_dependencies,
@@ -107,6 +109,76 @@ impl VintedPublicationDiscoveryApi for FixtureDiscoveryApi {
                 }]
             }))
         })
+    }
+}
+
+struct UpdateFixtureApi {
+    editable: Mutex<VecDeque<Value>>,
+    listing_calls: Mutex<Vec<String>>,
+    update_calls: Mutex<Vec<(String, Value)>>,
+}
+
+impl UpdateFixtureApi {
+    fn new() -> Self {
+        let before = fixture("published-edit");
+        let mut after = before.clone();
+        after["item"]["title"] = serde_json::json!("Updated bicycle lock");
+        Self {
+            editable: Mutex::new(VecDeque::from([before, after])),
+            listing_calls: Mutex::new(Vec::new()),
+            update_calls: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl VintedListingApi for UpdateFixtureApi {
+    fn wardrobe_item<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        item_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<ListingLookup, AppError>> + Send + 'a>> {
+        self.listing_calls
+            .lock()
+            .unwrap()
+            .push(format!("wardrobe:{item_id}"));
+        Box::pin(async { Ok(ListingLookup::Found(fixture("published-wardrobe"))) })
+    }
+
+    fn item_for_edit<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        item_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        self.listing_calls
+            .lock()
+            .unwrap()
+            .push(format!("edit:{item_id}"));
+        let result = self.editable.lock().unwrap().pop_front().unwrap();
+        Box::pin(async move { Ok(result) })
+    }
+
+    fn wardrobe_items<'a>(
+        &'a self,
+        _credentials: &'a VintedCredentialRecord,
+        _condition: &'a str,
+        _page: usize,
+        _per_page: usize,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        panic!("listing update should not enumerate account collections")
+    }
+}
+
+impl VintedListingEditApi for UpdateFixtureApi {
+    fn update<'a>(
+        &'a self,
+        item_id: &'a str,
+        body: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<Value, AppError>> + Send + 'a>> {
+        self.update_calls
+            .lock()
+            .unwrap()
+            .push((item_id.to_owned(), body));
+        Box::pin(async move { Ok(serde_json::json!({"item": {"id": item_id}, "code": 0})) })
     }
 }
 
@@ -388,6 +460,101 @@ async fn list_combines_active_and_draft_associated_items() {
         api.calls.lock().unwrap().as_slice(),
         ["list:active:1:100", "list:drafts:1:100"]
     );
+}
+
+#[test]
+fn cli_update_uses_injected_apis_and_preserves_omitted_fields_and_photos() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("changes.json");
+    std::fs::write(&input, r#"{"title":"Updated bicycle lock"}"#).unwrap();
+    let api = Arc::new(UpdateFixtureApi::new());
+    let dependencies = flea::dependencies::ApplicationDependencies::production()
+        .with_vinted_credentials_provider(|_| Ok(credentials()))
+        .with_vinted_listing_api(api.clone())
+        .with_vinted_listing_edit_api(api.clone())
+        .with_vinted_publication_discovery_api(Arc::new(FixtureDiscoveryApi));
+
+    let result = run_with_dependencies(
+        [
+            "flea",
+            "--format",
+            "json",
+            "vinted",
+            "listing",
+            "update",
+            "9001",
+            "--input",
+            input.to_str().unwrap(),
+        ],
+        &dependencies,
+    );
+    let envelope: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 0, "{}", result.document);
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["data"]["listing_id"], "9001");
+    assert_eq!(envelope["data"]["title"], "Updated bicycle lock");
+    assert_eq!(
+        envelope["data"]["description"],
+        "Clean cable lock with two keys."
+    );
+    assert_eq!(envelope["data"]["price"]["amount"], 12.5);
+    assert_eq!(envelope["data"]["photos"][0]["id"], "41");
+    assert_eq!(envelope["data"]["photos"][1]["id"], "42");
+    assert_eq!(
+        api.listing_calls.lock().unwrap().as_slice(),
+        ["wardrobe:9001", "edit:9001", "wardrobe:9001", "edit:9001"]
+    );
+
+    let calls = api.update_calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "9001");
+    assert_eq!(calls[0].1["item"]["title"], "Updated bicycle lock");
+    assert_eq!(
+        calls[0].1["item"]["description"],
+        "Clean cable lock with two keys."
+    );
+    assert_eq!(calls[0].1["item"]["update_photos"], 0);
+    assert_eq!(
+        calls[0].1["item"]["assigned_photos"],
+        serde_json::json!([
+            {"id": "41", "orientation": 0},
+            {"id": "42", "orientation": 0}
+        ])
+    );
+}
+
+#[test]
+fn cli_update_rejects_unsupported_fields_before_any_marketplace_call() {
+    let directory = tempfile::tempdir().unwrap();
+    let input = directory.path().join("changes.json");
+    std::fs::write(&input, r#"{"photos":[]}"#).unwrap();
+    let api = Arc::new(UpdateFixtureApi::new());
+    let dependencies = flea::dependencies::ApplicationDependencies::production()
+        .with_vinted_credentials_provider(|_| Ok(credentials()))
+        .with_vinted_listing_api(api.clone())
+        .with_vinted_listing_edit_api(api.clone());
+
+    let result = run_with_dependencies(
+        [
+            "flea",
+            "--format",
+            "json",
+            "vinted",
+            "listing",
+            "update",
+            "9001",
+            "--input",
+            input.to_str().unwrap(),
+        ],
+        &dependencies,
+    );
+    let envelope: Value = serde_json::from_str(&result.document).unwrap();
+
+    assert_eq!(result.exit_code, 2);
+    assert_eq!(envelope["error"]["code"], "cli.invalid_usage");
+    assert!(api.listing_calls.lock().unwrap().is_empty());
+    assert!(api.update_calls.lock().unwrap().is_empty());
 }
 
 #[test]

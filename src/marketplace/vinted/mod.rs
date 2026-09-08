@@ -8,6 +8,8 @@ pub(crate) mod guided_sell;
 pub(crate) mod interactive;
 pub(crate) mod item;
 pub(crate) mod listing;
+pub(crate) mod listing_edit;
+pub(crate) mod listing_edit_payload;
 pub(crate) mod publication;
 pub(crate) mod publication_discovery;
 pub(crate) mod readiness;
@@ -15,6 +17,7 @@ pub(crate) mod search;
 pub(crate) mod semantic_values;
 pub(crate) mod session;
 pub(crate) mod web;
+pub(crate) mod web_listing_edit;
 pub(crate) mod web_publication;
 
 use super::{

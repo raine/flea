@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand};
 
 #[derive(Debug, Args)]
@@ -17,6 +19,17 @@ pub enum VintedListingCommand {
         item_id: String,
     },
     #[command(
+        about = "Update an owned public listing",
+        long_about = "Update the title, description, or price of an owned public Vinted listing from a partial JSON object. Omitted fields and the complete existing photo order are preserved. Category, condition, attribute, brand, color, package, and photo changes are not supported. Vinted provides no remote revision precondition, so a concurrent edit can be overwritten."
+    )]
+    Update {
+        /// Numeric item ID returned by Vinted publication.
+        item_id: String,
+        /// Partial JSON object containing title, description, or price strings.
+        #[arg(long, value_name = "PATH")]
+        input: PathBuf,
+    },
+    #[command(
         about = "List active and draft-associated account items",
         long_about = "List the authenticated account's active and draft-associated Vinted items from the bounded wardrobe API."
     )]
@@ -27,6 +40,7 @@ impl VintedListingCommand {
     pub const fn telemetry_name(&self) -> &'static str {
         match self {
             Self::Show { .. } => "listing show",
+            Self::Update { .. } => "listing update",
             Self::List => "listing list",
         }
     }

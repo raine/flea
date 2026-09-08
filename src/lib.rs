@@ -28,6 +28,7 @@ pub mod dependencies {
             outcome::{CommandData, CommandOutcome},
             runtime::ApplicationDependencies,
         },
+        domain::vinted_listing_changes::VintedListingChanges,
         marketplace::{
             tori::client::{HttpError, HttpResponse, RequestSpec, ToriClient},
             vinted::{
@@ -40,6 +41,7 @@ pub mod dependencies {
                     ListingLookup, VintedListingApi, VintedListingRequest, VintedListingResult,
                     VintedListings,
                 },
+                listing_edit::{VintedListingEditApi, VintedListingEdits},
                 publication_discovery::{DiscoveryRequest, VintedPublicationDiscoveryApi},
                 readiness::{
                     PrerequisiteCheck, PublicationReadiness, ReadinessState,

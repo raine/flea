@@ -13,6 +13,7 @@ pub(crate) mod skill;
 pub(crate) mod vinted_category;
 pub(crate) mod vinted_item;
 pub(crate) mod vinted_listing;
+pub(crate) mod vinted_listing_input;
 pub(crate) mod vinted_publish;
 pub(crate) mod vinted_search;
 pub(crate) mod vinted_sell;
@@ -243,8 +244,8 @@ pub enum VintedCommand {
     )]
     Item(vinted_item::VintedItemArgs),
     #[command(
-        about = "Inspect Vinted account listings (authentication required)",
-        long_about = "Inspect authoritative account listing state by publication item ID, or enumerate active and draft-associated account items without search indexing."
+        about = "Manage Vinted account listings (authentication required)",
+        long_about = "Inspect authoritative account listing state by publication item ID, update supported fields on owned public listings, or enumerate active and draft-associated account items without search indexing."
     )]
     Listing(vinted_listing::VintedListingArgs),
     #[command(
@@ -466,6 +467,17 @@ mod tests {
                 "vinted draft validate",
             ),
             (&["vinted", "listing", "show", "123"], "vinted listing show"),
+            (
+                &[
+                    "vinted",
+                    "listing",
+                    "update",
+                    "123",
+                    "--input",
+                    "changes.json",
+                ],
+                "vinted listing update",
+            ),
             (&["vinted", "listing", "list"], "vinted listing list"),
             (&["unsupported"], "unknown"),
             (&["vinted", "unsupported"], "unknown"),

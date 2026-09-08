@@ -71,6 +71,7 @@ flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
 flea vinted publish --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
+flea vinted listing update ITEM_ID --input changes.json
 flea vinted listing list
 ```
 
@@ -92,6 +93,16 @@ separate `identity.upstream_id` and `identity.composer_id` values. Use the
 composer ID for publication correlation when `identity.status` is
 `composer_matched`. Treat `upstream_only` and `unavailable` as explicit limits,
 not as permission to submit a listing-side ID to the composer.
+
+`listing update` accepts only a partial JSON object with one or more string
+fields named `title`, `description`, and `price`. It updates an owned, editable
+public listing in place while preserving every omitted value and the complete
+existing photo order. Category, condition, attribute, brand, color, package,
+shipping, parcel, and photo changes are unsupported and must use no guessed ID
+or workaround. Vinted provides no remote revision precondition, so this
+replacement-style update cannot guarantee protection from a concurrent edit
+between Flea's read and write. Inspect the returned authoritative listing before
+another update.
 
 Publication category search uses portal-localized taxonomy labels. Supply the
 known listing title and description as recommendation context. Output reports

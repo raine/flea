@@ -233,6 +233,7 @@ flea vinted draft publish DRAFT_ID --input listing.json
 flea vinted draft delete DRAFT_ID
 flea vinted publish --input listing.json --image front.jpg
 flea vinted listing show ITEM_ID
+flea vinted listing update ITEM_ID --input changes.json
 flea vinted listing list
 ```
 
@@ -389,6 +390,16 @@ listing's category. `identity.status` is `composer_matched`, `upstream_only`, or
 `unavailable`; null IDs remain in their named namespace and never imply that an
 upstream ID can be submitted to the composer.
 
+`vinted listing update` accepts a partial JSON object containing one or more of
+`title`, `description`, and `price`, all as strings. It applies only to an owned,
+editable public listing. Omitted values and the complete existing photo order
+are preserved from authoritative editable state. Category, condition, other
+attributes, brand, colors, package, shipping, parcel, and photo changes are not
+accepted in this command. Vinted exposes no remote revision precondition for
+this update, so Flea cannot guarantee protection against another edit made
+between its authoritative read and replacement-style write. Inspect the returned
+listing before making another change.
+
 During Vinted review, inspection falls back to the bounded account collections
 and returns `state: moderated` with available summary fields and canonical URL.
 Follow its next action after waiting for review instead of changing listing
@@ -410,6 +421,7 @@ flea tori draft create --help
 flea tori listing update --help
 flea vinted item show --help
 flea vinted listing --help
+flea vinted listing update --help
 flea vinted draft --help
 flea vinted publish --help
 flea vinted auth --help

@@ -4,8 +4,8 @@ use crate::{
     cli::{
         Command, ToriCommand, VintedCommand,
         auth::{ToriAuthArgs, ToriAuthCommand, VintedAuthArgs, VintedAuthCommand, VintedAuthScope},
-        category, draft, favorite, listing, saved_search, vinted_category, vinted_publish,
-        vinted_sell,
+        category, draft, favorite, listing, saved_search, vinted_category, vinted_listing_input,
+        vinted_publish, vinted_sell,
     },
     domain::{
         envelope::{NextAction, Warning},
@@ -38,6 +38,7 @@ use crate::{
                 HttpVintedListingApi, VintedListingApi, VintedListingRequest, VintedListingResult,
                 VintedListings,
             },
+            listing_edit::{VintedListingEditApi, VintedListingEdits},
             publication::VintedPublicationApi,
             publication_discovery::{
                 HttpVintedPublicationDiscoveryApi, VintedPublicationDiscoveryApi,
@@ -48,6 +49,7 @@ use crate::{
                 VintedSearchApi, VintedSearchSession,
             },
             session as vinted_session, web as vinted_web,
+            web_listing_edit::VintedWebListingEditApi,
             web_publication::VintedWebPublicationApi,
         },
     },
@@ -77,6 +79,7 @@ pub struct ApplicationDependencies {
     vinted_item: Arc<dyn VintedItemApi>,
     vinted_draft: Arc<dyn VintedDraftApi>,
     vinted_listing: Arc<dyn VintedListingApi>,
+    vinted_listing_edit: Arc<dyn VintedListingEditApi>,
     vinted_publication: Arc<dyn VintedPublicationApi>,
     vinted_publication_discovery: Arc<dyn VintedPublicationDiscoveryApi>,
     vinted_readiness: Arc<dyn VintedReadinessApi>,
@@ -101,6 +104,7 @@ impl ApplicationDependencies {
             vinted_item: Arc::new(HttpVintedItemApi::new()),
             vinted_draft: Arc::new(HttpVintedDraftApi::new()),
             vinted_listing: Arc::new(HttpVintedListingApi::new()),
+            vinted_listing_edit: Arc::new(VintedWebListingEditApi::new()),
             vinted_publication: Arc::new(VintedWebPublicationApi::new()),
             vinted_publication_discovery: Arc::new(HttpVintedPublicationDiscoveryApi::new()),
             vinted_readiness: Arc::new(HttpVintedReadinessApi::new()),
@@ -162,6 +166,11 @@ impl ApplicationDependencies {
 
     pub fn with_vinted_listing_api(mut self, api: Arc<dyn VintedListingApi>) -> Self {
         self.vinted_listing = api;
+        self
+    }
+
+    pub fn with_vinted_listing_edit_api(mut self, api: Arc<dyn VintedListingEditApi>) -> Self {
+        self.vinted_listing_edit = api;
         self
     }
 
@@ -523,46 +532,65 @@ async fn execute_vinted(
                 VintedItemResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
             }
         }
-        VintedCommand::Listing(args) => {
-            let request = match args.command {
-                super::vinted_listing::VintedListingCommand::Show { item_id } => {
-                    VintedListingRequest::Show { item_id }
-                }
-                super::vinted_listing::VintedListingCommand::List => VintedListingRequest::List,
-            };
-            match VintedListings::new(
-                dependencies.vinted_item_session.as_ref(),
-                dependencies.vinted_listing.as_ref(),
-            )
-            .with_discovery(dependencies.vinted_publication_discovery.as_ref())
-            .execute(portal, request)
-            .await?
-            {
-                VintedListingResult::Detail(detail) => {
-                    let moderated = detail.state == VintedListingState::Moderated;
-                    let review_action = NextAction {
-                        command: format!(
-                            "flea vinted --portal {portal} listing show {}",
-                            detail.listing_id
-                        ),
-                    };
-                    let mut outcome =
-                        CommandOutcome::new(CommandData::VintedListingDetail(*detail));
-                    if moderated {
-                        outcome = outcome
-                            .with_warnings(vec![Warning {
-                                code: "vinted_listing.under_review".to_owned(),
-                                message: "Vinted is reviewing this listing; wait for review before changing listing input".to_owned(),
-                            }])
-                            .with_next_actions(vec![review_action]);
-                    }
-                    Ok(outcome)
-                }
-                VintedListingResult::Collection(collection) => Ok(CommandOutcome::new(
-                    CommandData::VintedListingCollection(*collection),
-                )),
+        VintedCommand::Listing(args) => match args.command {
+            super::vinted_listing::VintedListingCommand::Update { item_id, input } => {
+                let changes = vinted_listing_input::read_vinted_listing_changes(&input)?;
+                let detail = VintedListingEdits::new(
+                    dependencies.vinted_item_session.as_ref(),
+                    dependencies.vinted_listing.as_ref(),
+                    dependencies.vinted_listing_edit.as_ref(),
+                )
+                .with_discovery(dependencies.vinted_publication_discovery.as_ref())
+                .update(portal, &item_id, changes)
+                .await?;
+                Ok(CommandOutcome::new(CommandData::VintedListingDetail(
+                    detail,
+                )))
             }
-        }
+            command => {
+                let request = match command {
+                    super::vinted_listing::VintedListingCommand::Show { item_id } => {
+                        VintedListingRequest::Show { item_id }
+                    }
+                    super::vinted_listing::VintedListingCommand::List => VintedListingRequest::List,
+                    super::vinted_listing::VintedListingCommand::Update { .. } => {
+                        unreachable!("listing updates are handled before read requests")
+                    }
+                };
+                match VintedListings::new(
+                    dependencies.vinted_item_session.as_ref(),
+                    dependencies.vinted_listing.as_ref(),
+                )
+                .with_discovery(dependencies.vinted_publication_discovery.as_ref())
+                .execute(portal, request)
+                .await?
+                {
+                    VintedListingResult::Detail(detail) => {
+                        let moderated = detail.state == VintedListingState::Moderated;
+                        let review_action = NextAction {
+                            command: format!(
+                                "flea vinted --portal {portal} listing show {}",
+                                detail.listing_id
+                            ),
+                        };
+                        let mut outcome =
+                            CommandOutcome::new(CommandData::VintedListingDetail(*detail));
+                        if moderated {
+                            outcome = outcome
+                                .with_warnings(vec![Warning {
+                                    code: "vinted_listing.under_review".to_owned(),
+                                    message: "Vinted is reviewing this listing; wait for review before changing listing input".to_owned(),
+                                }])
+                                .with_next_actions(vec![review_action]);
+                        }
+                        Ok(outcome)
+                    }
+                    VintedListingResult::Collection(collection) => Ok(CommandOutcome::new(
+                        CommandData::VintedListingCollection(*collection),
+                    )),
+                }
+            }
+        },
         VintedCommand::Search(args) => match VintedSearch::new(
             dependencies.vinted_search_session.as_ref(),
             dependencies.vinted_search.as_ref(),

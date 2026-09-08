@@ -170,6 +170,21 @@ fn help_tables_include_agent_oriented_summaries() {
     let vinted = stdout(&invoke(&["vinted", "--help"]));
     assert!(vinted.contains("search        Search Vinted listings"));
     assert!(vinted.contains("filter        Discover and search contextual Vinted filters"));
+    assert!(vinted.contains("listing       Manage Vinted account listings"));
+
+    let vinted_listing = stdout(&invoke(&["vinted", "listing", "--help"]));
+    assert!(vinted_listing.contains("update  Update an owned public listing"));
+    let vinted_listing_update = stdout(&invoke(&["vinted", "listing", "update", "--help"]));
+    assert!(
+        vinted_listing_update
+            .contains("Usage: flea vinted listing update [OPTIONS] --input <PATH> <ITEM_ID>")
+    );
+    assert!(vinted_listing_update.contains("Omitted fields"));
+    assert!(vinted_listing_update.contains("photo order are preserved"));
+    assert!(vinted_listing_update.contains(
+        "Category, condition, attribute, brand, color, package, and photo changes are not supported"
+    ));
+    assert!(vinted_listing_update.contains("concurrent edit can be overwritten"));
 
     let vinted_search = stdout(&invoke(&["vinted", "search", "--help"]));
     for flag in [

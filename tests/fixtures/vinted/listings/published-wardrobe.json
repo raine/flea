@@ -2,6 +2,9 @@
   "item": {
     "id": 9001,
     "title": "Bicycle lock",
+    "can_edit": true,
+    "user_id": "fixture-user",
+    "user": {"id": "fixture-user"},
     "is_draft": false,
     "is_closed": false,
     "is_hidden": false,
