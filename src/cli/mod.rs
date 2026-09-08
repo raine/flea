@@ -10,6 +10,7 @@ pub(crate) mod runtime;
 pub(crate) mod saved_search;
 pub(crate) mod search;
 pub(crate) mod skill;
+pub(crate) mod update;
 pub(crate) mod vinted_category;
 pub(crate) mod vinted_item;
 pub(crate) mod vinted_listing;
@@ -55,6 +56,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    #[command(
+        about = "Update the running binary from the latest GitHub release",
+        long_about = "Download the latest flea release, verify its SHA-256 checksum, and atomically replace the running executable. Requires tar and write access to the install directory. Homebrew and Nix installations must be updated through their package manager. Use --format json for structured output."
+    )]
+    Update,
     /// Open the dedicated Flea browser without enabling remote debugging.
     #[command(
         long_about = "Open the dedicated Flea Chrome profile without enabling remote debugging. Close any debugging-enabled Flea Chrome instance first. Use browser disconnect --browser-url URL to release a persistent external-browser connection."
@@ -99,6 +105,7 @@ impl Command {
             Self::Tori(_) => Some(MarketplaceContext::TORI_FI),
             Self::Vinted(_) => Some(MarketplaceContext::VINTED_FI),
             Self::Browser(_)
+            | Self::Update
             | Self::BrowserSession
             | Self::Capabilities
             | Self::Marketplaces
@@ -113,6 +120,7 @@ impl Command {
             Self::Tori(args) => args.command.capability_id(),
             Self::Vinted(args) => args.command.capability_id(),
             Self::Browser(_)
+            | Self::Update
             | Self::BrowserSession
             | Self::Capabilities
             | Self::Marketplaces
@@ -123,6 +131,7 @@ impl Command {
 
     pub fn telemetry_name(&self) -> String {
         match self {
+            Self::Update => "update".to_owned(),
             Self::Capabilities => "capabilities".to_owned(),
             Self::Marketplaces => "marketplaces".to_owned(),
             Self::Tori(args) => args.command.telemetry_name(),
@@ -413,6 +422,7 @@ mod tests {
     #[test]
     fn parsed_command_variants_have_stable_telemetry_names() {
         let cases: &[(&[&str], &str)] = &[
+            (&["update"], "update"),
             (&["browser"], "browser"),
             (&["browser", "disconnect"], "browser disconnect"),
             (&["capabilities"], "capabilities"),

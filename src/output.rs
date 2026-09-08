@@ -49,9 +49,13 @@ pub fn render_plain(
         }
         CommandPresentation::Plain(PlainOutput::AuthenticationLogin { .. }) => Ok(None),
         CommandPresentation::Plain(PlainOutput::Document(document)) => Ok(Some(document.clone())),
-        CommandPresentation::Plain(PlainOutput::SkillDocument(document)) if !format_explicit => {
+        CommandPresentation::Plain(PlainOutput::UpdateDocument(document))
+        | CommandPresentation::Plain(PlainOutput::SkillDocument(document))
+            if !format_explicit =>
+        {
             Ok(Some(document.clone()))
         }
-        CommandPresentation::Plain(PlainOutput::SkillDocument(_)) => Ok(None),
+        CommandPresentation::Plain(PlainOutput::UpdateDocument(_))
+        | CommandPresentation::Plain(PlainOutput::SkillDocument(_)) => Ok(None),
     }
 }

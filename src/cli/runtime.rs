@@ -240,6 +240,7 @@ pub async fn dispatch(
         ))),
         Command::Tori(args) => execute_tori(args.command, dependencies).await,
         Command::Vinted(args) => execute_vinted(args.portal, args.command, dependencies).await,
+        Command::Update => super::update::run().await,
         Command::Skill(args) => super::skill::dispatch(args).map(|output| {
             let document = output.document.clone();
             let is_install = matches!(output.skill, super::skill::SkillDocument::Install);
