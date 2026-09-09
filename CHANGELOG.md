@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.5 (2026-09-09)
+
+- Browse your Tori ads marked sold with `flea tori sales list`
+- Browse your Vinted sales history with `flea vinted sales list`,
+  with status filters and pagination
+
 ## v0.1.4 (2026-09-08)
 
 - Breaking: Vinted publishing and editing now require the Chrome extension in
