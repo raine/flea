@@ -1747,12 +1747,19 @@ mod tests {
         bytes
     }
 
+    // Use the system POSIX shell and utility search path so fixture startup does not
+    // depend on PATH-selected third-party tools. Parameter expansion avoids dirname.
     #[cfg(unix)]
     fn fake_decoder(directory: &Path, succeeds: bool) -> PathBuf {
         let body = if succeeds {
-            "#!/usr/bin/env bash\nset -euo pipefail\nscript_dir=$(cd -- \"$(dirname -- \"$0\")\" && pwd)\ncp -- \"$script_dir/decoded.png\" \"${@: -1}\"\n"
+            r#"#!/bin/sh
+set -eu
+script_dir=${0%/*}
+for output do :; done
+command -p cp "$script_dir/decoded.png" "$output"
+"#
         } else {
-            "#!/usr/bin/env bash\nset -euo pipefail\nexit 1\n"
+            "#!/bin/sh\nset -eu\nexit 1\n"
         };
         executable_script(directory, "fake-heif-decoder", body)
     }
@@ -1762,7 +1769,22 @@ mod tests {
         executable_script(
             directory,
             "fake-sips",
-            "#!/usr/bin/env bash\nset -euo pipefail\nscript_dir=$(cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [[ \" $* \" == *\" -g pixelWidth \"* ]]; then\n  printf '  pixelWidth: 5712\\n  pixelHeight: 4284\\n'\n  exit 0\nfi\n[[ \" $* \" == *\" --resampleHeightWidthMax 2560 \"* ]]\ncp -- \"$script_dir/decoded.png\" \"${@: -1}\"\n",
+            r#"#!/bin/sh
+set -eu
+script_dir=${0%/*}
+case " $* " in
+  *" -g pixelWidth "*)
+    printf '  pixelWidth: 5712\n  pixelHeight: 4284\n'
+    exit 0
+    ;;
+esac
+case " $* " in
+  *" --resampleHeightWidthMax 2560 "*) ;;
+  *) exit 1 ;;
+esac
+for output do :; done
+command -p cp "$script_dir/decoded.png" "$output"
+"#,
         )
     }
 
