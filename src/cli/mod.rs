@@ -17,6 +17,7 @@ pub(crate) mod vinted_item;
 pub(crate) mod vinted_listing;
 pub(crate) mod vinted_listing_input;
 pub(crate) mod vinted_publish;
+pub(crate) mod vinted_sales;
 pub(crate) mod vinted_search;
 pub(crate) mod vinted_sell;
 
@@ -291,6 +292,11 @@ pub enum VintedCommand {
     )]
     Listing(vinted_listing::VintedListingArgs),
     #[command(
+        about = "Read authenticated Vinted sales history",
+        long_about = "Read sold orders from the authenticated account's Vinted transaction history, separately from active and draft-associated listings."
+    )]
+    Sales(vinted_sales::VintedSalesArgs),
+    #[command(
         about = "Discover Vinted publication categories and fields",
         long_about = "Discover runtime category, dynamic attribute, brand, color, configuration, and package values for Vinted publication."
     )]
@@ -329,6 +335,7 @@ impl VintedCommand {
             Self::Search(_) | Self::Filter(_) => CapabilityId::Search,
             Self::Item(_) => CapabilityId::ItemShow,
             Self::Listing(_) => CapabilityId::Listing,
+            Self::Sales(_) => CapabilityId::Sales,
             Self::Category(_) => CapabilityId::Category,
             Self::Sell(_) | Self::Readiness | Self::Draft(_) | Self::Publish(_) => {
                 CapabilityId::Draft
@@ -340,6 +347,7 @@ impl VintedCommand {
         match self {
             Self::Auth(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Capabilities => "vinted capabilities".to_owned(),
+            Self::Sales(_) => "vinted sales list".to_owned(),
             Self::Search(_) => "vinted search".to_owned(),
             Self::Filter(args) => format!("vinted {}", args.command.telemetry_name()),
             Self::Item(args) => format!("vinted {}", args.command.telemetry_name()),
@@ -612,6 +620,7 @@ mod tests {
                 &["vinted", "search", "chair"],
                 &["vinted", "item", "show", "123"],
                 &["vinted", "listing", "list"],
+                &["vinted", "sales", "list"],
                 &["vinted", "category", "list"],
                 &["vinted", "draft", "delete", "123"],
             ],

@@ -74,10 +74,11 @@ pub enum CapabilityId {
     SavedSearch,
     Draft,
     Listing,
+    Sales,
 }
 
 impl CapabilityId {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::AuthLogin,
         Self::AuthStatus,
         Self::AuthLogout,
@@ -90,6 +91,7 @@ impl CapabilityId {
         Self::SavedSearch,
         Self::Draft,
         Self::Listing,
+        Self::Sales,
     ];
 }
 

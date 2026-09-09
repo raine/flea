@@ -10,6 +10,7 @@ Ask your agent to:
 - Prepare a listing from your photos and item details
 - Review a draft with you, then publish it
 - Update your existing listings
+- Review past Vinted sales
 - Save favorites and set up search alerts on Tori
 
 ## Install

@@ -44,6 +44,7 @@ use crate::{
                 HttpVintedPublicationDiscoveryApi, VintedPublicationDiscoveryApi,
             },
             readiness::{HttpVintedReadinessApi, VintedReadinessApi},
+            sales::{HttpVintedSalesApi, VintedSales, VintedSalesApi},
             search::{
                 HttpVintedSearchApi, SearchResult as VintedSearchResult, VintedSearch,
                 VintedSearchApi, VintedSearchSession,
@@ -79,6 +80,7 @@ pub struct ApplicationDependencies {
     vinted_item: Arc<dyn VintedItemApi>,
     vinted_draft: Arc<dyn VintedDraftApi>,
     vinted_listing: Arc<dyn VintedListingApi>,
+    vinted_sales: Arc<dyn VintedSalesApi>,
     vinted_listing_edit: Arc<dyn VintedListingEditApi>,
     vinted_publication: Arc<dyn VintedPublicationApi>,
     vinted_publication_discovery: Arc<dyn VintedPublicationDiscoveryApi>,
@@ -104,6 +106,7 @@ impl ApplicationDependencies {
             vinted_item: Arc::new(HttpVintedItemApi::new()),
             vinted_draft: Arc::new(HttpVintedDraftApi::new()),
             vinted_listing: Arc::new(HttpVintedListingApi::new()),
+            vinted_sales: Arc::new(HttpVintedSalesApi::new()),
             vinted_listing_edit: Arc::new(VintedWebListingEditApi::new()),
             vinted_publication: Arc::new(VintedWebPublicationApi::new()),
             vinted_publication_discovery: Arc::new(HttpVintedPublicationDiscoveryApi::new()),
@@ -161,6 +164,11 @@ impl ApplicationDependencies {
 
     pub fn with_vinted_draft_api(mut self, api: Arc<dyn VintedDraftApi>) -> Self {
         self.vinted_draft = api;
+        self
+    }
+
+    pub fn with_vinted_sales_api(mut self, api: Arc<dyn VintedSalesApi>) -> Self {
+        self.vinted_sales = api;
         self
     }
 
@@ -533,6 +541,27 @@ async fn execute_vinted(
                 }
                 VintedItemResult::Raw(raw) => Ok(CommandOutcome::new(CommandData::Raw(raw))),
             }
+        }
+        VintedCommand::Sales(args) => {
+            let collection = VintedSales::new(
+                dependencies.vinted_item_session.as_ref(),
+                dependencies.vinted_sales.as_ref(),
+            )
+            .list(portal, args.command.into())
+            .await?;
+            let next_actions = collection
+                .next_page
+                .map(|page| NextAction {
+                    command: format!(
+                        "flea vinted --portal {portal} sales list --status {} --page {page} --limit {}",
+                        collection.status.as_str(),
+                        collection.limit
+                    ),
+                })
+                .into_iter()
+                .collect();
+            Ok(CommandOutcome::new(CommandData::VintedSales(collection))
+                .with_next_actions(next_actions))
         }
         VintedCommand::Listing(args) => match args.command {
             super::vinted_listing::VintedListingCommand::Update { item_id, input } => {

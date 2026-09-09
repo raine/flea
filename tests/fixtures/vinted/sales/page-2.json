@@ -1,0 +1,9 @@
+{
+  "code": 0,
+  "my_orders": [{
+    "transaction_id": 7003,
+    "title": "Older sale",
+    "price": {"amount": 4, "currency_code": null}
+  }],
+  "pagination": {"current_page": 2, "total_entries": 3, "total_pages": 2}
+}

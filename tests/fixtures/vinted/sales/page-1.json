@@ -1,0 +1,29 @@
+{
+  "code": 0,
+  "my_orders": [
+    {
+      "transaction_id": "7001",
+      "conversation_id": 8001,
+      "title": "Two-item bundle",
+      "price": {"amount": "12.50", "currency_code": "EUR", "buyer": "private-price-buyer"},
+      "status": "Transaction completed",
+      "transaction_user_status": "completed",
+      "photo": {"url": "https://images.example.test/bundle.jpg", "owner": "private-photo-owner"},
+      "date": "2025-01-02T12:00:00Z",
+      "buyer": {"login": "private-buyer", "address": "private-address"},
+      "item_id": "9001"
+    },
+    {
+      "transaction_id": null,
+      "conversation_id": null,
+      "title": null,
+      "price": null,
+      "status": null,
+      "transaction_user_status": "future_status",
+      "photo": null,
+      "date": null
+    }
+  ],
+  "pagination": {"current_page": 1, "total_entries": 3, "total_pages": 2},
+  "session": "private-session"
+}

@@ -234,3 +234,16 @@ including category, attributes, shipping, and photos, are unsupported; do not
 work around this with guessed IDs. There is no remote revision precondition,
 so a concurrent edit can be overwritten. Inspect the authoritative result before
 another update; if verification fails, use the returned read-only action.
+
+## Past sales
+
+```sh
+flea vinted sales list
+flea vinted sales list --status all
+```
+
+Lists your completed sales by default. Follow `next_actions` for more pages;
+use `--help` for filters and pagination options.
+
+Results are orders, possibly bundles. Do not use `transaction_id` as a listing
+ID. Prices are not net earnings, and dates are not necessarily completion times.

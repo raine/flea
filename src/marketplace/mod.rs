@@ -57,6 +57,7 @@ mod tests {
             (CapabilityId::SavedSearch, "saved_search"),
             (CapabilityId::Draft, "draft"),
             (CapabilityId::Listing, "listing"),
+            (CapabilityId::Sales, "sales"),
         ];
 
         for (id, expected) in cases {

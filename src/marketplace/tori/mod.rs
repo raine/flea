@@ -32,6 +32,7 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor::validated(CapabilityId::Draft, AuthRequirement::Required),
     CapabilityDescriptor::validated(CapabilityId::Listing, AuthRequirement::Required),
     CapabilityDescriptor::validated(CapabilityId::AuthRefresh, AuthRequirement::Internal),
+    CapabilityDescriptor::unavailable(CapabilityId::Sales),
 ];
 
 pub(super) const MANIFEST: MarketplaceDescriptor = MarketplaceDescriptor {

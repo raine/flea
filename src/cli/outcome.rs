@@ -144,6 +144,7 @@ pub enum CommandData {
     VintedItem(VintedItemDetail),
     VintedListingDetail(VintedListingDetail),
     VintedListingCollection(VintedListingCollection),
+    VintedSales(crate::domain::vinted_sale::VintedSalesCollection),
     Search(SearchCollection),
     Filters(FilterCollection),
     Location(LocationCollection),
