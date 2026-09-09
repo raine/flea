@@ -7,6 +7,7 @@ pub(crate) mod interactive;
 pub(crate) mod item;
 pub(crate) mod listings;
 pub(crate) mod login;
+pub(crate) mod sales;
 pub(crate) mod saved_searches;
 pub(crate) mod search;
 pub(crate) mod session;
@@ -32,7 +33,7 @@ const CAPABILITIES: &[CapabilityDescriptor] = &[
     CapabilityDescriptor::validated(CapabilityId::Draft, AuthRequirement::Required),
     CapabilityDescriptor::validated(CapabilityId::Listing, AuthRequirement::Required),
     CapabilityDescriptor::validated(CapabilityId::AuthRefresh, AuthRequirement::Internal),
-    CapabilityDescriptor::unavailable(CapabilityId::Sales),
+    CapabilityDescriptor::source_derived(CapabilityId::Sales, AuthRequirement::Required),
 ];
 
 pub(super) const MANIFEST: MarketplaceDescriptor = MarketplaceDescriptor {

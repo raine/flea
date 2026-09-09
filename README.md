@@ -10,7 +10,7 @@ Ask your agent to:
 - Prepare a listing from your photos and item details
 - Review a draft with you, then publish it
 - Update your existing listings
-- Review past Vinted sales
+- Review past sales on Tori and Vinted
 - Save favorites and set up search alerts on Tori
 
 ## Install
@@ -74,6 +74,16 @@ To sell on Vinted, also [connect the browser extension](#sell-on-vinted).
 
 Your agent handles the details. You handle account verification and any human
 checks required by the marketplace.
+
+## Past sales
+
+```sh
+flea tori sales list
+flea vinted sales list
+```
+
+Tori returns ads marked sold, not ToriDiili transactions. Vinted returns completed
+sold orders. Both require sign-in; follow `next_actions` for more results.
 
 ## Sell on Vinted
 

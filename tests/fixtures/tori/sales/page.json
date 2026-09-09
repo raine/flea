@@ -1,0 +1,58 @@
+{
+  "summaries": [
+    {
+      "id": 91001,
+      "state": {
+        "type": "DISPOSED",
+        "label": "Myyty",
+        "display": "private-state-display"
+      },
+      "data": {
+        "title": "Fixture chair",
+        "subtitle": "Display text only",
+        "image": "https://images.example.test/chair.jpg",
+        "seller": "private-seller"
+      },
+      "created": null,
+      "updated": "2026-01-02T12:00:00Z",
+      "expires": null,
+      "actions": [
+        {
+          "url": "private-action"
+        }
+      ],
+      "externalData": {
+        "private-statistics": 10
+      },
+      "buyer": "private-buyer"
+    },
+    {
+      "id": 91002,
+      "state": {
+        "type": "FUTURE_STATE"
+      },
+      "data": {
+        "title": null,
+        "subtitle": null,
+        "image": null
+      }
+    }
+  ],
+  "total": 3,
+  "query": {
+    "facet": "DISPOSED",
+    "offset": 0,
+    "limit": 50,
+    "sort": "updated",
+    "phrase": null
+  },
+  "facets": [
+    {
+      "name": "DISPOSED",
+      "label": "Myydyt",
+      "total": 3
+    }
+  ],
+  "adTypes": [],
+  "private-account": "private-value"
+}

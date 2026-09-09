@@ -65,3 +65,9 @@ flea tori draft publish DRAFT_ID --if-revision "$revision"
 On revision conflict, inspect state and use the returned revision. Manage account
 listings with `flea tori listing list|show|update|dispose|delete`; `dispose` marks
 one sold.
+
+## Past sales
+
+Use `flea tori sales list` for your ads marked sold, not ToriDiili transactions.
+See `flea tori sales list --help` for `--offset` and `--limit`; follow
+`next_actions` for more results.

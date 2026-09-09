@@ -11,6 +11,7 @@ pub(crate) mod runtime;
 pub(crate) mod saved_search;
 pub(crate) mod search;
 pub(crate) mod skill;
+pub(crate) mod tori_sales;
 pub(crate) mod update;
 pub(crate) mod vinted_category;
 pub(crate) mod vinted_item;
@@ -197,6 +198,11 @@ pub enum ToriCommand {
     )]
     Listing(listing::ListingArgs),
     #[command(
+        about = "Review Tori ads marked sold",
+        long_about = "List the authenticated account's Tori ads marked sold, not ToriDiili transactions."
+    )]
+    Sales(tori_sales::ToriSalesArgs),
+    #[command(
         about = "Search public Tori listings",
         long_about = "Search public Tori listings with taxonomy, location, price, pagination, and detail-explanation filters.",
         after_long_help = "Helsinki-area example:\n  flea tori search 'tuoli' --area Helsinki,Espoo,Vantaa"
@@ -235,6 +241,7 @@ impl ToriCommand {
             Self::Favorite(_) => CapabilityId::Favorite,
             Self::Item(_) => CapabilityId::ItemShow,
             Self::Listing(_) => CapabilityId::Listing,
+            Self::Sales(_) => CapabilityId::Sales,
             Self::Search(_) => CapabilityId::Search,
             Self::SavedSearch(_) => CapabilityId::SavedSearch,
             Self::Location(_) => CapabilityId::LocationSearch,
@@ -250,6 +257,7 @@ impl ToriCommand {
             Self::Favorite(args) => args.command.telemetry_name(),
             Self::Item(args) => args.command.telemetry_name(),
             Self::Listing(args) => args.command.telemetry_name(),
+            Self::Sales(_) => return "tori sales list".to_owned(),
             Self::Search(_) => return "tori search".to_owned(),
             Self::SavedSearch(args) => args.command.telemetry_name(),
             Self::Location(args) => args.command.telemetry_name(),
@@ -442,6 +450,10 @@ mod tests {
             (&["tori", "item", "show", "123"], "tori item show"),
             (&["tori", "listing", "list"], "tori listing list"),
             (
+                &["tori", "sales", "list", "--offset", "7", "--limit", "2"],
+                "tori sales list",
+            ),
+            (
                 &["tori", "listing", "show", "listing-1"],
                 "tori listing show",
             ),
@@ -600,6 +612,7 @@ mod tests {
                 &["tori", "favorite", "folders"],
                 &["tori", "item", "show", "123"],
                 &["tori", "listing", "list"],
+                &["tori", "sales", "list"],
                 &["tori", "search", "chair"],
                 &["tori", "saved-search", "list"],
                 &["tori", "location", "search", "Helsinki"],

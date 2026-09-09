@@ -281,6 +281,26 @@ async fn execute_tori(
             let api = HttpListingsApi::new(client);
             listing::dispatch(args, &api).await
         }
+        ToriCommand::Sales(args) => {
+            use crate::marketplace::tori::sales::{ToriSales, ToriSalesRequest};
+
+            let request = ToriSalesRequest::from(args.command);
+            request.validate()?;
+            let client = dependencies.authenticated_tori_client().await?;
+            let collection = ToriSales::new(client).list(request).await?;
+            let next_actions = collection
+                .next_offset
+                .map(|offset| NextAction {
+                    command: format!(
+                        "flea tori sales list --offset {offset} --limit {}",
+                        collection.limit
+                    ),
+                })
+                .into_iter()
+                .collect();
+            Ok(CommandOutcome::new(CommandData::ToriSales(collection))
+                .with_next_actions(next_actions))
+        }
         ToriCommand::Search(args) => {
             let search_api = HttpPublicSearchApi::new(Arc::clone(&dependencies.public_tori_client));
             let item_api = HttpPublicItemApi::new(Arc::clone(&dependencies.public_tori_client));
@@ -823,4 +843,35 @@ fn public_client() -> HttpClient<ReqwestTransport> {
         },
         None,
     )
+}
+
+#[cfg(test)]
+mod tori_sales_tests {
+    use super::*;
+
+    #[test]
+    fn sales_validate_before_auth_and_preserve_missing_auth_errors() {
+        let mut dependencies = ApplicationDependencies::production();
+        dependencies.authenticated_tori_client = Arc::new(|| {
+            Box::pin(async {
+                Err(AppError::authentication(
+                    "fixture.no_auth",
+                    "authentication required",
+                ))
+            })
+        });
+        for (options, exit) in [
+            (vec!["--limit", "0"], 2),
+            (vec!["--offset", "2147483648"], 2),
+            (vec![], 10),
+        ] {
+            let result = crate::run_with_dependencies(
+                ["flea", "--format", "json", "tori", "sales", "list"]
+                    .into_iter()
+                    .chain(options),
+                &dependencies,
+            );
+            assert_eq!(result.exit_code, exit, "{}", result.document);
+        }
+    }
 }

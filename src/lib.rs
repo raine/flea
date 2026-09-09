@@ -348,6 +348,9 @@ mod search_fixtures;
 #[cfg(test)]
 #[path = "../tests/tori_error_redaction_contracts.rs"]
 mod tori_error_redaction_contracts;
+#[cfg(test)]
+#[path = "../tests/tori_sales_fixtures.rs"]
+mod tori_sales_fixtures;
 
 /// Run Chrome's native messaging host without writing CLI output to stdout.
 pub fn run_extension_host(origin: &str) -> Result<(), AppError> {
