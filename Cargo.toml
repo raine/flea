@@ -49,6 +49,14 @@ name = "vinted_listing_live_smoke"
 path = "tests/vinted_listing_live_smoke.rs"
 
 [[test]]
+name = "vinted_sales_fixtures"
+path = "tests/vinted_sales_fixtures.rs"
+
+[[test]]
+name = "vinted_sales_live_smoke"
+path = "tests/vinted_sales_live_smoke.rs"
+
+[[test]]
 name = "vinted_sell_export"
 path = "tests/vinted_sell_export.rs"
 
