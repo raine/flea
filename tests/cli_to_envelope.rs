@@ -349,8 +349,15 @@ fn draft_show_is_compact_by_default_and_expands_deterministically() {
         &FixtureApplication { client: client() }.dependencies(),
     );
     assert_eq!(toon.exit_code, 0, "{}", toon.document);
-    assert_eq!(toon.document, toon_again.document);
+    assert_eq!(toon_again.exit_code, 0, "{}", toon_again.document);
     let decoded: Value = toon_format::decode_default(&toon.document).unwrap();
+    let decoded_again: Value = toon_format::decode_default(&toon_again.document).unwrap();
+    assert!(decoded["observation"]["observed_at"].is_string());
+    assert!(decoded_again["observation"]["observed_at"].is_string());
+    assert_eq!(
+        normalize_observation_timestamp(toon.document),
+        normalize_observation_timestamp(toon_again.document)
+    );
     assert_eq!(decoded["data"]["revision"], "revision-7");
     assert!(decoded["data"].get("options").is_none());
 
